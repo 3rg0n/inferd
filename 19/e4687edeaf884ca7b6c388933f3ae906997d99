@@ -1,0 +1,59 @@
+context.md
+  s_5811b7f24eccc0::t_6c3b39c54f7c44 1-175
+CONTRIBUTING.md
+  s_5811b7f24eccc0::t_c721604d9d5708 1-45
+LICENSE
+  s_5811b7f24eccc0::t_80562e55a8859b 1-21
+docs/adr/0003-subprocess-llamafile-not-ffi.md
+  s_5811b7f24eccc0::t_933f75c72ec3af 1-53
+docs/plan-v0.1.md
+  s_5811b7f24eccc0::t_5df11b16eabb06 1-234
+CHANGELOG.md
+  s_5811b7f24eccc0::t_8822738c0c9176 1-16
+docs/adr/0001-wire-protocol-inherited-from-thlibo.md
+  s_5811b7f24eccc0::t_1b6d97856fde8b 1-57
+clients/py/README.md
+  s_5811b7f24eccc0::t_c550b7135f78e6 1-9
+crates/inferd-daemon/README.md
+  s_5811b7f24eccc0::t_ea03165a630f34 1-14
+docs/protocol-v1.md
+  s_5811b7f24eccc0::t_787aa155835d93 1-111
+Cargo.toml
+  s_5811b7f24eccc0::t_138e3f9e683eb4 1-44
+clients/ts/README.md
+  s_5811b7f24eccc0::t_fd3ba7fa1b2ef2 1-9
+crates/inferd-proto/README.md
+  s_5811b7f24eccc0::t_77c6aa42651d3c 1-12
+docs/adr/0004-mit-not-apache.md
+  s_5811b7f24eccc0::t_5f027e8397d66b 1-46
+docs/adr/README.md
+  s_5811b7f24eccc0::t_37ebaeee21d0c3 1-19
+crates/inferd-engine/README.md
+  s_5811b7f24eccc0::t_42bd9172ad6833 1-22
+clients/go/README.md
+  s_5811b7f24eccc0::t_2e5d685ebd7c5f 1-11
+README.md
+  s_5811b7f24eccc0::t_c13a14f34268db 1-71
+docs/adr/0002-rust-not-go.md
+  s_5811b7f24eccc0::t_82632d349cc789 1-69
+.gitignore
+  s_5811b7f24eccc0::t_3e1316adf32a70 1-48
+crates/inferd-stdio/README.md
+  s_5811b7f24eccc0::t_9ae1ca6d28fcfa 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "19e4687edeaf884ca7b6c388933f3ae906997d99",
+  "prompts": {},
+  "sessions": {
+    "s_5811b7f24eccc0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a5ac7310-ca40-41b4-86cf-fc36cc2e2474",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
