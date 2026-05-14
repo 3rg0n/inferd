@@ -1,0 +1,48 @@
+# Rust build output
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.gpg
+*.asc
+*secret*
+id_rsa
+id_rsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+credentials.json
+secrets.yaml
+
+# Model artefacts (large, pulled at install time)
+*.gguf
+*.safetensors
+/models/
+
+# Test sandboxes
+/.test/
+/tmp/
+
+# Local reference material
+.references/
+
+# Coverage / profiling
+*.profraw
+/coverage/

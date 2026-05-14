@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    # Declared in docs/plan-v0.1.md. Files will appear as milestones
+    # land. Listing them here intentionally now would cause `cargo
+    # check` failures; uncomment each entry as its crate is scaffolded.
+    #
+    # "crates/inferd-proto",
+    # "crates/inferd-engine",
+    # "crates/inferd-daemon",
+    # "crates/inferd-stdio",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.0"
+edition = "2021"
+rust-version = "1.76"
+license = "MIT"
+repository = "https://github.com/3rg0n/inferd"
+homepage = "https://inferd.io"
+authors = ["3rg0n"]
+
+[workspace.dependencies]
+# Versions are centralised so every crate picks the same one. Add to
+# this block as crates come online; don't pin them inside individual
+# crate manifests.
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+thiserror = "1"
+clap = { version = "4", features = ["derive", "env"] }
+sha2 = "0.10"
+subtle = "2"
+async-trait = "0.1"
+bytes = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
