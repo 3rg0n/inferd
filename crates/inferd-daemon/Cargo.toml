@@ -1,0 +1,56 @@
+[package]
+name = "inferd-daemon"
+description = "The inferd daemon: NDJSON-over-IPC server, admission queue, single-instance lock, router, activity log."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[[bin]]
+name = "inferd-daemon"
+path = "src/main.rs"
+
+[features]
+default = []
+# The daemon binary picks its engine adapters at compile time. CI builds
+# the full feature set; minimal builds (e.g. headless servers without GPU)
+# drop the GPU features.
+llamacpp = ["inferd-engine/llamacpp"]
+cuda     = ["inferd-engine/cuda"]
+metal    = ["inferd-engine/metal"]
+vulkan   = ["inferd-engine/vulkan"]
+rocm     = ["inferd-engine/rocm"]
+# Tier 5 security regression tests live behind this feature.
+security = []
+
+[dependencies]
+inferd-proto  = { path = "../inferd-proto" }
+inferd-engine = { path = "../inferd-engine" }
+tokio               = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+anyhow              = { workspace = true }
+thiserror           = { workspace = true }
+clap                = { workspace = true }
+bytes               = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["fs", "user", "socket"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = "3"

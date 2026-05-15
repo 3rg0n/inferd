@@ -1,0 +1,45 @@
+[package]
+name = "inferd-engine"
+description = "Backend trait and adapters for inferd. v0.1: mock + libllama (FFI). v0.2: cloud adapters."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+build = "build.rs"
+
+[features]
+# Default ships the mock backend only. The llama.cpp FFI backend is
+# opt-in until M2a vendors the submodule and the build.rs lands; once
+# stable, this becomes default for the daemon binary but stays
+# feature-gated for crate consumers who only want the trait.
+default              = []
+llamacpp             = []
+llamacpp-integration = ["llamacpp"]   # Tier 3 tests; requires GGUF.
+cuda                 = ["llamacpp"]
+metal                = ["llamacpp"]
+vulkan               = ["llamacpp"]
+rocm                 = ["llamacpp"]
+
+[dependencies]
+inferd-proto = { path = "../inferd-proto" }
+async-trait  = { workspace = true }
+tokio        = { workspace = true }
+tokio-stream = "0.1"
+futures-core = "0.3"
+serde        = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+sha2         = { workspace = true }
+subtle       = { workspace = true }   # Constant-time hash compare (THREAT_MODEL F-5).
+bytes        = { workspace = true }
+
+[build-dependencies]
+# Populated when the llamacpp feature lands in M2a:
+#   cmake   = "0.1"
+#   bindgen = "0.69"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

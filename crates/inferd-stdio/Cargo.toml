@@ -1,0 +1,28 @@
+[package]
+name = "inferd-stdio"
+description = "Variant of the inferd request handler that speaks NDJSON on stdin/stdout. No listener, no lock."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[[bin]]
+name = "inferd-stdio"
+path = "src/main.rs"
+
+[features]
+default  = []
+llamacpp = ["inferd-engine/llamacpp"]
+
+[dependencies]
+inferd-proto  = { path = "../inferd-proto" }
+inferd-engine = { path = "../inferd-engine" }
+tokio         = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+tracing       = { workspace = true }
+anyhow        = { workspace = true }
+clap          = { workspace = true }
