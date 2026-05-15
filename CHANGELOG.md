@@ -91,6 +91,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and pre-binding symlink refusal. Windows named pipe
   deferred to M4. `Connection` trait abstracts UDS/TCP
   uniformly. 4 tests (3 enabled per platform).
+- `inferd-daemon` section D: M1 exit-criterion integration test
+  (`tests/echo.rs`). Boots the lifecycle in-process against the
+  mock backend over loopback TCP, connects a real client, and
+  asserts the full request → token → done flow. Coverage:
+  golden path with id echo + content concat + stop_reason +
+  backend per ADR 0008; invalid_request error frame; mid-stream
+  drop produces `code: backend_unavailable` per ADR 0007;
+  ready-gating regression for THREAT_MODEL F-13. 4 tests.
+
+### M1 status — ✅ exit criteria met
+
+46/46 tests pass workspace-wide on Windows + the test suite
+proves the protocol invariants from ADR 0008, the routing
+semantics from ADR 0007, and the F-13 ready-gating mitigation.
+Crate ships an `inferd-daemon` binary you can run locally
+against `--backend mock`. Engine adapter for llama.cpp is M2.
+
 - `inferd-daemon` section C: router, lifecycle, config, main.
   `Router` (no-op v0.1 per ADR 0007) picks a single backend.
   `lifecycle::handle_connection` reads `Request` frames, routes
