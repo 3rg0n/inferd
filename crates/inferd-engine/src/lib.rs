@@ -8,10 +8,16 @@
 //! - `llamacpp` — FFI to vendored `libllama` (gated behind the `llamacpp`
 //!   cargo feature; lands in M2a).
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid` so the FFI module (M2a, gated behind the
+// `llamacpp` feature) can scope an inner `#![allow(unsafe_code)]` to the
+// generated bindings. Every other module in the crate is unsafe-free; CI
+// `cargo deny`/clippy lint surfaces any regression.
+#![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
 mod backend;
+#[cfg(feature = "llamacpp")]
+pub(crate) mod ffi;
 pub mod mock;
 
 pub use backend::{Backend, GenerateError, TokenEvent, TokenStream};
