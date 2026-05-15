@@ -1,6 +1,6 @@
 # 0003. Subprocess llamafile, not FFI
 
-- Status: accepted
+- Status: superseded by [0005](0005-libllama-ffi-not-subprocess.md)
 - Date: 2026-05-14
 
 ## Context

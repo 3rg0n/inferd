@@ -1,6 +1,6 @@
 # 0001. Wire protocol v1 inherited byte-for-byte from thlibo
 
-- Status: accepted
+- Status: superseded by [0008](0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md)
 - Date: 2026-05-14
 
 ## Context
