@@ -1,12 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    # Declared in docs/plan-v0.1.md. Files will appear as milestones
-    # land. Listing them here intentionally now would cause `cargo
-    # check` failures; uncomment each entry as its crate is scaffolded.
-    #
-    # "crates/inferd-proto",
-    # "crates/inferd-engine",
+    "crates/inferd-proto",
+    "crates/inferd-engine",
+    # Activated as each crate's source files land in M1+:
     # "crates/inferd-daemon",
     # "crates/inferd-stdio",
 ]
