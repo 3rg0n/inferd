@@ -1,0 +1,303 @@
+# inferd threat model
+
+- Status: skeleton; populated as code lands. v0.1 GA blocks
+  until every "applies" finding is `mitigated` (with a code
+  reference) or has an explicit waiver in this document.
+- Last updated: 2026-05-15
+
+## Scope
+
+This file enumerates threats against `inferd-daemon` and its
+client-facing surfaces:
+
+- The NDJSON-over-IPC perimeter (Unix socket / Windows named
+  pipe / loopback TCP).
+- The configured backend(s) reachable through the `Backend`
+  trait — in v0.1, the `libllama` FFI engine (ADR 0005); in
+  v0.2, cloud adapters routed by ADR 0007 policy.
+- The activity log (`inferd-daemon::logx`) and any artefacts
+  it writes to disk.
+- Single-instance lock acquisition and the daemon process
+  itself.
+- Ecosystem extensions consuming inferd over IPC (ADR 0006).
+  Threats *inside* an extension are out of scope; threats from
+  an extension being a malicious local actor are in scope.
+
+## Findings
+
+Status legend:
+- **applies** — finding is real for inferd; mitigation must
+  exist in code by GA.
+- **mitigated** — finding is closed; mitigation site is
+  named.
+- **n/a** — finding does not apply; reason given.
+
+### F-1. NDJSON per-frame size cap
+
+**Description.** Without a per-frame byte limit, a malicious
+local client can write an unbounded line without a newline,
+exhausting the daemon's heap.
+
+**Status.** applies.
+
+**Mitigation.** `inferd-proto` reads frames with a bounded
+reader (not auto-growing), 64 MiB cap. Exceeding the cap
+returns an `error` frame with `code: "frame_too_large"` and
+closes the connection. Codified in `docs/protocol-v1.md`.
+
+### F-2. Lock-file pre-existing-symlink attack
+
+**Description.** A malicious local user creates a symlink at
+the lock path pointing at a privileged file before the daemon
+starts. If the daemon opens with `O_CREAT` and follows
+symlinks, it may write or truncate that file under its own
+uid.
+
+**Status.** applies.
+
+**Mitigation.** `inferd-daemon::lock` rejects the lock path if
+it pre-exists as a symlink. Open with `O_NOFOLLOW` on Unix.
+Verify path is a regular file before locking.
+
+### F-3. Activity log secret leakage
+
+**Description.** Tokens streamed to or from the model may
+contain secrets (the user's diff, env vars, tokens copy-pasted
+into a prompt). If the activity log records request bodies or
+response content verbatim, those secrets land on disk.
+
+**Status.** applies.
+
+**Mitigation.** `inferd-daemon::logx` runs a write-time
+redactor over every record. Redactor patterns include
+JWT-shaped strings, generic API-key shapes (`sk-...`,
+`xoxb-...`, `ghp_...`, `pat-...`, etc.), `password=` and
+`Authorization:` patterns, and the structured contents of any
+field named `content`, `text`, or `body`. Default verbosity
+records request *metadata* only; record body capture requires
+`INFERD_LOG=debug`, and even then the redactor still runs.
+
+### F-4. Activity log unbounded growth
+
+**Description.** Without rotation, the activity log grows
+until the disk fills.
+
+**Status.** applies.
+
+**Mitigation.** Rolling rotation, 3 generations kept by
+default, configurable. `inferd-daemon::logx::rotate`.
+
+### F-5. SHA-256 verification timing leak
+
+**Description.** Comparing a model file's hash against an
+expected hash byte-by-byte leaks information about how many
+leading bytes match.
+
+**Status.** applies.
+
+**Mitigation.** Use `subtle::ConstantTimeEq` for the
+verification compare. Codified in `inferd-engine`'s model-load
+path.
+
+### F-6. SHA-256 verification TOCTOU
+
+**Description.** SHA-256 verification of the model file is
+performed at load. If an attacker can rewrite the file
+between verification and `mmap`, the engine loads
+attacker-controlled bytes.
+
+**Status.** applies.
+
+**Mitigation.** Open the file once read-only, hash the open
+file descriptor, then `mmap` from the same descriptor — never
+re-open by path. Daemon runs per-user; the model file lives
+under the user's own control. Document the threat so packagers
+do not place model files in world-writable paths.
+
+### F-7. Per-caller identity (peer credentials)
+
+**Description.** Without per-caller identity, any local
+process with socket access is indistinguishable. A malicious
+middleware can impersonate another for log-attribution
+attacks, queue-fairness gaming, or future per-caller policy.
+
+**Status.** applies.
+
+**Mitigation.**
+- Unix: `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) on
+  every accepted connection. Identity recorded in the activity
+  log.
+- Windows: `GetNamedPipeClientProcessId` →
+  `OpenProcessToken` → SID.
+- Loopback TCP: identity reduces to API-key (if configured) +
+  remote address. Document the reduced guarantee where TCP is
+  enabled.
+
+### F-8. Loopback TCP exposure
+
+**Description.** When the operator enables the loopback TCP
+endpoint (e.g. for WSL or container scenarios), the daemon is
+reachable by any process on the host that can bind 127.0.0.1.
+Peer-credential checks (F-7) do not work on TCP.
+
+**Status.** applies.
+
+**Mitigation.**
+- TCP endpoint requires API-key auth as the first frame on
+  the connection. No key, no service.
+- TCP endpoint is opt-in, not default.
+- `inferd status` prints a loud warning when TCP is enabled,
+  including the bound port and key fingerprint.
+
+### F-9. FFI crash isolation
+
+**Description.** ADR 0005 links `libllama` into the daemon
+process. A segfault, abort, or stack-smash inside `libllama`
+crashes the daemon, taking out all in-flight requests across
+all backends.
+
+**Status.** applies.
+
+**Mitigation.** Defence in depth, no single fix:
+- Validate every byte that reaches the engine through
+  `inferd-proto` (frame cap, JSON shape, role enum, image
+  budget enum, sampling param ranges).
+- Pin a known-stable `llama.cpp` commit; bump only with a full
+  integration-suite pass. See `vendor/llama.cpp/PIN.md`.
+- Single-instance lock + autostart means a crashed daemon
+  restarts cleanly; in-flight requests are lost. Caller retry
+  per ADR 0007 covers this.
+- Long-term: consider a sandboxed worker-process model behind
+  the same `Backend` trait if a recurring class of crashes
+  appears. v0.1 does not include this.
+
+### F-10. Routing policy state corruption
+
+**Description.** The router's circuit breaker (ADR 0007) is
+daemon-local state. If the breaker can be tripped or reset by
+a local attacker — e.g. by issuing many requests targeting a
+backend in a way that inflates its failure count — the
+attacker can deny service to that backend for the cooldown
+window.
+
+**Status.** applies. Dormant in v0.1 (single-backend, no-op
+router); active when v0.2 lands the cloud router.
+
+**Mitigation.**
+- Breaker counts only *backend*-attributable errors, not
+  client errors (malformed request → does not count).
+- Cooldown windows are bounded; an attacker tripping every
+  remote backend forces full local-only operation, not
+  silence.
+- Caller cannot select the backend (ADR 0006), so an attacker
+  cannot deterministically push load at one backend.
+
+### F-11. GBNF resource exhaustion
+
+**Description.** `grammar` is a GBNF string forwarded
+verbatim to the backend. A pathological grammar (deep
+recursion, exponential alternation) could cause the engine to
+spend unbounded CPU per token.
+
+**Status.** applies.
+
+**Mitigation.**
+- Frame cap (F-1, 64 MiB) bounds the grammar string size, but
+  pathological grammars can be small.
+- Per-request `max_tokens` bounds total work per request.
+- Admission queue (1 active, 10 queued) bounds concurrent
+  work.
+- Long-term: if abuse materialises, add a grammar parse-time
+  complexity check before forwarding to llama.cpp. Not v0.1.
+
+### F-12. Ecosystem extension trust boundary
+
+**Description.** ADR 0006 establishes that HTTP, OpenAI-compat,
+and similar surfaces live as separate processes that talk
+NDJSON to inferd. A user installing a third-party extension
+trusts that extension with whatever socket access the daemon
+grants it.
+
+**Status.** applies.
+
+**Mitigation.**
+- Extensions connect over the same socket as any other
+  client; F-7 identity checks apply uniformly. An extension
+  is not privileged inside the daemon.
+- Operator documentation distinguishes inferd-shipped
+  components from third-party extensions.
+- Long-term: an ADR may propose a signed-extension allow-list
+  if the ecosystem grows. Not v0.1.
+
+### F-13. Ready-gating bypass
+
+**Description.** If the inference socket is created before
+the backend reports ready, clients connect, send requests,
+and either get errors or block — exposing internal state and
+risking races during initialisation.
+
+**Status.** applies.
+
+**Mitigation.** Inference listener is created strictly *after*
+`Backend::ready()` returns true. Codified in
+`inferd-daemon::lifecycle::Start` and verified by an
+integration test that connects during startup and asserts
+`ECONNREFUSED` (or platform equivalent) until ready.
+
+### F-14. Subprocess regression
+
+**Description.** ADR 0005 removed all engine subprocesses.
+Any future PR that re-introduces a `Command::spawn` reopens
+process-management vulnerabilities (zombie processes,
+argument injection, environment leakage, unsafe
+working-directory inheritance).
+
+**Status.** applies.
+
+**Mitigation.**
+- Code review rule: every `std::process::Command` invocation
+  requires an explicit reviewer sign-off and ADR justification.
+- CI lint scans for `Command::new` and fails build if an
+  exception is not annotated.
+- v0.1 codebase has zero `Command::spawn` calls. Verify with
+  `grep` before each release.
+
+### F-15. Signed releases + SBOM
+
+**Description.** Without signed release artefacts and an
+SBOM, a tampered binary or a vulnerable transitive
+dependency may ship undetected.
+
+**Status.** applies.
+
+**Mitigation.** Release workflow (M4) uses cosign to sign
+artefacts and CycloneDX to emit an SBOM per release.
+`cargo audit` and `cargo deny check` run on every PR.
+
+### F-16. Daemon hardening directives
+
+**Description.** A daemon running with default sysctl /
+process settings is unnecessarily exposed (ptrace, core
+dumps containing tokens, capabilities the daemon does not
+need).
+
+**Status.** applies.
+
+**Mitigation.** systemd unit on Linux applies
+`NoNewPrivileges=yes`, `PrivateTmp=yes`,
+`ProtectSystem=strict`, `ProtectHome=read-only`,
+`CapabilityBoundingSet=` (empty), `RestrictAddressFamilies=`,
+`SystemCallFilter=@system-service`. Equivalent posture on
+macOS via launchd plist; Windows via service hardening
+flags. Codified in M4 packaging.
+
+## Process
+
+- **Add a finding** when an ADR or PR introduces a new threat
+  surface. Cross-link the ADR.
+- **Mark a finding `mitigated`** when the mitigation is
+  merged and named with a file path.
+- **Mark a finding `n/a`** when re-evaluation determines it
+  does not apply; explain why in the row.
+- v0.1 GA blocks until every `applies` finding is
+  `mitigated` or has an explicit waiver in this document.

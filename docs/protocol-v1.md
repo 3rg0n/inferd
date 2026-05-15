@@ -1,111 +1,197 @@
 # inferd wire protocol v1
 
-This is the authoritative reference for the bytes on the wire.
-**v1 is byte-compatible with thlibo v0.1's IPC protocol** so a
-thlibo v0.2 client can talk to an inferd v0.1 daemon without any
-marshalling changes. When writing the Rust implementation, defer to
-thlibo's `internal/ipc/protocol.go` for any ambiguity.
+This is the authoritative reference for the bytes on the wire
+between an inferd client and the inferd daemon. v1 is designed
+for inferd on its own merits (see ADR 0008). It is *not*
+derived from any other project's protocol.
+
+v1 is immutable once shipped. Breaking changes go to v2 on a
+**separate socket path** — no in-band version negotiation.
 
 ## Framing
 
-- Each frame is a single JSON object, UTF-8 encoded, terminated by a
-  single `\n` byte.
-- No pretty-printing. No embedded raw newlines inside strings —
-  `serde_json`'s default is correct.
-- Each direction is an independent NDJSON stream (request stream
-  from client, response stream from daemon).
-- Maximum frame size: **64 MiB**. Exceeding the limit closes the
-  connection and logs `request_oversized`.
+- Each frame is a single JSON object, UTF-8 encoded, terminated
+  by a single `\n` byte.
+- No pretty-printing. No embedded raw newlines inside strings.
+- Each direction is an independent NDJSON stream (request
+  stream from client, response stream from daemon).
+- Maximum frame size: **64 MiB**. Exceeding the limit returns
+  an `error` frame with `code: "frame_too_large"` and closes
+  the connection. The daemon logs the event as
+  `request_oversized`.
 
 ## Request
 
 ```json
 {
-  "id": "string, caller-assigned",
+  "id":                 "string, caller-assigned",
   "messages": [
     {"role": "system",    "content": "..."},
     {"role": "user",      "content": "..."},
     {"role": "assistant", "content": "..."}
   ],
-  "temperature": 1.0,
-  "top_p":       0.95,
-  "top_k":       64,
-  "max_tokens":  1000,
-  "stream":      true,
-  "grammar":     "<GBNF string, optional>"
+  "temperature":        1.0,
+  "top_p":              0.95,
+  "top_k":              64,
+  "max_tokens":         1000,
+  "stream":             true,
+  "image_token_budget": 280,
+  "grammar":            "<GBNF string, optional>"
 }
 ```
 
-- `id` is echoed on every response frame so clients can fan-in
-  multiple in-flight requests on the same connection.
-- `role` is one of `system`, `user`, `assistant`.
-- Sampling fields are required. Defaults from Gemma 4 are
-  `temperature=1.0, top_p=0.95, top_k=64` (reference: thlibo spec §
-  "Gemma 4 E4B reference").
-- `stream: false` returns a single `Response::Done` frame with the
-  complete generation in a dedicated `text` field (v1 does not
-  require this; servers MAY treat it as always-true).
-- `grammar`, if present, is passed through to the backend. For
-  llamafile, GBNF.
+- `id` is echoed on every response frame so clients can fan in
+  multiple in-flight requests on the same connection. May be
+  omitted on the wire; the daemon echoes whatever arrives.
+  Callers should send a non-empty id for correlation.
+- `role` is one of `system`, `user`, `assistant`. `content` is
+  a UTF-8 string. v1 does not support multimodal content
+  arrays — see "Image content" below.
+- Sampling fields are **all optional**. Omitted fields receive
+  Gemma 4 defaults: `temperature=1.0`, `top_p=0.95`, `top_k=64`,
+  `max_tokens=1000`, `stream=true`. Defaults are applied
+  server-side after parse.
+- `image_token_budget`, if present, must be one of
+  `{70, 140, 280, 560, 1120}`. Any other value returns an
+  `error` frame with `code: "invalid_request"` before the
+  request reaches the backend. v1 carries this field forward;
+  v0.1 backends do not consume image content (text-only
+  generation).
+- `grammar`, if present, is a llama.cpp GBNF string forwarded
+  verbatim to the backend. Empty/omitted = unconstrained.
+- The wire protocol exposes **no** field for selecting a
+  backend. Apps do not pick the backend; the daemon's router
+  decides per ADR 0007.
 
-Image content (v1 carries this forward even though the llamafile
-adapter doesn't yet use it):
+### Image content
 
-```json
-{"role": "user", "content": [
-  {"type": "text",  "text": "..."},
-  {"type": "image", "data": "<base64>", "budget": 280}
-]}
-```
-
-- `budget` must be one of `{70, 140, 280, 560, 1120}` and must
-  appear before any `text` part for the same message.
+v1 declares image budgets via the top-level
+`image_token_budget` field. v1 does **not** ship a multimodal
+`content` array shape; that is reserved for v2. Backends that
+do not support image input ignore `image_token_budget`.
 
 ## Response stream
 
-Every response frame carries a `type` discriminator:
+Every response frame is a single JSON object with a `type`
+discriminator. Field set by frame type:
 
 ```json
-{"type": "token",  "id": "...", "text": "partial"}
-{"type": "done",   "id": "...", "text": "<full text if stream=false>", "stop_reason": "end|length|cancelled"}
-{"type": "error",  "id": "...", "message": "human readable"}
-{"type": "status", "id": "...", "status": "ready|restarting|draining"}
+{"id": "...", "type": "status", "status": "loading_model|ready|restarting|draining"}
+{"id": "...", "type": "token",  "content": "partial text"}
+{"id": "...", "type": "done",   "content": "<full text>", "usage": {"prompt_tokens": N, "completion_tokens": M}, "stop_reason": "end|length|cancelled|error", "backend": "llamacpp"}
+{"id": "...", "type": "error",  "code": "queue_full|backend_unavailable|invalid_request|frame_too_large|internal", "message": "human readable"}
 ```
 
-The stream for a single request id ends with exactly one `done` or
-one `error` frame. Clients treat any other termination (EOF without
-a terminal frame) as an error and invoke their fallback path.
+Field guarantees:
+
+- `id` is present on every frame. For status frames not tied
+  to a specific request (e.g. the startup `loading_model` →
+  `ready` transition broadcast on the admin socket), the
+  literal id `"admin"` is used.
+- `content` carries token text on `token` frames, and the
+  complete generated text on `done` frames.
+- `usage` is present on `done` frames and reports
+  `prompt_tokens` and `completion_tokens` integer counts.
+- `stop_reason` is present on `done` frames and is one of:
+  - `end` — model emitted the end-of-turn token cleanly.
+  - `length` — `max_tokens` reached.
+  - `cancelled` — caller disconnected or otherwise cancelled.
+  - `error` — generation aborted; an `error` frame may have
+    followed instead of a `done` frame, but if a `done` frame
+    is emitted the partial output is in `content` and
+    `stop_reason` is `error`.
+- `backend` is present on `done` frames and names the
+  `Backend::name()` that served the request — e.g. `llamacpp`,
+  `mock`, or in v0.2 `anthropic`, `bedrock`. Diagnostic only;
+  app logic must not branch on backend identity.
+- `code` is present on `error` frames and is one of:
+  - `queue_full` — admission queue full at submit time. Caller
+    may retry immediately or with backoff.
+  - `backend_unavailable` — selected backend errored before
+    or during generation. Caller may retry; the router may
+    pick a different backend on the retry.
+  - `invalid_request` — request failed validation (bad role,
+    invalid `image_token_budget`, malformed JSON). Caller
+    should not retry without changing the request.
+  - `frame_too_large` — frame exceeded the 64 MiB cap.
+    Connection is closed.
+  - `internal` — daemon-side bug. Caller may retry with
+    backoff but should not assume retry will succeed.
+- `message` is present on `error` frames and is a
+  human-readable description.
+- The stream for a single request id ends with exactly one
+  `done` or one `error` frame. Clients treat any other
+  termination (EOF without a terminal frame) as an error and
+  invoke their fallback path.
 
 ## Admission semantics
 
-- 1 active generation, 10 queued (configurable), non-blocking
-  `Submit`. Queue full returns `{"type":"error","message":"queue full"}`
-  immediately.
-- Client disconnect cancels the in-flight job. `stop_reason` on the
-  emitted `done` frame (if the daemon bothers to emit one before the
-  socket is closed) is `cancelled`.
+- 1 active generation, 10 queued (configurable via daemon
+  config, **not** the wire). Non-blocking submit. Queue full
+  returns an `error` frame with `code: "queue_full"`
+  immediately and closes the request stream.
+- Client disconnect cancels the in-flight job. The daemon may
+  emit a `done` frame with `stop_reason: "cancelled"` if it
+  can do so before the socket is fully closed; if not, the
+  caller learns of cancellation by the EOF.
+- The daemon does not retry. Backend failures emit one
+  `error` frame and end the stream; caller owns retry policy.
+  See ADR 0007.
 
 ## Transport
 
-- Unix domain socket at `/run/inferd/infer.sock` (Linux) or
-  `/var/run/inferd/infer.sock` (macOS). Mode `0660`, group
+- **Unix domain socket** at `/run/inferd/infer.sock` (Linux),
+  `${TMPDIR}/inferd/infer.sock` (macOS). Mode `0660`, group
   `inferd-users`.
-- Windows named pipe `\\.\pipe\inferd-infer`. SDDL grants the current
-  user SID only.
-- Loopback TCP `127.0.0.1:47321` (note: different default port from
-  thlibo's 47320 to allow side-by-side operation during migration),
-  optional `X-Inferd-Key` header-style first frame for API-key auth
-  when the socket is exposed over TCP.
+- **Windows named pipe** `\\.\pipe\inferd-infer`. ACL grants
+  the current user SID only; `Everyone` is denied.
+- **Loopback TCP** `127.0.0.1:47321`. Optional API-key auth as
+  the first frame on the connection when exposed over TCP.
+  Off by default; opt-in for container / WSL scenarios.
+
+The daemon also exposes an **admin endpoint** (default
+`/run/inferd/admin.sock` on Unix mode `0600`,
+`\\.\pipe\inferd-admin` on Windows) that broadcasts engine
+status to connected admin clients. Status frames carry
+`id: "admin"`. The admin socket is for operator tooling
+(`inferd status`-style commands), not for inference traffic.
+
+## Per-caller identity
+
+Each accepted connection is identified by:
+
+- **Unix**: `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) →
+  uid + gid + pid.
+- **Windows**: `GetNamedPipeClientProcessId` →
+  pid + token-derived SID.
+- **Loopback TCP**: identity is the API key (if configured) or
+  `tcp:<remote-addr>` for log correlation only.
+
+Identity is recorded in the activity log for every request and
+used by the admission queue's per-caller counters (when v0.2
+adds per-caller fairness).
 
 ## Ready gating
 
-The daemon's socket/pipe is **not created** until the backend emits a
-`ready` status internally (llamafile's `READY` on stderr). Clients
-that fail to connect during boot should treat the absence of the
-socket as "daemon not ready yet", not as an error.
+The daemon's inference socket/pipe is **not created** until
+the configured backend reports ready. Clients that fail to
+connect during boot should treat the absence of the socket as
+"daemon not ready yet," not as an error.
 
-## What changed from thlibo v0.1
+The admin socket may come up earlier than the inference
+socket so that operators can observe the `loading_model` →
+`ready` transition.
 
-Nothing in terms of bytes on the wire. The rename of "thlibo" →
-"inferd" shows up only in default paths, group names, and environment
-variables (`THLIBO_*` → `INFERD_*`).
+## Versioning
+
+v1 is immutable. Any breaking change becomes v2, served on a
+separate socket path (`infer-v2.sock` / `\\.\pipe\inferd-infer-v2`).
+Callers and daemons negotiate by which path they connect to;
+there is no in-band capability exchange.
+
+Backwards-additive changes — new optional fields that older
+servers MUST ignore and older clients MUST NOT require — are
+acceptable on v1 if and only if every existing v1 server in
+the wild already ignores unknown fields. v0.1 enforces this
+("unknown fields ignored on parse") so the door for additive
+changes stays open within v1.

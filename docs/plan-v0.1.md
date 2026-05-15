@@ -5,6 +5,12 @@
 - **Scope**: v0.1 — drop-in replacement for thlibo's embedded
   `thlibod` daemon. No cloud backends, no model-proxy-gateway mode
   yet (that's v0.2).
+- **Posture**: lean core (ADR 0006). The daemon ships an inference
+  engine consumed via FFI (ADR 0005), an admission queue, NDJSON
+  IPC transport, and a routing layer (ADR 0007 — no-op in v0.1).
+  HTTP, OpenAI-compat, web UI, and per-app backend override are
+  all out of scope and live as ecosystem extensions in separate
+  processes.
 
 ## Goal
 
@@ -97,8 +103,12 @@ inferd/
 - **sha2** — GGUF verification.
 - **subtle** — constant-time hash compare (carried over from thlibo
   threat-model finding #4).
+- **bindgen** + **cmake** (build-time) — generate Rust bindings
+  for `libllama` and build it from the vendored `llama.cpp`
+  submodule. CI gets a C++17 toolchain on every target platform.
 
-No C FFI in v0.1. llamafile stays a subprocess.
+C FFI to `libllama` is the v0.1 default backend (ADR 0005). No
+subprocess engines.
 
 ## Wire protocol (inherited)
 
@@ -136,20 +146,32 @@ fine; this milestone is pure planning surface.
 replace `thlibod` with `inferd-daemon --backend mock` and confirm
 thlibo's daemon-level tests that don't need real inference pass.
 
-### M2 — llamafile backend
+### M2 — llama.cpp FFI backend
 
-- Implement `inferd-engine::llamafile::Llamafile` — spawns the binary
-  as a subprocess, exchanges the existing stdio protocol thlibo uses
-  (`{"system":...,"user":...}\n` → token lines → `<<END>>`).
-- Implement the ready-poll that thlibo does (`READY` sentinel on
-  stderr flips `Backend::ready()` true).
+- Vendor `ggerganov/llama.cpp` as a git submodule under
+  `vendor/llama.cpp/` at a pinned commit.
+- `crates/inferd-engine/build.rs` runs CMake on the submodule with
+  `LLAMA_BUILD_SERVER=OFF`, `LLAMA_BUILD_EXAMPLES=OFF`,
+  `LLAMA_BUILD_TESTS=OFF`. GPU backends (CUDA, Metal, Vulkan,
+  ROCm) are opt-in cargo features, off by default.
+- Generate Rust bindings for `llama.h` via `bindgen`.
+- Implement `inferd-engine::llamacpp::LlamaCpp` against the
+  bindings: load model, allocate KV cache, run forward pass,
+  stream tokens back via callback into the Rust async runtime.
+- `Backend::ready()` flips true after model load + KV-cache
+  allocation succeed.
 - Wire the queue: 1 active, 10 queued, `ErrFull` on overflow, ctx
-  cancellation propagates.
-- Streaming `Response::Token` frames back per newline.
+  cancellation propagates (drop the request → drop the in-flight
+  generation handle).
+- Streaming `Response::Token` frames back per generated token,
+  no subprocess pipe in the loop.
 
 **Exit criteria**: thlibo's full integration test suite (incl. the
-~60s real-engine tests) passes against a running inferd. This is the
-drop-in-replacement validation.
+~60s real-engine tests) passes against a running inferd. This is
+the drop-in-replacement validation. *Also*: generated binary has
+no llamafile or llama.cpp HTTP server symbols (verify with `nm` /
+`dumpbin`); subprocess count during a generation is exactly 1
+(the daemon itself).
 
 ### M3 — activity log + redactor
 
@@ -193,42 +215,43 @@ Out of scope for v0.1. Sketched in an ADR so the `Backend` trait
 design can be validated against the shape of Ollama / OpenAI /
 Bedrock / Anthropic / LiteLLM requests before M1 freezes.
 
-## Threat model (inherited)
+## Threat model
 
-Everything in thlibo's `THREAT_MODEL.md` that lives below the
-middleware layer applies to inferd directly. In particular:
+Findings live in `THREAT_MODEL.md` at the repo root. v0.1 GA
+blocks until every "applies" finding is `mitigated` (with a
+named code site) or has an explicit waiver in that document.
+Each milestone is responsible for landing the mitigations
+called out in its scope:
 
-- #4 constant-time SHA compare.
-- #5 NDJSON per-frame cap.
-- #8 log redactor.
-- #9 script entry TOCTOU — N/A, no scripts in inferd.
-- #13 rolling log rotation.
-- #14 systemd hardening directives.
-- #21 lock-file symlink reject.
-- #27/#28 SBOM + signed releases — match thlibo's v0.2 plan (cosign
-  + CycloneDX).
+- M1: F-1 (frame cap), F-2 (lock symlink), F-13 (ready
+  gating), F-14 (no subprocess regression).
+- M2: F-5, F-6 (model verify), F-9 (FFI crash isolation),
+  F-11 (GBNF resource bounds).
+- M3: F-3 (log redactor), F-4 (log rotation).
+- M4: F-7, F-8 (peer credentials, TCP caveat),
+  F-15 (signed releases, SBOM), F-16 (daemon hardening).
 
-Every remediation in thlibo is a port-target here. Don't forget any.
+## Routing (no-op in v0.1, real in v0.2)
 
-## Open questions for the implementer
+ADR 0007 specifies the routing model: operator-configured policy
+across registered backends, no in-daemon retry, no mid-stream
+failover, circuit breaker as the only stateful policy mechanism.
+v0.1 ships with a single backend (local llama.cpp) so the router
+is structurally a no-op — it picks the only backend it has. The
+shape (`Router`, policy choose-fn, breaker map) is wired in M2 so
+that v0.2 can plug in cloud adapters without reshaping the
+daemon.
 
-1. **Admin socket?** thlibo v0.1 exposes an admin socket (0600,
-   separate address) that broadcasts engine restart / ready events
-   to connected admin clients. It's useful for `thlibo status` style
-   commands and for debugging. Default decision: port it. Alternative:
-   replace with a unix-domain event subscription on the main socket
-   using a `subscribe: true` request field.
+The wire protocol exposes no per-request backend field. Apps do
+not pick the backend. If an app wants direct, app-specific
+control over a provider, it integrates that provider's SDK
+directly into itself; that workload is not what inferd is for
+(see ADR 0006).
 
-2. **Client identity enforcement.** thlibo v0.1 relies on socket ACLs
-   only. For a host-wide daemon used by multiple middlewares, adding
-   `SO_PEERCRED` / `GetNamedPipeClientProcessId` checks is cheap
-   defence-in-depth and stops one bad middleware from impersonating
-   another. Default decision: implement on Unix + Windows; skip on
-   loopback TCP (which is always localhost-only and caller-identified
-   by optional API key).
+## Pre-M1 open questions
 
-3. **Protocol versioning.** Add a `version: "v1"` field to the first
-   frame on each connection? Or stay strict-v1 and let v2 introduce
-   a new `/inferd-v2.sock` endpoint? Leaning toward the latter —
-   simpler, and the migration story is "run both sockets during the
-   transition window" which is clearer than in-band negotiation.
+All four pre-M1 open questions (admin socket, peer-credential
+enforcement, protocol versioning, backend identity in `done`
+frames) are settled in [ADR 0009](adr/0009-pre-m1-open-questions-resolved.md).
+M1 starts against the resolved decisions; nothing in this
+section is unresolved.

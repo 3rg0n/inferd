@@ -5,10 +5,15 @@ implementation choices aren't.
 
 | # | Title | Status |
 |---|---|---|
-| [0001](0001-wire-protocol-inherited-from-thlibo.md) | Wire protocol v1 inherited byte-for-byte from thlibo | Accepted |
+| [0001](0001-wire-protocol-inherited-from-thlibo.md) | Wire protocol v1 inherited byte-for-byte from thlibo | Superseded by 0008 |
 | [0002](0002-rust-not-go.md) | Rust, not Go | Accepted |
-| [0003](0003-subprocess-llamafile-not-ffi.md) | Subprocess llamafile, not FFI | Accepted |
+| [0003](0003-subprocess-llamafile-not-ffi.md) | Subprocess llamafile, not FFI | Superseded by 0005 |
 | [0004](0004-mit-not-apache.md) | MIT license, not Apache-2.0 | Accepted |
+| [0005](0005-libllama-ffi-not-subprocess.md) | Consume libllama via FFI, not llamafile as a subprocess | Accepted |
+| [0006](0006-lean-core-ecosystem-extensions.md) | Lean core, ecosystem extensions live as separate processes | Accepted |
+| [0007](0007-backend-routing-and-failure-semantics.md) | Backend routing: operator policy, no in-daemon retry, no mid-stream failover | Accepted |
+| [0008](0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md) | Protocol v1 designed for inferd, not derived from thlibo | Accepted |
+| [0009](0009-pre-m1-open-questions-resolved.md) | Pre-M1 open questions resolved (admin socket, peer creds, versioning, backend identity) | Accepted |
 
 ## Writing a new ADR
 
