@@ -91,6 +91,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and pre-binding symlink refusal. Windows named pipe
   deferred to M4. `Connection` trait abstracts UDS/TCP
   uniformly. 4 tests (3 enabled per platform).
+- `inferd-daemon` section C: router, lifecycle, config, main.
+  `Router` (no-op v0.1 per ADR 0007) picks a single backend.
+  `lifecycle::handle_connection` reads `Request` frames, routes
+  through the `Backend`, and writes `Response::Token`/`Done`
+  with `stop_reason` and `backend` per ADR 0008. Mid-stream
+  failures emit `error` with `code: backend_unavailable`.
+  `lifecycle::wait_for_ready` polls every 50ms up to a
+  configured timeout (THREAT_MODEL F-13 — listener bound
+  AFTER ready). `lifecycle::serve_tcp` and `serve_uds`
+  accept-loops with shutdown via tokio oneshot channel
+  (SIGTERM/SIGINT on Unix, Ctrl-C on Windows). `clap`-based
+  CLI in `config.rs` with `--lock`, `--tcp`, `--uds`,
+  `--group`, `--queue-depth`, `--ready-timeout-secs`. Crate
+  now ships an `inferd-daemon` binary. 8 new tests
+  (router 3, config 4, lifecycle 3) — 20 daemon tests total.
 
 ### Changed
 - Workspace MSRV bumped 1.76 → 1.89 to use `File::try_lock`

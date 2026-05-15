@@ -9,9 +9,9 @@ repository.workspace   = true
 homepage.workspace     = true
 authors.workspace      = true
 
-# [[bin]] target is added in M1c when src/main.rs lands. Until then the
-# crate ships only as a library so lifecycle/lock/queue can be unit-tested
-# without a working main entrypoint.
+[[bin]]
+name = "inferd-daemon"
+path = "src/main.rs"
 
 [features]
 default = []
