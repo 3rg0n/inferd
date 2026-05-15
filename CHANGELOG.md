@@ -70,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the explicit "no HTTP, ever" / "no per-request backend override,
   ever" rules.
 
-**M1 in progress**: `inferd-proto` and `inferd-engine` crates
-landed.
+**M1 in progress**: `inferd-proto`, `inferd-engine`, and
+`inferd-daemon` (lock + queue) landed.
 
 - `inferd-proto`: types, NDJSON framing with 64 MiB bounded
   reader (THREAT_MODEL F-1), request validation. 15 tests.
@@ -79,6 +79,16 @@ landed.
   `TokenStream`, `GenerateError`, deterministic `mock`
   adapter with failure-mode injection (pre-stream error,
   mid-stream drop, ready toggle). 7 tests.
+- `inferd-daemon` section A: cross-platform single-instance
+  `Lock` (uses `std::fs::File::try_lock`, stable since 1.89),
+  symlink rejection (THREAT_MODEL F-2), bounded admission
+  `Queue` (1 active + N queued, non-blocking submit, returns
+  `SubmitError::QueueFull`). 8 tests.
 
-22/22 tests pass on Rust 1.92. Clippy clean. `inferd-daemon`
-still pending. See `docs/plan-v0.1.md`.
+### Changed
+- Workspace MSRV bumped 1.76 → 1.89 to use `File::try_lock`
+  from `std`. The previous floor was speculative; 1.89 is
+  current.
+
+30/30 tests pass on Rust 1.92. Clippy clean. Daemon
+sections B–D still pending. See `docs/plan-v0.1.md`.
