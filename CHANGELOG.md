@@ -84,6 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symlink rejection (THREAT_MODEL F-2), bounded admission
   `Queue` (1 active + N queued, non-blocking submit, returns
   `SubmitError::QueueFull`). 8 tests.
+- `inferd-daemon` section B: endpoint listeners. `bind_tcp`
+  for cross-platform loopback TCP (default `127.0.0.1:47321`),
+  `bind_uds` (Unix only) for Unix domain sockets with mode
+  `0660`, optional group ownership via `nix::unistd::chown`,
+  and pre-binding symlink refusal. Windows named pipe
+  deferred to M4. `Connection` trait abstracts UDS/TCP
+  uniformly. 4 tests (3 enabled per platform).
 
 ### Changed
 - Workspace MSRV bumped 1.76 → 1.89 to use `File::try_lock`
