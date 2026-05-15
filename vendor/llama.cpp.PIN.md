@@ -7,16 +7,22 @@ the bump procedure.
 ## Current pin
 
 - **Tag**: `b9159`
-- **Date**: 2026-05-15
+- **Commit**: `5c0e94683` (verify with
+  `git -C vendor/llama.cpp describe --tags HEAD`)
+- **Date pinned**: 2026-05-15
 - **Repo**: <https://github.com/ggerganov/llama.cpp>
 - **Reason for this pin**: most recent tagged build at the
   time inferd M0 closed. llama.cpp tags daily build artefacts;
   picking the most recent tag at decision time is the default
   unless a specific feature dictates otherwise.
 
-The submodule is **not yet added** in M0. It will be added in
-M2a (see `docs/plan-v0.1.md`). When added, the working tree is
-expected to be at this tag.
+**Status**: live. Submodule added in M2a. After cloning, run
+`git submodule update --init --recursive` to populate the
+working tree at this commit.
+
+This file lives at `vendor/llama.cpp.PIN.md` (sibling of the
+submodule, not inside it) so it can be edited without
+modifying the submodule's tracked tree.
 
 ## Required features at this pin
 
