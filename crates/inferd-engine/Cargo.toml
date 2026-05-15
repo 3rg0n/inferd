@@ -37,9 +37,10 @@ subtle       = { workspace = true }   # Constant-time hash compare (THREAT_MODEL
 bytes        = { workspace = true }
 
 [build-dependencies]
-# Populated when the llamacpp feature lands in M2a:
-#   cmake   = "0.1"
-#   bindgen = "0.69"
+# Only invoked when the `llamacpp` feature is enabled; the build.rs
+# checks env::var("CARGO_FEATURE_LLAMACPP") and short-circuits otherwise.
+cmake   = "0.1"
+bindgen = "0.71"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

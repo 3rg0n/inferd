@@ -100,6 +100,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drop produces `code: backend_unavailable` per ADR 0007;
   ready-gating regression for THREAT_MODEL F-13. 4 tests.
 
+### M2a — llama.cpp build wiring
+
+- `vendor/llama.cpp` submodule pinned at tag `b9159` (commit
+  `5c0e94683`, dated 2026-05-15). Activated with
+  `git submodule update --init --recursive`.
+- `inferd-engine/build.rs`: behind feature `llamacpp`, runs
+  CMake on the submodule with `LLAMA_BUILD_SERVER`/`EXAMPLES`/
+  `TESTS`/`TOOLS=OFF`, `LLAMA_CURL=OFF`, `BUILD_SHARED_LIBS=OFF`.
+  Generates Rust bindings via bindgen 0.71 from
+  `vendor/llama.cpp/include/llama.h` into
+  `OUT_DIR/llama_bindings.rs`. GPU backends (`cuda`, `metal`,
+  `vulkan`, `rocm`) opt-in via cargo features; default is CPU-only.
+- `inferd-engine::ffi` includes the generated bindings. Crate
+  lint posture changed from `forbid(unsafe_code)` to
+  `deny(unsafe_code)` so the FFI module can scope an inner
+  `allow` to bindgen output. Every other module remains
+  unsafe-free.
+- Default `cargo build` (no features) still works without a
+  C++ toolchain or `libclang` — the build script short-circuits
+  on `CARGO_FEATURE_LLAMACPP`.
+- Smoke test on Windows 11: `cargo build -p inferd-engine
+  --features llamacpp` produces `llama.lib`, `ggml*.lib` static
+  archives plus a 1,865-line `llama_bindings.rs`. Workspace
+  clippy and tests pass with the feature on and off.
+
 ### M1 status — ✅ exit criteria met
 
 46/46 tests pass workspace-wide on Windows + the test suite
