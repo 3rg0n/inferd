@@ -11,5 +11,7 @@ pub mod config;
 pub mod endpoint;
 pub mod lifecycle;
 pub mod lock;
+pub mod logx;
 pub mod queue;
+pub mod redact;
 pub mod router;
