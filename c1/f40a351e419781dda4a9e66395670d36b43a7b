@@ -1,0 +1,40 @@
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_f5c8e032e1bdee 20-23
+  s_126aec4081f728::t_a5665523936359 49-50
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_bb87033e134f26 21-22
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_11171d2c6c0ccf 73-78
+  s_126aec4081f728::t_70a4e1da3d00c9 126-131
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_ffa9bb9d0a5ea8 490,493-494
+  s_126aec4081f728::t_66f4b40ea34773 425-426
+  s_126aec4081f728::t_a55b1b913a3174 1-424,427-489,491-492,495-513
+crates/inferd-engine/tests/llamacpp.rs
+  s_126aec4081f728::t_b9caec1cc33114 1-68,73-81,83-167
+  s_126aec4081f728::t_66f4b40ea34773 69-72,82
+crates/inferd-engine/src/llamacpp/loader.rs
+  s_126aec4081f728::t_66f4b40ea34773 142
+  s_126aec4081f728::t_a687bc205fba3a 1-141,143-168
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_126aec4081f728::t_89b26d534d4d55 1-14,16
+  s_126aec4081f728::t_c2a05b59caf091 15
+CHANGELOG.md
+  s_126aec4081f728::t_74e8d1b3507180 103-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "c1f40a351e419781dda4a9e66395670d36b43a7b",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
