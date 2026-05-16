@@ -100,6 +100,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drop produces `code: backend_unavailable` per ADR 0007;
   ready-gating regression for THREAT_MODEL F-13. 4 tests.
 
+### M2b — `LlamaCpp` Backend adapter
+
+- `inferd-engine::llamacpp` module: real `Backend` impl built on
+  the FFI bindings. Compiled in only when the `llamacpp` feature
+  is enabled; default builds remain mock-only.
+- `loader.rs`: `load_model()` opens the GGUF file, optionally
+  verifies SHA-256 against an expected hash using
+  `subtle::ConstantTimeEq` (THREAT_MODEL F-5), then hands off to
+  `llama_model_load_from_file`. `ModelHandle` owns the
+  `llama_model*` and runs `llama_model_free` on drop. F-6 TOCTOU
+  caveat documented inline.
+- `backend.rs`: `LlamaCpp::new()` initialises libllama (idempotent
+  via `Once`), loads the model, allocates `llama_context` with
+  configurable `n_ctx`, flips ready. `generate()` renders the
+  model's chat template, tokenizes, then spawns a `spawn_blocking`
+  task that drives `llama_decode` + `llama_sampler_sample` and
+  streams `TokenEvent`s through a tokio mpsc channel.
+- Sampler chain: `top_k → top_p → temp → dist`, with grammar
+  inserted first when `Resolved::grammar` is non-empty (GBNF via
+  `llama_sampler_init_grammar`). Wires THREAT_MODEL F-11 — no
+  parse-time complexity bound yet, deferred per the threat-model
+  doc.
+- Cancellation: dropping the response stream drops the receiver,
+  which causes `tx.blocking_send` in the C++ loop to error and the
+  loop exits. KV cache is reset between generations via
+  `llama_memory_clear`.
+- Build script: switched to `Release` CMake configuration so the
+  C++ CRT matches Rust's release-CRT linkage on Windows. Linked
+  `Advapi32.lib` for `ggml-cpu`'s registry probes.
+- `tests/llamacpp.rs`: 3 tier-3 tests behind
+  `--features llamacpp-integration`. Skip cleanly with
+  `[skip] INFERD_TEST_MODEL_PATH not set` when no model is
+  available; otherwise verify load → stream → done with
+  `stop_reason ∈ {End, Length}` and `completion_tokens > 0`,
+  cancellation behaviour, and `InvalidRequest` for empty messages.
+
+48/48 tests pass under default features
+(15 proto + 9 engine + 20 daemon + 4 daemon-integration).
+12/12 with `llamacpp-integration` feature on (engine adapter
+compiles and tier-3 stubs skip clean). Workspace clippy clean
+in both configurations. `cargo audit` reports zero advisories
+across 137 dependencies.
+
 ### M2a — llama.cpp build wiring
 
 - `vendor/llama.cpp` submodule pinned at tag `b9159` (commit

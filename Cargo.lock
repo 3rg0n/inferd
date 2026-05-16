@@ -393,6 +393,7 @@ dependencies = [
  "serde",
  "sha2",
  "subtle",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",

@@ -17,7 +17,10 @@ build = "build.rs"
 # feature-gated for crate consumers who only want the trait.
 default              = []
 llamacpp             = []
-llamacpp-integration = ["llamacpp"]   # Tier 3 tests; requires GGUF.
+# Tier 3 integration tests in tests/llamacpp.rs only compile when this
+# feature is on. Set INFERD_TEST_MODEL_PATH to a GGUF file to actually run
+# them; otherwise they skip with an explanatory message.
+llamacpp-integration = ["llamacpp"]
 cuda                 = ["llamacpp"]
 metal                = ["llamacpp"]
 vulkan               = ["llamacpp"]
@@ -43,4 +46,5 @@ cmake   = "0.1"
 bindgen = "0.71"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

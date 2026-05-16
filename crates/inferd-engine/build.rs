@@ -70,6 +70,12 @@ fn build_llamacpp() {
         .define("LLAMA_CURL", "OFF")
         // Static libraries to keep our final binary self-contained.
         .define("BUILD_SHARED_LIBS", "OFF")
+        // Always Release on the C++ side so the CRT matches Rust's
+        // (cargo links the release CRT for both `cargo build` and
+        // `cargo test`). Mixing debug-CRT C++ with release-CRT Rust
+        // produces unresolved-symbol errors on Windows for *_dbg
+        // helpers.
+        .profile("Release")
         // GPU backends opt-in via cargo features. M2a default: CPU-only.
         .define(
             "GGML_CUDA",
@@ -117,8 +123,12 @@ fn build_llamacpp() {
     } else if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=c++");
     }
-    // Windows MSVC links its own C++ runtime through cmake's compiler
-    // toolchain — no explicit link directive needed.
+
+    // Windows-specific system libraries pulled in by ggml-cpu (registry
+    // probes for CPU feature detection) and llama (mimalloc / OS heap).
+    if cfg!(target_os = "windows") {
+        println!("cargo:rustc-link-lib=Advapi32");
+    }
 
     // bindgen — generate Rust bindings for the public C API.
     let header = llama_src.join("include").join("llama.h");
