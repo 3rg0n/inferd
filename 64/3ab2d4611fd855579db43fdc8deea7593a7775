@@ -1,0 +1,32 @@
+crates/inferd-daemon/src/logx.rs
+  s_126aec4081f728::t_9884bd3cd097da 21-22,26-34
+  s_126aec4081f728::t_8b8002100708c7 299
+  s_126aec4081f728::t_624364a277eeec 191-298,300-311
+CHANGELOG.md
+  s_126aec4081f728::t_b1d76a4d28ac8a 103-132
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_2972718c504b29 10,16-18,22
+  s_126aec4081f728::t_8c22f8ae16897e 82-109
+THREAT_MODEL.md
+  s_126aec4081f728::t_4472f21a1d1fc5 69-74,81-85
+crates/inferd-daemon/src/lifecycle.rs
+  s_126aec4081f728::t_ee306d1b6d2969 178-186,196-201
+crates/inferd-daemon/tests/logx.rs
+  s_126aec4081f728::t_54e197608461f8 1-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "643ab2d4611fd855579db43fdc8deea7593a7775",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
