@@ -39,6 +39,8 @@ anyhow              = { workspace = true }
 thiserror           = { workspace = true }
 clap                = { workspace = true }
 bytes               = { workspace = true }
+regex               = "1"
+chrono              = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["fs", "user", "socket"] }
