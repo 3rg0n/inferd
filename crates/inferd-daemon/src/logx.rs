@@ -18,10 +18,20 @@
 //! The redactor runs *before* bytes hit the disk; even
 //! `INFERD_LOG=debug` records are scrubbed.
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use chrono::Utc;
+use serde_json::{json, Value};
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::Layer;
 
 use crate::redact::redact_in_place;
 
@@ -175,6 +185,127 @@ fn dirs_home() -> Option<PathBuf> {
     #[cfg(not(unix))]
     {
         std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+}
+
+/// `tracing` layer that serialises events as NDJSON and routes them
+/// through a shared `LogxWriter`.
+///
+/// Field shape:
+/// - `t`         — RFC3339 timestamp.
+/// - `level`     — `info` | `warn` | `error` | `debug` | `trace`.
+/// - `component` — module-path-derived component name (the part of the
+///   `tracing` target after the crate name; falls back to the target
+///   itself).
+/// - `msg`       — the event's primary message string.
+/// - any structured fields supplied via `tracing!(key = value, ...)`.
+pub struct LogxLayer {
+    writer: Arc<LogxWriter>,
+}
+
+impl LogxLayer {
+    /// Wrap a shared `LogxWriter` so it can be added to a
+    /// `tracing_subscriber::Registry`.
+    pub fn new(writer: Arc<LogxWriter>) -> Self {
+        Self { writer }
+    }
+}
+
+impl<S> Layer<S> for LogxLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let metadata = event.metadata();
+        let mut visitor = JsonVisitor::default();
+        event.record(&mut visitor);
+
+        let message = visitor.fields.remove("message").map(value_to_string);
+
+        let mut record = serde_json::Map::new();
+        record.insert("t".into(), Value::String(Utc::now().to_rfc3339()));
+        record.insert(
+            "level".into(),
+            Value::String(metadata.level().to_string().to_lowercase()),
+        );
+        record.insert(
+            "component".into(),
+            Value::String(component_from_target(metadata.target())),
+        );
+        if let Some(msg) = message {
+            record.insert("msg".into(), Value::String(msg));
+        }
+        for (k, v) in visitor.fields {
+            record.insert(k, v);
+        }
+
+        let line = match serde_json::to_string(&Value::Object(record)) {
+            Ok(s) => s,
+            Err(e) => {
+                // Falling back to a synthetic line so we never lose an
+                // event, even if the structured payload is unserialisable.
+                let mut buf = String::with_capacity(128);
+                let _ = write!(
+                    buf,
+                    r#"{{"t":"{}","level":"error","component":"logx","msg":"serialise: {}"}}"#,
+                    Utc::now().to_rfc3339(),
+                    e
+                );
+                buf
+            }
+        };
+        // Write errors are intentionally swallowed: the alternative is
+        // panicking inside a tracing event, which is a worse outcome.
+        // Operators see disk-full conditions via OS-level monitoring.
+        let _ = self.writer.write_record(line);
+    }
+}
+
+fn component_from_target(target: &str) -> String {
+    // Targets are `crate::module::path`. The leading crate is redundant
+    // (every record carries the same one); strip it so dashboards can
+    // group by component.
+    target
+        .split_once("::")
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_else(|| target.to_string())
+}
+
+#[derive(Default)]
+struct JsonVisitor {
+    fields: BTreeMap<String, Value>,
+}
+
+impl Visit for JsonVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields.insert(field.name().into(), json!(value));
+    }
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.fields.insert(field.name().into(), json!(value));
+    }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.fields.insert(field.name().into(), json!(value));
+    }
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.fields.insert(field.name().into(), json!(value));
+    }
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.fields.insert(field.name().into(), json!(value));
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().into(), json!(format!("{value:?}")));
+    }
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.fields
+            .insert(field.name().into(), json!(value.to_string()));
+    }
+}
+
+fn value_to_string(v: Value) -> String {
+    match v {
+        Value::String(s) => s,
+        other => other.to_string(),
     }
 }
 

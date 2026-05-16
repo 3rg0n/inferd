@@ -100,6 +100,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drop produces `code: backend_unavailable` per ADR 0007;
   ready-gating regression for THREAT_MODEL F-13. 4 tests.
 
+### M3 — Activity log + redactor wired into the daemon
+
+- `LogxLayer`: a `tracing_subscriber::Layer` that serialises every
+  event into a JSON object and routes it through a shared
+  `LogxWriter`. Field shape: `t` (RFC3339), `level`, `component`
+  (target with crate prefix stripped), `msg`, plus any structured
+  fields the call site supplied. The redactor runs inside
+  `LogxWriter::write_record` so even debug-level dumps are scrubbed
+  before disk write.
+- `inferd-daemon` `main.rs`: `install_tracing()` now layers the
+  stderr `fmt` (operators tailing) with `LogxLayer` (NDJSON file
+  writes). `INFERD_LOG_DIR` overrides the default
+  `~/.inferd/logs/`. `INFERD_LOG=info|debug|0` controls verbosity.
+- `lifecycle::handle_connection` emits a `request_done` event
+  (target `inferd_daemon::activity`) on every successful generation
+  with `req_id`, `backend`, `stop_reason`, `prompt_tokens`,
+  `completion_tokens`. Mid-stream backend failures emit a paired
+  `request_error_mid_stream` warn-level event.
+- `tests/logx.rs`: 2 integration tests. (1) Boots the lifecycle
+  in-process with the real `LogxLayer`, drives one request, reads
+  the on-disk NDJSON, and asserts the `request_done` record carries
+  the right fields. (2) Embeds a synthetic credential in the
+  request id, drives the request, and asserts the literal does not
+  appear anywhere in the on-disk log — proving the F-3 redactor
+  runs end-to-end.
+
+THREAT_MODEL F-3 (write-time redactor) and F-4 (3-generation
+rotation) are now `mitigated` with named code sites.
+62/62 workspace tests pass. Workspace clippy clean.
+
 ### M2b — `LlamaCpp` Backend adapter
 
 - `inferd-engine::llamacpp` module: real `Backend` impl built on

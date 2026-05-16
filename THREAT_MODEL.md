@@ -66,26 +66,23 @@ contain secrets (the user's diff, env vars, tokens copy-pasted
 into a prompt). If the activity log records request bodies or
 response content verbatim, those secrets land on disk.
 
-**Status.** applies.
-
-**Mitigation.** `inferd-daemon::logx` runs a write-time
-redactor over every record. Redactor patterns include
-JWT-shaped strings, generic API-key shapes (`sk-...`,
-`xoxb-...`, `ghp_...`, `pat-...`, etc.), `password=` and
-`Authorization:` patterns, and the structured contents of any
-field named `content`, `text`, or `body`. Default verbosity
-records request *metadata* only; record body capture requires
-`INFERD_LOG=debug`, and even then the redactor still runs.
+**Status.** mitigated. `crates/inferd-daemon/src/redact.rs`
+runs `redact_in_place` inside `LogxWriter::write_record` before
+any byte hits disk. Patterns: Authorization headers, key=value
+secrets (password / api_key / token / etc.), JWTs,
+`sk-`/`xox[baps]-`/`gh[posu]_`/`pat-`/`thingspat_` prefixes,
+AWS `AKIA`/`ASIA`. Verified by `tests/logx.rs::injected_credential_does_not_leak_into_log`.
 
 ### F-4. Activity log unbounded growth
 
 **Description.** Without rotation, the activity log grows
 until the disk fills.
 
-**Status.** applies.
-
-**Mitigation.** Rolling rotation, 3 generations kept by
-default, configurable. `inferd-daemon::logx::rotate`.
+**Status.** mitigated. `crates/inferd-daemon/src/logx.rs`'s
+`LogxWriter::write_record` rotates at the configured
+`rotate_bytes` (default 16 MiB), cascading
+`.ndjson` → `.1` → `.2` → `.3` and pruning anything beyond
+`KEEP_GENERATIONS = 3`. Verified by `logx::tests::cascade_keeps_only_three_generations`.
 
 ### F-5. SHA-256 verification timing leak
 
