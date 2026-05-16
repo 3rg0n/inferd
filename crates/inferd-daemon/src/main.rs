@@ -7,21 +7,19 @@ use inferd_daemon::endpoint::bind_tcp;
 use inferd_daemon::endpoint::bind_uds;
 use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready};
 use inferd_daemon::lock::Lock;
+use inferd_daemon::logx::{default_log_dir, LogxLayer, LogxWriter, DEFAULT_ROTATE_BYTES};
 use inferd_daemon::router::Router;
 use inferd_engine::{mock::Mock, Backend};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("INFERD_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .json()
-        .init();
+    install_tracing()?;
 
     let cli = Cli::parse();
     cli.require_one_transport()
@@ -78,6 +76,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!("shutdown complete");
+    Ok(())
+}
+
+/// Initialise tracing with two layers:
+/// - stderr `fmt` layer for operators tailing the daemon (compact, plain).
+/// - `LogxLayer` writing NDJSON to the activity log under
+///   `default_log_dir()` (or `INFERD_LOG_DIR` when set), with the secret
+///   redactor applied per-record.
+///
+/// `INFERD_LOG` controls verbosity; default is `info`. Set to `debug`
+/// for verbose request/response capture; set to `0`/`off` to silence
+/// everything.
+fn install_tracing() -> anyhow::Result<()> {
+    let filter = EnvFilter::try_from_env("INFERD_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .compact();
+
+    let log_dir = default_log_dir();
+    let writer = Arc::new(LogxWriter::open(&log_dir, "inferd", DEFAULT_ROTATE_BYTES)?);
+    let logx_layer = LogxLayer::new(writer);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer)
+        .with(logx_layer)
+        .init();
     Ok(())
 }
 

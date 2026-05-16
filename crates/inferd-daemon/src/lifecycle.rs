@@ -175,6 +175,15 @@ pub async fn handle_connection<C: Connection + 'static>(
                         backend: backend_name.clone(),
                     };
                     write_response(&writer, &frame).await?;
+                    info!(
+                        target: "inferd_daemon::activity",
+                        req_id = %req_id,
+                        backend = %backend_name,
+                        stop_reason = ?stop_reason,
+                        prompt_tokens = usage.prompt_tokens,
+                        completion_tokens = usage.completion_tokens,
+                        "request_done"
+                    );
                     terminal_emitted = true;
                     break;
                 }
@@ -184,7 +193,12 @@ pub async fn handle_connection<C: Connection + 'static>(
         if !terminal_emitted {
             // Mid-stream backend failure (no Done event). Report and move
             // to next request on the same connection.
-            warn!(req_id, backend = %backend_name, "stream ended without done");
+            warn!(
+                target: "inferd_daemon::activity",
+                req_id = %req_id,
+                backend = %backend_name,
+                "request_error_mid_stream"
+            );
             let frame = Response::Error {
                 id: req_id,
                 code: ErrorCode::BackendUnavailable,
