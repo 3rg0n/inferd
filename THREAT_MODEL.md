@@ -297,15 +297,32 @@ process settings is unnecessarily exposed (ptrace, core
 dumps containing tokens, capabilities the daemon does not
 need).
 
-**Status.** applies.
+**Status.** mitigated (Linux + macOS); Windows partial.
 
-**Mitigation.** systemd unit on Linux applies
-`NoNewPrivileges=yes`, `PrivateTmp=yes`,
-`ProtectSystem=strict`, `ProtectHome=read-only`,
-`CapabilityBoundingSet=` (empty), `RestrictAddressFamilies=`,
-`SystemCallFilter=@system-service`. Equivalent posture on
-macOS via launchd plist; Windows via service hardening
-flags. Codified in M4 packaging.
+- **Linux** — `packaging/systemd/inferd.service` applies
+  `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome=read-only`, `PrivateTmp`, `PrivateDevices`,
+  `ProtectKernel{Tunables,Modules,Logs}`,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
+  `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID`,
+  `LockPersonality`, `MemoryDenyWriteExecute`,
+  `SystemCallFilter=@system-service`,
+  `CapabilityBoundingSet=` (empty),
+  `AmbientCapabilities=` (empty). Per-user variant; install at
+  `~/.config/systemd/user/inferd.service`.
+- **macOS** — `packaging/launchd/io.inferd.daemon.plist`
+  ships as a per-user LaunchAgent (no LaunchDaemon, no root).
+  Sandboxing applies when the signed bundle is installed from
+  the release tarball.
+- **Windows** — `packaging/windows/install.ps1` runs as
+  `NT AUTHORITY\NetworkService`, sets recovery actions, and
+  populates the activity-log env var. Service-ACL SDDL
+  hardening (`sc.exe sdset` to deny non-admins from
+  controlling the service) is documented in
+  `packaging/README.md` as a post-alpha follow-up — narrower
+  scope than the Unix variants.
+- The release workflow bundles the matching manifest into
+  each per-platform archive.
 
 ## Process
 

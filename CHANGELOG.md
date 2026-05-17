@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-05-16
+
+Closes the three security follow-ups identified in alpha.1's
+"Not yet verified" / "Post-alpha tracked work" buckets: F-7
+peer credentials, F-8 TCP API-key auth, F-16 daemon hardening
+manifests.
+
+### Added
+
+- **F-7 (peer credentials)** — `crates/inferd-daemon/src/peercred.rs`.
+  `PeerIdentity` struct extracted on every accept and recorded on
+  the `connection_accepted` activity-log event. Unix path uses
+  `nix::sys::socket::getsockopt(PeerCredentials)`
+  (`SO_PEERCRED`/`LOCAL_PEERCRED`); Windows path uses
+  `GetNamedPipeClientProcessId` →
+  `OpenProcessToken(TOKEN_QUERY)` →
+  `GetTokenInformation(TokenUser)` →
+  `ConvertSidToStringSidW`. Loopback TCP gets a degraded
+  `from_tcp(remote_addr)` for log correlation; the real perimeter
+  comes from F-8.
+- **F-8 (TCP API key)** — `crates/inferd-daemon/src/auth.rs`.
+  When `AcceptContext::expected_api_key` is `Some`, every TCP
+  connection must send `{"type":"auth","key":"..."}` as its
+  first NDJSON frame. Constant-time compare via
+  `subtle::ConstantTimeEq`. Missing or wrong key closes the
+  connection silently — no protocol error frame, no endpoint
+  confirmation. New `--api-key` / `INFERD_API_KEY` flag.
+- **F-16 (hardening manifests)** — `packaging/`.
+  `systemd/inferd.service` (per-user, full hardening directive
+  set), `launchd/io.inferd.daemon.plist` (LaunchAgent),
+  `windows/install.ps1` (sc.exe with NetworkService).
+  `release.yml` bundles the matching manifest into each
+  per-platform release archive.
+- `lifecycle::AcceptContext` struct: per-accept policy bucket
+  threaded through `serve_tcp` / `serve_uds` / `serve_named_pipe`
+  into `handle_connection`. Future per-connection policy (rate
+  limits, per-caller quotas) extends this rather than each
+  signature.
+
+### Fixed
+
+- `lifecycle::read_frame_async` previously wrapped its input in a
+  fresh `BufReader` on every call. Bytes the fresh wrapper
+  prefetched past the current line were lost when it dropped.
+  Surfaced as a "request frame lost after auth" symptom in F-8
+  testing. Both `read_auth_frame` and `read_frame_async` now take
+  the caller's `AsyncBufRead` directly, consuming from the shared
+  per-connection buffer.
+
+### Changed
+
+- `lifecycle::handle_connection` signature: gains `peer:
+  PeerIdentity` and `ctx: AcceptContext` parameters.
+  `serve_tcp` / `serve_uds` / `serve_named_pipe` likewise take
+  `AcceptContext`. Tests updated.
+- `crates/inferd-daemon` crate-level lint posture:
+  `forbid(unsafe_code)` → `deny(unsafe_code)` so the platform-
+  specific `peercred` submodules can scope an inner
+  `allow(unsafe_code)` for the FFI surface. Every other module
+  in the daemon remains unsafe-free.
+- `windows-sys` features bumped: added
+  `Win32_Security_Authorization` and `Win32_System_Memory` for
+  `ConvertSidToStringSidW` and `LocalFree`.
+
+### Security
+
+- THREAT_MODEL F-7, F-8 → mitigated with named code sites and
+  verifying tests.
+- THREAT_MODEL F-16 → mitigated on Linux + macOS; Windows
+  partial (service-ACL SDDL is post-alpha).
+- All other findings unchanged from alpha.1.
+
+### Verified
+
+- 74/74 Rust tests pass on Windows (was 67 in alpha.1; +5 daemon
+  unit tests under `auth::tests`, +4 integration tests in
+  `tests/auth.rs`, -2 attribution).
+- Workspace clippy `-D warnings` clean. fmt clean.
+
+### Not yet verified
+
+Same list as alpha.1 — real Gemma 4 GGUF run, CI on real
+Actions runners, Linux/macOS test execution, thlibo v0.2 import.
+
 ## [0.1.0-alpha.1] - 2026-05-16
 
 First tagged drop. Code-complete for v0.1's planned scope plus

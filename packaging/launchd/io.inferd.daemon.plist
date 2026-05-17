@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  inferd-daemon LaunchAgent (per-user, runs in login session).
+
+  Install as:
+    ~/Library/LaunchAgents/io.inferd.daemon.plist
+
+  Load via:
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.inferd.daemon.plist
+    launchctl enable gui/$UID/io.inferd.daemon
+
+  THREAT_MODEL F-16: launchd has a smaller hardening surface than
+  systemd. The two posture controls relevant here are:
+    - Per-user LaunchAgent (no LaunchDaemon, no root).
+    - Sandboxed via the existing macOS app-sandbox framework when
+      the user installs the signed bundle from a release tarball.
+      Unsigned local builds still run.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.inferd.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/inferd-daemon</string>
+        <string>--backend</string><string>mock</string>
+        <string>--lock</string>
+        <string>/Users/USERNAME_HERE/Library/Application Support/inferd/inferd.lock</string>
+        <string>--uds</string>
+        <string>/Users/USERNAME_HERE/Library/Application Support/inferd/infer.sock</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>INFERD_LOG</key>
+        <string>info</string>
+        <key>INFERD_LOG_DIR</key>
+        <string>/Users/USERNAME_HERE/Library/Logs/inferd</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME_HERE/Library/Logs/inferd/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME_HERE/Library/Logs/inferd/stderr.log</string>
+
+    <!--
+      ProcessType=Adaptive lets macOS apply timer-coalescing /
+      App Nap when the daemon is idle. The lifecycle's accept loop
+      is event-driven so this is safe.
+    -->
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+</dict>
+</plist>

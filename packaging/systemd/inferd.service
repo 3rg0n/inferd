@@ -1,0 +1,68 @@
+# inferd-daemon systemd unit (per-user variant).
+#
+# Install as:
+#   ~/.config/systemd/user/inferd.service
+# then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now inferd
+#
+# THREAT_MODEL F-16: this unit applies the hardening directives
+# documented in the threat model. Anything off this baseline weakens
+# the security posture; change deliberately.
+#
+# v0.1 ships only the `mock` backend by default; for real inference
+# set --backend llamacpp, --model-path, and the model SHA-256 below.
+
+[Unit]
+Description=inferd local inference daemon
+Documentation=https://github.com/3rg0n/inferd
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/inferd-daemon \
+    --backend mock \
+    --lock %t/inferd/inferd.lock \
+    --uds %t/inferd/infer.sock \
+    --group inferd-users
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+
+# State + log directories under XDG. RuntimeDirectory grants 0750
+# under /run/user/<uid>/.
+RuntimeDirectory=inferd
+StateDirectory=inferd
+LogsDirectory=inferd
+
+Environment=INFERD_LOG=info
+Environment=INFERD_LOG_DIR=%S/inferd/logs
+
+# Hardening (THREAT_MODEL F-16). Each directive narrows what a
+# compromised daemon can do; nothing here is optional.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# State + logs need write access; everything else is RO.
+ReadWritePaths=%t/inferd %S/inferd
+
+[Install]
+WantedBy=default.target
