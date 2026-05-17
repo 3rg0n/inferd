@@ -1,0 +1,83 @@
+name: CI
+
+# Runs on every push and pull-request. Three concerns:
+# 1. fmt + clippy + test on the default feature set, three platforms.
+# 2. fmt + clippy + test under the `llamacpp` feature (CMake + bindgen
+#    pull a C++ toolchain). Same three platforms; libclang is needed
+#    for bindgen, installed per-OS in the matrix.
+# 3. cargo audit on a separate job so a pulled-but-known-good build
+#    never blocks a PR — vulnerability findings open issues, not
+#    blockers, until someone classifies them. (Hard-blocking PRs on a
+#    pulled-into-the-tree dep is what got Trivy compromised in the
+#    March 2026 supply-chain incident. We don't repeat that posture.)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  default:
+    name: ${{ matrix.os }} / default
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+
+  llamacpp:
+    name: ${{ matrix.os }} / llamacpp feature
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # libclang for bindgen.
+      - name: Install libclang (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+      # Windows runners ship LLVM; bindgen 0.71 finds it via the
+      # registry. No explicit install needed in CI.
+
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --features inferd-engine/llamacpp -- -D warnings
+      - run: cargo test --all --features inferd-engine/llamacpp
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    # Schedule + manual dispatch only — does not block PRs.
+    # See module comment for rationale.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
