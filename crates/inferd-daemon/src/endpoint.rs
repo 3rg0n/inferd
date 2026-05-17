@@ -94,16 +94,62 @@ pub async fn bind_uds(path: &Path, group: Option<&str>) -> io::Result<tokio::net
     Ok(listener)
 }
 
-/// Stub for non-Unix platforms; always returns `Unsupported`.
-///
-/// Windows named-pipe support lands in M4. Until then, Windows operators
-/// must use the loopback TCP transport.
+/// Stub for non-Unix platforms; always returns `Unsupported`. On Windows,
+/// callers should use [`bind_named_pipe`] instead.
 #[cfg(not(unix))]
 pub async fn bind_uds(_path: &Path, _group: Option<&str>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "Unix domain sockets are not supported on this platform; use TCP or wait for M4 Windows pipe support",
+        "Unix domain sockets are not supported on this platform; use bind_named_pipe or TCP",
     ))
+}
+
+/// Default Windows named-pipe path for the inference endpoint.
+///
+/// Distinct from any thlibo-shaped name so an inferd instance can run
+/// alongside an old thlibod during migration without endpoint conflicts.
+#[cfg(windows)]
+pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\inferd-infer";
+
+/// Bind a Windows named-pipe **server endpoint** at `path`.
+///
+/// Returns a single connected `NamedPipeServer` per accept; the caller
+/// is expected to call `bind_named_pipe` again to open the next instance
+/// (the standard Windows multi-instance pattern). `lifecycle::serve_named_pipe`
+/// owns that loop.
+///
+/// **Security posture (THREAT_MODEL F-7, F-8):** v0.1 relies on the
+/// default DACL applied by `CreateNamedPipe` when no security
+/// attributes are passed — the creating user gets `GENERIC_ALL`,
+/// `Everyone`/`Anonymous` are denied. That is *adequate* for the
+/// per-user daemon model but not *sufficient* for the documented
+/// "current SID only" target. SDDL hardening (DACL constructed from
+/// the daemon's own SID, deny-all-others) is tracked as a v0.2
+/// follow-up alongside `GetNamedPipeClientProcessId` for caller
+/// identity. Documented in `THREAT_MODEL.md` F-7.
+///
+/// `first` controls whether the returned server is the very first
+/// instance for `path` (which sets `FILE_FLAG_FIRST_PIPE_INSTANCE` to
+/// reject if another process is already serving the same name). The
+/// accept loop calls `bind_named_pipe(path, false)` for subsequent
+/// instances.
+#[cfg(windows)]
+pub fn bind_named_pipe(
+    path: &str,
+    first: bool,
+) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let mut opts = ServerOptions::new();
+    opts.first_pipe_instance(first);
+    opts.create(path)
+}
+
+#[cfg(windows)]
+impl Connection for tokio::net::windows::named_pipe::NamedPipeServer {
+    fn transport(&self) -> &'static str {
+        "pipe"
+    }
 }
 
 #[cfg(unix)]
@@ -170,6 +216,44 @@ mod tests {
         let mut client = tokio::net::UnixStream::connect(&path).await.unwrap();
         client.write_all(b"ping").await.unwrap();
         server.await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bind_named_pipe_accepts_a_connection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::windows::named_pipe::ClientOptions;
+
+        // Use a unique pipe name per test invocation (PID + timestamp ns)
+        // so concurrent test runs don't collide on the global namespace.
+        let pid = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = format!(r"\\.\pipe\inferd-test-{pid}-{ts}");
+
+        let server = bind_named_pipe(&path, true).expect("bind named pipe");
+
+        let path_for_server = path.clone();
+        let server_task = tokio::spawn(async move {
+            server.connect().await.expect("server connect");
+            let mut s = server;
+            let mut buf = [0u8; 4];
+            s.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"ping");
+            s.write_all(b"pong").await.unwrap();
+            drop(path_for_server);
+        });
+
+        let mut client = ClientOptions::new()
+            .open(&path)
+            .expect("client open named pipe");
+        client.write_all(b"ping").await.unwrap();
+        let mut buf = [0u8; 4];
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"pong");
+        server_task.await.unwrap();
     }
 
     #[cfg(unix)]
