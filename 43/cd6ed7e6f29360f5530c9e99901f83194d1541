@@ -1,0 +1,59 @@
+crates/inferd-daemon/src/lifecycle.rs
+  s_126aec4081f728::t_a5d8b1cf3f642e 390,416,419
+  s_126aec4081f728::t_50d2c1b8a9e496 18
+  s_126aec4081f728::t_2a097b4a6c28d0 298-306,311,326,334
+  s_126aec4081f728::t_c111865d28ec6f 56-70
+  s_126aec4081f728::t_87c11bd4cb791e 88,109-128
+  s_126aec4081f728::t_6c83389c470e15 262,271-274,276-283,285-291,293-295
+  s_126aec4081f728::t_0831def84929ff 359,373,376
+  s_126aec4081f728::t_24df6df49e0742 449
+  s_126aec4081f728::t_333041c891ac1a 484,487
+  s_126aec4081f728::t_7ea6555ede1e3e 27
+  s_126aec4081f728::t_093c548b7fd5ed 260-261,263-270,275,284,292
+crates/inferd-daemon/src/config.rs
+  s_126aec4081f728::t_7e64126ed602ea 89-98
+crates/inferd-daemon/tests/echo.rs
+  s_126aec4081f728::t_1b38c74e523795 53
+  s_126aec4081f728::t_8742042fe1aaab 25
+crates/inferd-daemon/tests/auth.rs
+  s_126aec4081f728::t_1392ed89516f89 1-72,80-186
+  s_126aec4081f728::t_50d2c1b8a9e496 73-79
+crates/inferd-daemon/tests/logx.rs
+  s_126aec4081f728::t_a001efdb1821fc 15
+  s_126aec4081f728::t_7936c2518c1d1a 56
+crates/inferd-daemon/tests/echo_llamacpp.rs
+  s_126aec4081f728::t_5ef9cb2f15eb25 18
+  s_126aec4081f728::t_35d154c7e804fa 65
+THREAT_MODEL.md
+  s_126aec4081f728::t_fcc86a6b03e4c4 147-163
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_cf691bda988134 45
+crates/inferd-daemon/src/auth.rs
+  s_126aec4081f728::t_bdc5e30bb7a7fb 1-62,64-82
+  s_126aec4081f728::t_50d2c1b8a9e496 63
+crates/inferd-daemon/tests/echo_pipe.rs
+  s_126aec4081f728::t_1345799ac5404c 65-72
+  s_126aec4081f728::t_bc196dc2c50549 18
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_354896a84ed05e 58-69,73,79,85,95-102,106
+  s_126aec4081f728::t_d0062ce41bc518 8
+  s_126aec4081f728::t_0e876fcb316330 15
+crates/inferd-daemon/src/lib.rs
+  s_126aec4081f728::t_2ce67b50e2accf 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "43cd6ed7e6f29360f5530c9e99901f83194d1541",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
