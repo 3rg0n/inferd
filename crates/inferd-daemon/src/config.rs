@@ -30,15 +30,20 @@ pub struct Cli {
     #[arg(long, env = "INFERD_LOCK")]
     pub lock: PathBuf,
 
-    /// Loopback TCP bind address. Mutually exclusive with `--uds`.
-    #[arg(long, env = "INFERD_TCP", conflicts_with = "uds")]
+    /// Loopback TCP bind address. Mutually exclusive with `--uds` and `--pipe`.
+    #[arg(long, env = "INFERD_TCP", conflicts_with_all = ["uds", "pipe"])]
     pub tcp: Option<String>,
 
-    /// Unix domain socket path. Mutually exclusive with `--tcp`. Unix only.
-    #[arg(long, env = "INFERD_UDS", conflicts_with = "tcp")]
+    /// Unix domain socket path. Mutually exclusive with `--tcp` and `--pipe`. Unix only.
+    #[arg(long, env = "INFERD_UDS", conflicts_with_all = ["tcp", "pipe"])]
     pub uds: Option<PathBuf>,
 
-    /// Group name for the UDS (Unix only). Ignored when `--tcp` is used.
+    /// Windows named pipe path (e.g. `\\.\pipe\inferd-infer`).
+    /// Mutually exclusive with `--tcp` and `--uds`. Windows only.
+    #[arg(long, env = "INFERD_PIPE", conflicts_with_all = ["tcp", "uds"])]
+    pub pipe: Option<String>,
+
+    /// Group name for the UDS (Unix only). Ignored on other transports.
     #[arg(long, env = "INFERD_GROUP")]
     pub group: Option<String>,
 
@@ -62,10 +67,14 @@ impl Cli {
     /// Validate that exactly one transport is selected. clap enforces
     /// mutual exclusion; this checks the at-least-one part.
     pub fn require_one_transport(&self) -> Result<(), &'static str> {
-        match (&self.tcp, &self.uds) {
-            (Some(_), None) | (None, Some(_)) => Ok(()),
-            (None, None) => Err("must specify --tcp or --uds"),
-            (Some(_), Some(_)) => Err("--tcp and --uds are mutually exclusive"),
+        let count = [self.tcp.is_some(), self.uds.is_some(), self.pipe.is_some()]
+            .iter()
+            .filter(|b| **b)
+            .count();
+        match count {
+            1 => Ok(()),
+            0 => Err("must specify one of --tcp, --uds, --pipe"),
+            _ => Err("--tcp, --uds, --pipe are mutually exclusive"),
         }
     }
 }
@@ -109,6 +118,35 @@ mod tests {
             "127.0.0.1:0",
             "--uds",
             "/tmp/inferd.sock",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_accepts_pipe_transport() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "C:/tmp/inferd.lock",
+            "--pipe",
+            r"\\.\pipe\inferd-test",
+        ]);
+        assert!(cli.pipe.is_some());
+        assert!(cli.uds.is_none());
+        assert!(cli.tcp.is_none());
+        cli.require_one_transport().unwrap();
+    }
+
+    #[test]
+    fn cli_rejects_pipe_with_tcp_via_clap() {
+        let result = Cli::try_parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--pipe",
+            r"\\.\pipe\inferd-test",
         ]);
         assert!(result.is_err());
     }

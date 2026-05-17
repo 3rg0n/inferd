@@ -70,7 +70,20 @@ async fn main() -> anyhow::Result<()> {
             // right exit shape rather than silently flowing past.
             drop((path, router, shutdown_tx));
             anyhow::bail!(
-                "Unix domain sockets are not supported on this platform; use --tcp instead"
+                "Unix domain sockets are not supported on this platform; use --pipe or --tcp"
+            );
+        }
+    } else if let Some(path) = cli.pipe.as_ref() {
+        #[cfg(windows)]
+        {
+            info!(path = %path, "named pipe listener binding");
+            inferd_daemon::lifecycle::serve_named_pipe(path, router, shutdown_tx).await?;
+        }
+        #[cfg(not(windows))]
+        {
+            drop((path, router, shutdown_tx));
+            anyhow::bail!(
+                "Windows named pipes are not supported on this platform; use --uds or --tcp"
             );
         }
     }
