@@ -16,6 +16,7 @@
 //! is the signal.
 
 use crate::endpoint::Connection;
+use crate::peercred::PeerIdentity;
 use crate::router::{Router, RouterError};
 use inferd_engine::{GenerateError, TokenEvent};
 use inferd_proto::{write_frame, ErrorCode, ProtoError, Request, Response};
@@ -67,9 +68,18 @@ pub struct ReadyTimeout(pub Duration);
 pub async fn handle_connection<C: Connection + 'static>(
     mut conn: C,
     router: Arc<Router>,
+    peer: PeerIdentity,
 ) -> Result<(), io::Error> {
     let transport = conn.transport();
-    debug!(transport, "connection accepted");
+    info!(
+        target: "inferd_daemon::activity",
+        transport = transport,
+        peer = %peer,
+        peer_uid = peer.uid,
+        peer_pid = peer.pid,
+        peer_sid = peer.sid.as_deref(),
+        "connection_accepted"
+    );
 
     // Split read and write halves so the generation task can write tokens
     // while we keep reading the next request. We don't actually pipeline
@@ -281,11 +291,12 @@ pub async fn serve_tcp(
                 return Ok(());
             }
             accept = listener.accept() => {
-                let (stream, peer) = accept?;
+                let (stream, peer_addr) = accept?;
                 let r = Arc::clone(&router);
-                debug!(?peer, "tcp accept");
+                let peer = PeerIdentity::from_tcp(peer_addr);
+                debug!(?peer_addr, "tcp accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, r).await {
+                    if let Err(e) = handle_connection(stream, r, peer).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });
@@ -311,9 +322,22 @@ pub async fn serve_uds(
             accept = listener.accept() => {
                 let (stream, _) = accept?;
                 let r = Arc::clone(&router);
-                debug!("uds accept");
+                // Best-effort SO_PEERCRED. If the OS refuses (very rare on
+                // a connected UDS), record an empty identity but still
+                // serve the request — the socket ACL was the primary
+                // perimeter; this is defence in depth.
+                let peer = crate::peercred::unix::from_stream(&stream)
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "SO_PEERCRED failed; recording empty unix identity");
+                        crate::peercred::PeerIdentity {
+                            uid: None, gid: None, pid: None,
+                            sid: None, remote_addr: None,
+                            transport: "unix",
+                        }
+                    });
+                debug!(?peer, "uds accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, r).await {
+                    if let Err(e) = handle_connection(stream, r, peer).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });
@@ -363,10 +387,23 @@ pub async fn serve_named_pipe(
                 let connected = server;
                 server = bind_named_pipe(path, false)?;
 
+                // Best-effort peer identity. If the lookup fails (caller
+                // process exited between accept and probe), serve with
+                // an empty identity; named-pipe DACL is the primary
+                // perimeter, this is defence in depth.
+                let peer = crate::peercred::windows::from_stream(&connected)
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "GetNamedPipeClientProcessId failed; empty pipe identity");
+                        crate::peercred::PeerIdentity {
+                            uid: None, gid: None, pid: None,
+                            sid: None, remote_addr: None,
+                            transport: "pipe",
+                        }
+                    });
                 let r = Arc::clone(&router);
-                debug!("named pipe accept");
+                debug!(?peer, "named pipe accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(connected, r).await {
+                    if let Err(e) = handle_connection(connected, r, peer).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });
