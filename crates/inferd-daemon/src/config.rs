@@ -86,6 +86,16 @@ pub struct Cli {
     /// build time.
     #[arg(long, default_value_t = 0, env = "INFERD_N_GPU_LAYERS")]
     pub n_gpu_layers: i32,
+
+    /// Optional pre-shared API key. When set, TCP clients MUST send
+    /// `{"type":"auth","key":"<this value>"}` as their first NDJSON
+    /// frame on the connection or the daemon closes the connection.
+    /// UDS and named-pipe transports ignore this — kernel-attested
+    /// peer credentials (F-7) do the work there.
+    ///
+    /// Comparison is constant-time. THREAT_MODEL F-8.
+    #[arg(long, env = "INFERD_API_KEY", hide_env_values = true)]
+    pub api_key: Option<String>,
 }
 
 impl Cli {

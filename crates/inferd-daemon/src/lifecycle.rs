@@ -15,6 +15,7 @@
 //! Per ADR 0007 the daemon emits no terminal frame on cancel — the EOF
 //! is the signal.
 
+use crate::auth::{key_matches, AuthFrame};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
 use crate::router::{Router, RouterError};
@@ -23,7 +24,7 @@ use inferd_proto::{write_frame, ErrorCode, ProtoError, Request, Response};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
@@ -52,6 +53,21 @@ pub async fn wait_for_ready(router: &Router, timeout: Duration) -> Result<Durati
 #[error("backend not ready within {0:?}")]
 pub struct ReadyTimeout(pub Duration);
 
+/// Per-accept context that the lifecycle hands to every spawned
+/// connection task.
+///
+/// Today it carries the optional TCP API key (THREAT_MODEL F-8). New
+/// per-connection policy (rate limits, per-caller quotas) extends this
+/// struct rather than each `serve_*` signature.
+#[derive(Debug, Clone, Default)]
+pub struct AcceptContext {
+    /// When `Some` and the connection is TCP, the daemon requires an
+    /// auth frame as the first NDJSON line on the wire and constant-
+    /// time-compares the key against this value. UDS / pipe ignore
+    /// this field — F-7 covers them.
+    pub expected_api_key: Option<String>,
+}
+
 /// Handle one accepted client connection: read framed `Request`s and write
 /// framed `Response`s until EOF or fatal error.
 ///
@@ -69,6 +85,7 @@ pub async fn handle_connection<C: Connection + 'static>(
     mut conn: C,
     router: Arc<Router>,
     peer: PeerIdentity,
+    ctx: AcceptContext,
 ) -> Result<(), io::Error> {
     let transport = conn.transport();
     info!(
@@ -88,6 +105,27 @@ pub async fn handle_connection<C: Connection + 'static>(
     let (read_half, write_half) = tokio::io::split(&mut conn);
     let mut reader = BufReader::with_capacity(64 * 1024, read_half);
     let writer = Arc::new(Mutex::new(write_half));
+
+    // F-8: TCP first-frame auth. UDS / pipe rely on F-7 peer creds and
+    // skip this. Anonymous probers see the connection close with no
+    // protocol error frame — we don't confirm endpoint existence.
+    if transport == "tcp" {
+        if let Some(expected) = ctx.expected_api_key.as_deref() {
+            match read_auth_frame(&mut reader).await {
+                Some(frame) if key_matches(&frame.key, expected) => {
+                    debug!(transport, "tcp auth ok");
+                }
+                _ => {
+                    warn!(
+                        target: "inferd_daemon::activity",
+                        peer = %peer,
+                        "tcp_auth_rejected"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+    }
 
     loop {
         // Read one request frame. `read_frame` is sync over a sync BufRead;
@@ -219,21 +257,58 @@ pub async fn handle_connection<C: Connection + 'static>(
     }
 }
 
+/// Read one NDJSON line from a tokio `BufRead` and parse it as an
+/// `AuthFrame`. Returns `None` on any failure (truncation, garbage,
+/// wrong type) so the caller can close the connection silently.
+///
+/// Takes the *existing* BufReader the connection handler already
+/// owns — wrapping it in a second BufReader would buffer bytes
+/// past the auth line that then get lost when the local wrapper drops.
+async fn read_auth_frame<R>(reader: &mut R) -> Option<AuthFrame>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut line = Vec::with_capacity(256);
+    let limit = inferd_proto::MAX_FRAME_BYTES;
+    loop {
+        let buf = reader.fill_buf().await.ok()?;
+        if buf.is_empty() {
+            return None;
+        }
+        if let Some(idx) = buf.iter().position(|&b| b == b'\n') {
+            if line.len() + idx > limit {
+                return None;
+            }
+            line.extend_from_slice(&buf[..idx]);
+            reader.consume(idx + 1);
+            return AuthFrame::from_json(&line);
+        }
+        if line.len() + buf.len() > limit {
+            return None;
+        }
+        line.extend_from_slice(buf);
+        let n = buf.len();
+        reader.consume(n);
+    }
+}
+
 /// Async wrapper around `inferd_proto::read_frame` for tokio readers.
 ///
-/// Reads bytes asynchronously into a buffer until newline or EOF, then
-/// reuses the proto crate's parse path. Honours the 64 MiB cap by deferring
-/// to `read_frame` once the line is in memory; we cap our own pre-buffer at
-/// the same `MAX_FRAME_BYTES`.
-async fn read_frame_async<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> Result<Option<Request>, ProtoError> {
+/// Consumes from an existing `AsyncBufRead` (typically the per-connection
+/// `BufReader` that the lifecycle holds) so any bytes prefetched past the
+/// current line stay in the caller's buffer for the next read. Wrapping
+/// the input in a *second* BufReader here would lose those bytes when
+/// the local wrapper dropped.
+async fn read_frame_async<R>(reader: &mut R) -> Result<Option<Request>, ProtoError>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
     use tokio::io::AsyncBufReadExt;
-    let mut br = tokio::io::BufReader::new(reader);
     let mut line = Vec::with_capacity(512);
     let limit = inferd_proto::MAX_FRAME_BYTES;
     loop {
-        let buf = br.fill_buf().await?;
+        let buf = reader.fill_buf().await?;
         if buf.is_empty() {
             if line.is_empty() {
                 return Ok(None);
@@ -248,7 +323,7 @@ async fn read_frame_async<R: AsyncRead + Unpin>(
                 return Err(ProtoError::FrameTooLarge);
             }
             line.extend_from_slice(&buf[..=idx]);
-            br.consume(idx + 1);
+            reader.consume(idx + 1);
             return inferd_proto::read_frame::<&[u8], Request>(&mut &line[..]);
         }
         if line.len() + buf.len() > limit {
@@ -256,7 +331,7 @@ async fn read_frame_async<R: AsyncRead + Unpin>(
         }
         line.extend_from_slice(buf);
         let n = buf.len();
-        br.consume(n);
+        reader.consume(n);
     }
 }
 
@@ -281,6 +356,7 @@ async fn write_response<W: AsyncWrite + Unpin>(
 pub async fn serve_tcp(
     listener: tokio::net::TcpListener,
     router: Arc<Router>,
+    ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
     info!(addr = ?listener.local_addr()?, "tcp listener accepting");
@@ -294,9 +370,10 @@ pub async fn serve_tcp(
                 let (stream, peer_addr) = accept?;
                 let r = Arc::clone(&router);
                 let peer = PeerIdentity::from_tcp(peer_addr);
+                let ctx = ctx.clone();
                 debug!(?peer_addr, "tcp accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, r, peer).await {
+                    if let Err(e) = handle_connection(stream, r, peer, ctx).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });
@@ -310,6 +387,7 @@ pub async fn serve_tcp(
 pub async fn serve_uds(
     listener: tokio::net::UnixListener,
     router: Arc<Router>,
+    ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
     info!("uds listener accepting");
@@ -335,9 +413,10 @@ pub async fn serve_uds(
                             transport: "unix",
                         }
                     });
+                let ctx = ctx.clone();
                 debug!(?peer, "uds accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, r, peer).await {
+                    if let Err(e) = handle_connection(stream, r, peer, ctx).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });
@@ -367,6 +446,7 @@ pub async fn serve_named_pipe(
     path: &str,
     first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
     router: Arc<Router>,
+    ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
     use crate::endpoint::bind_named_pipe;
@@ -401,9 +481,10 @@ pub async fn serve_named_pipe(
                         }
                     });
                 let r = Arc::clone(&router);
+                let ctx = ctx.clone();
                 debug!(?peer, "named pipe accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(connected, r, peer).await {
+                    if let Err(e) = handle_connection(connected, r, peer, ctx).await {
                         warn!(error = ?e, "connection terminated with error");
                     }
                 });

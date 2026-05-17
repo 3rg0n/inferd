@@ -15,7 +15,7 @@
 #![cfg(feature = "llamacpp-integration")]
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready};
+use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
 use inferd_daemon::router::Router;
 use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 use inferd_proto::{write_frame, Message, Request, Response, Role, StopReason};
@@ -62,7 +62,7 @@ async fn end_to_end_real_inference_over_tcp() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp(listener, router, shutdown_rx).await;
+        let _ = serve_tcp(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
 
     // One short request.
