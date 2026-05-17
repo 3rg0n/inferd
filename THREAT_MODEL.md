@@ -118,17 +118,24 @@ process with socket access is indistinguishable. A malicious
 middleware can impersonate another for log-attribution
 attacks, queue-fairness gaming, or future per-caller policy.
 
-**Status.** applies.
+**Status.** mitigated (UDS + named pipe). TCP path covered
+by F-8. `crates/inferd-daemon/src/peercred.rs` extracts a
+`PeerIdentity` per connection and records it on the
+`connection_accepted` activity-log event.
 
-**Mitigation.**
-- Unix: `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) on
-  every accepted connection. Identity recorded in the activity
-  log.
+- Unix: `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) via
+  `nix::sys::socket::getsockopt(PeerCredentials)`. Returns
+  uid/gid/pid.
 - Windows: `GetNamedPipeClientProcessId` →
-  `OpenProcessToken` → SID.
-- Loopback TCP: identity reduces to API-key (if configured) +
-  remote address. Document the reduced guarantee where TCP is
-  enabled.
+  `OpenProcessToken(TOKEN_QUERY)` →
+  `GetTokenInformation(TokenUser)` →
+  `ConvertSidToStringSidW`. Returns sid/pid.
+- Loopback TCP: degraded `PeerIdentity::from_tcp(remote_addr)`
+  — log-correlation only. Real perimeter is the API-key auth
+  per F-8.
+
+Verified by `peercred::tests` (`tcp_identity_displays_remote_addr`
+unconditional; `unix_peer_credentials_self` `#[cfg(unix)]`).
 
 ### F-8. Loopback TCP exposure
 

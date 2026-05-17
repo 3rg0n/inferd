@@ -50,7 +50,9 @@ nix = { version = "0.27", features = ["fs", "user", "socket"] }
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
+  "Win32_System_Memory",
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }

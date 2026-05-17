@@ -4,7 +4,12 @@
 //! intended for tests in `tests/` and for cross-crate integration tests
 //! in sibling crates; they are not a stable public API.
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid` so the platform-specific peercred
+// submodules can scope an inner `#![allow(unsafe_code)]` for the
+// libc/Win32 FFI surface needed to read SO_PEERCRED /
+// GetNamedPipeClientProcessId. Every other module remains
+// unsafe-free.
+#![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
 pub mod config;
@@ -12,6 +17,7 @@ pub mod endpoint;
 pub mod lifecycle;
 pub mod lock;
 pub mod logx;
+pub mod peercred;
 pub mod queue;
 pub mod redact;
 pub mod router;
