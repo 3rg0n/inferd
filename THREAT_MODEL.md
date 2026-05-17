@@ -265,11 +265,14 @@ working-directory inheritance).
 SBOM, a tampered binary or a vulnerable transitive
 dependency may ship undetected.
 
-**Status.** applies.
-
-**Mitigation.** Release workflow (M4) uses cosign to sign
-artefacts and CycloneDX to emit an SBOM per release.
-`cargo audit` and `cargo deny check` run on every PR.
+**Status.** mitigated. `.github/workflows/release.yml` builds
+binaries on the four supported targets (linux x86_64, linux
+arm64, macos arm64, windows x86_64), produces a CycloneDX
+SBOM via `cargo cyclonedx`, and signs each archive with
+keyless cosign (OIDC). `.github/workflows/ci.yml` runs
+`cargo audit` on push to main + on schedule. The audit job
+deliberately does not block PRs (Trivy supply-chain
+incident, March 2026, was the cautionary tale).
 
 ### F-16. Daemon hardening directives
 
