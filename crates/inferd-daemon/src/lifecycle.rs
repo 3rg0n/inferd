@@ -322,6 +322,54 @@ pub async fn serve_uds(
     }
 }
 
+/// Serve a Windows named pipe (Windows only).
+///
+/// Implements the standard multi-instance accept pattern:
+/// 1. Bind one server instance at `path` (the first one with
+///    `FILE_FLAG_FIRST_PIPE_INSTANCE` so we fail loud if another
+///    process is already serving the same name).
+/// 2. Await `server.connect()` — this is the accept point.
+/// 3. Hand the now-connected server off to a per-connection task.
+/// 4. Bind the next server instance immediately so a second client
+///    can connect while the first is being served.
+///
+/// Loops until `shutdown` resolves.
+#[cfg(windows)]
+pub async fn serve_named_pipe(
+    path: &str,
+    router: Arc<Router>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> io::Result<()> {
+    use crate::endpoint::bind_named_pipe;
+
+    info!(path = %path, "named pipe listener accepting");
+    let mut server = bind_named_pipe(path, true)?;
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("shutdown signalled");
+                return Ok(());
+            }
+            connect_result = server.connect() => {
+                connect_result?;
+                // Take ownership of the connected server; build the next
+                // listening instance before spawning the handler so a
+                // second client can connect immediately.
+                let connected = server;
+                server = bind_named_pipe(path, false)?;
+
+                let r = Arc::clone(&router);
+                debug!("named pipe accept");
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection(connected, r).await {
+                        warn!(error = ?e, "connection terminated with error");
+                    }
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
