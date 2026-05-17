@@ -100,6 +100,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drop produces `code: backend_unavailable` per ADR 0007;
   ready-gating regression for THREAT_MODEL F-13. 4 tests.
 
+### M4 sections A–C — Windows named pipe endpoint
+
+- `endpoint::bind_named_pipe(path, first)` (Windows-only): wraps
+  `tokio::net::windows::named_pipe::ServerOptions`. Default DACL
+  (creating user only) is adequate for v0.1; SDDL hardening +
+  `GetNamedPipeClientProcessId` peer-SID extraction are tracked
+  as v0.2 follow-ups under THREAT_MODEL F-7.
+- `endpoint::DEFAULT_PIPE_PATH = \\.\pipe\inferd-infer`.
+- `Connection` trait extended for `NamedPipeServer` with
+  `transport() == "pipe"`.
+- `lifecycle::serve_named_pipe` (Windows-only) implements the
+  multi-instance accept pattern. Takes a pre-bound first instance
+  so the listener is guaranteed live before callers receive the
+  pipe path — eliminates a race between `tokio::spawn` and the
+  first bind.
+- `config::Cli` adds `--pipe` / `INFERD_PIPE` (mutually exclusive
+  with `--tcp` and `--uds`). `require_one_transport()` now allows
+  exactly one of three.
+- `main.rs` routes `--pipe` → `bind_named_pipe(path, true)` →
+  `serve_named_pipe`. `--uds` on Windows still errors clearly.
+- `tests/echo_pipe.rs` (Windows-only): 2 integration tests over
+  the named-pipe transport. End-to-end `request → token → done`
+  with backend/stop_reason per ADR 0008, and a
+  `multi_instance_accept_serves_two_sequential_clients` test that
+  proves the accept loop rebinds between clients.
+- Test infra: `unique_pipe_path()` uses a process-wide
+  `AtomicU64` counter in addition to PID + ns timestamp, so
+  parallel tests in the same binary don't collide on the global
+  Windows named-pipe namespace. Verified 0/10 flakes across 10
+  full-suite runs.
+
+67/67 workspace tests pass on Windows (35 daemon unit + 4
+daemon-echo + 2 daemon-logx + 2 daemon-echo_pipe + 9 engine + 15
+proto). Workspace clippy clean. cargo audit clean (158 deps).
+
 ### M3 — Activity log + redactor wired into the daemon
 
 - `LogxLayer`: a `tracing_subscriber::Layer` that serialises every

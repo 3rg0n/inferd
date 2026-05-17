@@ -76,8 +76,9 @@ async fn main() -> anyhow::Result<()> {
     } else if let Some(path) = cli.pipe.as_ref() {
         #[cfg(windows)]
         {
-            info!(path = %path, "named pipe listener binding");
-            inferd_daemon::lifecycle::serve_named_pipe(path, router, shutdown_tx).await?;
+            let first = inferd_daemon::endpoint::bind_named_pipe(path, true)?;
+            info!(path = %path, "named pipe listener bound");
+            inferd_daemon::lifecycle::serve_named_pipe(path, first, router, shutdown_tx).await?;
         }
         #[cfg(not(windows))]
         {

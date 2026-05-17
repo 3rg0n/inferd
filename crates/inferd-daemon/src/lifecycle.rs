@@ -324,26 +324,31 @@ pub async fn serve_uds(
 
 /// Serve a Windows named pipe (Windows only).
 ///
-/// Implements the standard multi-instance accept pattern:
-/// 1. Bind one server instance at `path` (the first one with
-///    `FILE_FLAG_FIRST_PIPE_INSTANCE` so we fail loud if another
-///    process is already serving the same name).
-/// 2. Await `server.connect()` — this is the accept point.
-/// 3. Hand the now-connected server off to a per-connection task.
-/// 4. Bind the next server instance immediately so a second client
-///    can connect while the first is being served.
+/// Caller must bind the first instance via
+/// [`crate::endpoint::bind_named_pipe(path, true)`] and pass it in via
+/// `first_instance`. This split ensures the listener exists before the
+/// caller (or a test harness) hands the path out — eliminates the race
+/// where a client connects between `tokio::spawn(serve_named_pipe)` and
+/// the first `bind_named_pipe` call inside the loop.
+///
+/// Loop:
+/// 1. Await `server.connect()` — accept point.
+/// 2. Hand the connected server to a per-connection task.
+/// 3. Bind the next server instance (`first = false`) so the next
+///    client can connect immediately.
 ///
 /// Loops until `shutdown` resolves.
 #[cfg(windows)]
 pub async fn serve_named_pipe(
     path: &str,
+    first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
     router: Arc<Router>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
     use crate::endpoint::bind_named_pipe;
 
     info!(path = %path, "named pipe listener accepting");
-    let mut server = bind_named_pipe(path, true)?;
+    let mut server = first_instance;
     loop {
         tokio::select! {
             _ = &mut shutdown => {
