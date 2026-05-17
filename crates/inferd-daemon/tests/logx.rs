@@ -12,7 +12,7 @@
 //!    redactor runs end-to-end).
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready};
+use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
 use inferd_daemon::logx::{LogxLayer, LogxWriter};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
@@ -53,7 +53,7 @@ async fn boot_daemon(
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp(listener, router, shutdown_rx).await;
+        let _ = serve_tcp(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
 
     (addr, shutdown_tx, handle, guard)

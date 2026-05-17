@@ -15,7 +15,7 @@
 #![cfg(windows)]
 
 use inferd_daemon::endpoint::bind_named_pipe;
-use inferd_daemon::lifecycle::{serve_named_pipe, wait_for_ready};
+use inferd_daemon::lifecycle::{serve_named_pipe, wait_for_ready, AcceptContext};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
 use inferd_proto::{write_frame, Message, Request, Response, Role, StopReason};
@@ -62,7 +62,14 @@ async fn boot_daemon(
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let path_for_task = pipe_path.clone();
     let handle = tokio::spawn(async move {
-        let _ = serve_named_pipe(&path_for_task, first, router, shutdown_rx).await;
+        let _ = serve_named_pipe(
+            &path_for_task,
+            first,
+            router,
+            AcceptContext::default(),
+            shutdown_rx,
+        )
+        .await;
     });
 
     (pipe_path, shutdown_tx, handle)

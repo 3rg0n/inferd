@@ -5,14 +5,14 @@ use inferd_daemon::config::{BackendKind, Cli};
 use inferd_daemon::endpoint::bind_tcp;
 #[cfg(unix)]
 use inferd_daemon::endpoint::bind_uds;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready};
+use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
 use inferd_daemon::lock::Lock;
 use inferd_daemon::logx::{default_log_dir, LogxLayer, LogxWriter, DEFAULT_ROTATE_BYTES};
 use inferd_daemon::router::Router;
 use inferd_engine::{mock::Mock, Backend};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -55,22 +55,34 @@ async fn main() -> anyhow::Result<()> {
     // 5. Bind listener AFTER ready.
     let shutdown_tx = install_shutdown_signal()?;
 
+    let accept_ctx = AcceptContext {
+        expected_api_key: cli.api_key.clone(),
+    };
+    if cli.tcp.is_some() && accept_ctx.expected_api_key.is_some() {
+        info!("tcp api-key auth enabled (F-8)");
+    } else if cli.tcp.is_some() {
+        warn!(
+            "tcp listener has no --api-key configured; any local process \
+             can connect (THREAT_MODEL F-8)"
+        );
+    }
+
     if let Some(addr) = cli.tcp.as_deref() {
         let listener = bind_tcp(addr).await?;
         info!(addr = %listener.local_addr()?, "tcp listener bound");
-        serve_tcp(listener, router, shutdown_tx).await?;
+        serve_tcp(listener, router, accept_ctx, shutdown_tx).await?;
     } else if let Some(path) = cli.uds.as_ref() {
         #[cfg(unix)]
         {
             let listener = bind_uds(path, cli.group.as_deref()).await?;
             info!(path = %path.display(), "uds listener bound");
-            inferd_daemon::lifecycle::serve_uds(listener, router, shutdown_tx).await?;
+            inferd_daemon::lifecycle::serve_uds(listener, router, accept_ctx, shutdown_tx).await?;
         }
         #[cfg(not(unix))]
         {
             // bind_uds returns Unsupported on Windows; surface that with the
             // right exit shape rather than silently flowing past.
-            drop((path, router, shutdown_tx));
+            drop((path, router, accept_ctx, shutdown_tx));
             anyhow::bail!(
                 "Unix domain sockets are not supported on this platform; use --pipe or --tcp"
             );
@@ -80,11 +92,18 @@ async fn main() -> anyhow::Result<()> {
         {
             let first = inferd_daemon::endpoint::bind_named_pipe(path, true)?;
             info!(path = %path, "named pipe listener bound");
-            inferd_daemon::lifecycle::serve_named_pipe(path, first, router, shutdown_tx).await?;
+            inferd_daemon::lifecycle::serve_named_pipe(
+                path,
+                first,
+                router,
+                accept_ctx,
+                shutdown_tx,
+            )
+            .await?;
         }
         #[cfg(not(windows))]
         {
-            drop((path, router, shutdown_tx));
+            drop((path, router, accept_ctx, shutdown_tx));
             anyhow::bail!(
                 "Windows named pipes are not supported on this platform; use --uds or --tcp"
             );

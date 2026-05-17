@@ -144,14 +144,23 @@ endpoint (e.g. for WSL or container scenarios), the daemon is
 reachable by any process on the host that can bind 127.0.0.1.
 Peer-credential checks (F-7) do not work on TCP.
 
-**Status.** applies.
+**Status.** mitigated.
 
-**Mitigation.**
-- TCP endpoint requires API-key auth as the first frame on
-  the connection. No key, no service.
-- TCP endpoint is opt-in, not default.
-- `inferd status` prints a loud warning when TCP is enabled,
-  including the bound port and key fingerprint.
+- `crates/inferd-daemon/src/auth.rs` parses the first NDJSON
+  frame on every TCP connection as
+  `{"type":"auth","key":"..."}` when
+  `AcceptContext::expected_api_key` is set, and constant-time-
+  compares with `subtle::ConstantTimeEq`.
+- Missing or wrong key closes the connection silently (no
+  protocol error frame; we don't confirm endpoint existence
+  to anonymous probers). A `tcp_auth_rejected` warn-level
+  event lands in the activity log.
+- `--api-key` / `INFERD_API_KEY` CLI flag wires this in.
+  `main.rs` warns at startup when `--tcp` is configured
+  without a key.
+- UDS / pipe transports skip this — F-7 covers them.
+- Verified by `tests/auth.rs` (4 tests covering correct,
+  wrong, missing, and disabled-by-config paths).
 
 ### F-9. FFI crash isolation
 
