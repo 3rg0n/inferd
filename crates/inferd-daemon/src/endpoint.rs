@@ -224,14 +224,18 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::windows::named_pipe::ClientOptions;
 
-        // Use a unique pipe name per test invocation (PID + timestamp ns)
-        // so concurrent test runs don't collide on the global namespace.
+        // Use a unique pipe name per test invocation. Process-wide atomic
+        // counter handles parallel tests within the same binary;
+        // PID + timestamp ns spread across independent processes.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let pid = std::process::id();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = format!(r"\\.\pipe\inferd-test-{pid}-{ts}");
+        let path = format!(r"\\.\pipe\inferd-endpoint-test-{pid}-{ts}-{n}");
 
         let server = bind_named_pipe(&path, true).expect("bind named pipe");
 
