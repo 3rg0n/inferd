@@ -110,110 +110,140 @@ inferd/
 C FFI to `libllama` is the v0.1 default backend (ADR 0005). No
 subprocess engines.
 
-## Wire protocol (inherited)
+## Wire protocol
 
-See `docs/protocol-v1.md` (to be written from thlibo's
-`internal/ipc/protocol.go`). Frame cap: 64 MiB per line. Request
-fields are documented in `crates/inferd-proto/src/request.rs`.
-Response stream uses a tagged enum with discriminator `type`.
+Authoritative spec: `docs/protocol-v1.md` (designed for inferd
+per ADR 0008; v1 immutable once shipped). Frame cap: 64 MiB per
+line. Request fields and the `Response` enum live in
+`crates/inferd-proto/`.
 
 ## Milestones
 
-### M0 — scaffolding ✅ (this commit)
+Status legend: ✅ shipped, code on `main`. ⏳ partial, see
+section. 🅿️ deferred (out of v0.1 scope).
 
-- Workspace `Cargo.toml` (stub only for now; no Cargo.lock yet).
-- Crate directories declared with README stubs so the layout is
-  clear before any Rust is written.
-- `docs/protocol-v1.md` placeholder pointing at thlibo's code.
-- ADR 0001, 0002, 0003 stubs.
+### M0 — scaffolding ✅
 
-**Exit criteria**: `cargo check` fails cleanly with
-"no targets in workspace" — because there aren't any yet. That's
-fine; this milestone is pure planning surface.
+Workspace + crate dirs + `docs/` + ADRs 0001–0009 + threat-model
+skeleton + vendor pin doc. Commit `19e4687` and `50aa26d`.
 
-### M1 — proto + echo daemon
+### M1 — proto + echo daemon ✅
 
-- Implement `inferd-proto` end-to-end: `Request`, `Message`,
-  `Response`, NDJSON frame read/write with size cap.
-- Implement `inferd-daemon/endpoint_*` for Unix + TCP (Windows
-  pipe can wait until M4). Just accept a connection, read one
-  Request, respond with a single `Response::Done` frame echoing the
-  request id.
-- Port thlibo's `internal/daemon/lock.go` invariants (regular-file
-  check, symlink reject).
+- `inferd-proto`: `Request`/`Resolved`, `Response` enum with
+  ADR 0008 fields (`stop_reason`, `backend`, `code`), bounded
+  64 MiB NDJSON reader (F-1).
+- `inferd-engine`: `Backend` trait, `TokenEvent`/`TokenStream`,
+  `mock` adapter with failure-mode injection.
+- `inferd-daemon`: lock with symlink reject (F-2), bounded
+  admission queue, UDS + loopback TCP listeners, no-op
+  `Router`, `lifecycle::handle_connection`, clap-driven CLI,
+  ready-gated listener creation (F-13).
+- M1 exit criterion (`tests/echo.rs`): real client connects,
+  sends `Request`, receives streamed tokens + `Done` carrying
+  `backend=mock` and `stop_reason=end`.
 
-**Exit criteria**: from the thlibo integration-test harness,
-replace `thlibod` with `inferd-daemon --backend mock` and confirm
-thlibo's daemon-level tests that don't need real inference pass.
+### M2a — `libllama` build wiring ✅
 
-### M2 — llama.cpp FFI backend
+- `vendor/llama.cpp` submodule at tag `b9159` (commit `5c0e94683`).
+- `inferd-engine/build.rs` runs CMake (release CRT on Windows,
+  `LLAMA_BUILD_SERVER/EXAMPLES/TESTS/TOOLS=OFF`,
+  `LLAMA_CURL=OFF`, `BUILD_SHARED_LIBS=OFF`); generates Rust
+  bindings via `bindgen` 0.71 against `include/llama.h`.
+- GPU backends as opt-in cargo features (`cuda`, `metal`,
+  `vulkan`, `rocm`); CPU-only by default.
 
-- Vendor `ggerganov/llama.cpp` as a git submodule under
-  `vendor/llama.cpp/` at a pinned commit.
-- `crates/inferd-engine/build.rs` runs CMake on the submodule with
-  `LLAMA_BUILD_SERVER=OFF`, `LLAMA_BUILD_EXAMPLES=OFF`,
-  `LLAMA_BUILD_TESTS=OFF`. GPU backends (CUDA, Metal, Vulkan,
-  ROCm) are opt-in cargo features, off by default.
-- Generate Rust bindings for `llama.h` via `bindgen`.
-- Implement `inferd-engine::llamacpp::LlamaCpp` against the
-  bindings: load model, allocate KV cache, run forward pass,
-  stream tokens back via callback into the Rust async runtime.
-- `Backend::ready()` flips true after model load + KV-cache
-  allocation succeed.
-- Wire the queue: 1 active, 10 queued, `ErrFull` on overflow, ctx
-  cancellation propagates (drop the request → drop the in-flight
-  generation handle).
-- Streaming `Response::Token` frames back per generated token,
-  no subprocess pipe in the loop.
+### M2b — `LlamaCpp` Backend adapter ✅
 
-**Exit criteria**: thlibo's full integration test suite (incl. the
-~60s real-engine tests) passes against a running inferd. This is
-the drop-in-replacement validation. *Also*: generated binary has
-no llamafile or llama.cpp HTTP server symbols (verify with `nm` /
-`dumpbin`); subprocess count during a generation is exactly 1
-(the daemon itself).
+- `loader.rs`: `load_model()` with optional SHA-256 verification
+  using `subtle::ConstantTimeEq` (F-5). `ModelHandle` /
+  `ContextHandle` RAII.
+- `backend.rs`: chat-template render → tokenize → spawn-blocking
+  decode/sample loop → tokio mpsc → cancellation-by-drop. Sampler
+  chain: `grammar → top-k → top-p → temp → dist`, with GBNF
+  enforced when `Resolved::grammar` is non-empty.
 
-### M3 — activity log + redactor
+### M2c — daemon + real-model tier-3 test ✅ (test harness; runtime
+verification deferred to operator)
 
-- Port `logx.go` → `crates/inferd-daemon/src/logx.rs`. Same record
-  shape (`t`, `component`, `level`, `msg` + fields). Same env var
-  (rename `THLIBO_LOG` → `INFERD_LOG`). Same rolling rotation (3
-  generations). Same secret-pattern redactor.
-- Default log dir: `~/.inferd/logs/`.
+- `BackendKind::Llamacpp` variant (gated behind `llamacpp` feature).
+- CLI flags: `--model-path`, `--model-sha256`, `--n-ctx`,
+  `--n-gpu-layers`.
+- `tests/echo_llamacpp.rs`: skips with explanatory message when
+  `INFERD_TEST_MODEL_PATH` is unset; otherwise boots the
+  lifecycle with a real `LlamaCpp` adapter, drives a short
+  request, asserts `backend=llamacpp` + non-zero
+  `completion_tokens`.
+- **Open**: nobody has actually run this against a Gemma 4 GGUF
+  yet. Adapter is type-correct and FFI-aligned; the model load
+  + decode round-trip is unverified by humans. Smoke this before
+  GA.
 
-**Exit criteria**: integration test that sets `INFERD_LOG=debug`,
-triggers one generation, and asserts the NDJSON record for
-`request_done` has the expected fields.
+### M3 — activity log + redactor ✅
 
-### M4 — Windows named pipe + packaging
+- `logx::LogxWriter` with rolling rotation (`.ndjson` → `.1` →
+  `.2` → `.3`, keep 3 generations — F-4).
+- `logx::LogxLayer` `tracing_subscriber::Layer` serialises
+  events as NDJSON: `t`, `level`, `component`, `msg`, +
+  structured fields.
+- `redact::redact_in_place` runs *inside*
+  `LogxWriter::write_record` so debug-level dumps are scrubbed
+  before disk write (F-3).
+- `lifecycle::handle_connection` emits `request_done` /
+  `request_error_mid_stream` events.
+- `tests/logx.rs`: integration test verifies the
+  `request_done` record shape *and* that an injected
+  credential string does not appear in the on-disk log.
 
-- `endpoint_windows.rs` using `windows-sys`; SDDL scoped to the
-  current SID.
-- `clap`-driven CLI mirroring thlibod's flags (`-engine`, `-lock`,
-  `-infer-addr`, `-admin-addr`, `-group`, `-tcp`, `-ready-timeout`,
-  `-stop-timeout`, `-v`).
-- Cross-platform release workflow (matrix: linux/amd64,
-  linux/arm64, darwin/arm64, windows/amd64) producing signed
-  tarballs. Signing plan inherited from thlibo's #27/#28 v0.2 work.
+### M4 — cross-platform IPC + packaging ⏳
 
-**Exit criteria**: `inferd install` on each platform yields an
-autostarted daemon that thlibo v0.2 can talk to on boot.
+#### M4a — Windows named pipe ✅
 
-### M5 — Go client crate
+- `endpoint::bind_named_pipe(path, first)` wraps tokio's
+  `ServerOptions`. `lifecycle::serve_named_pipe` implements the
+  multi-instance accept pattern with caller-supplied first
+  instance (no listener-before-spawn race).
+- `--pipe` CLI flag mutually exclusive with `--tcp`/`--uds`.
+- `tests/echo_pipe.rs`: 2 tests including
+  `multi_instance_accept_serves_two_sequential_clients`.
 
-- `clients/go/` is a Go module with a `Client` struct wrapping the
-  NDJSON protocol. Module path:
-  `github.com/3rg0n/inferd/clients/go` (sub-module in the monorepo).
-- thlibo v0.2 imports this module and deletes its own daemon code.
+#### M4b — release workflow ✅
 
-**Exit criteria**: thlibo v0.2 branch compiles and tests pass with
-`internal/daemon/` and `internal/ipc/` deleted.
+- `.github/workflows/ci.yml`: fmt + clippy + test on
+  `[ubuntu, macos, windows]`, with and without the `llamacpp`
+  feature. Go-client job builds the daemon binary then runs
+  `go vet` + `go test`. `cargo audit` on push-to-main +
+  schedule (does not block PRs).
+- `.github/workflows/release.yml`: tag-triggered (`v*`) matrix
+  build (linux x86_64, linux aarch64 via `cross`, macos
+  aarch64, windows x86_64). Generates CycloneDX SBOM via
+  `cargo cyclonedx`, signs each archive with keyless cosign,
+  publishes to GitHub Release.
+- F-15 (signed releases + SBOM) → mitigated.
 
-### M6 (v0.2) — cloud backend adapters
+#### M4c — service-manifest install 🅿️ → packaging follow-up
 
-Out of scope for v0.1. Sketched in an ADR so the `Backend` trait
-design can be validated against the shape of Ollama / OpenAI /
-Bedrock / Anthropic / LiteLLM requests before M1 freezes.
+systemd unit / launchd plist / Windows service registration
+land alongside packaging in `packaging/`. Scope-cut from the
+alpha commit: see [F-16 systemd hardening](#post-alpha-tracked-work).
+
+### M5 — Go client ✅
+
+- `clients/go/` Go module at
+  `github.com/3rg0n/inferd/clients/go`. `Client` with `DialTCP`,
+  `DialUDS` (Unix), `DialPipe` (Windows). `Generate(ctx, req)`
+  returns a frame channel; `ctx` cancel closes the connection.
+- `client_test.go`: protocol-shape round-trip + end-to-end
+  against the Rust daemon binary (auto-locates
+  `target/debug/inferd-daemon[.exe]`).
+- Exit criterion is "thlibo v0.2 imports this module and tests
+  pass." That's a downstream concern — verify when thlibo's
+  v0.2 branch picks this up.
+
+### M6 (v0.2) — cloud backend adapters 🅿️
+
+Out of scope for v0.1. ADR 0007 sketches the routing model so
+the `Backend` trait + `Router` shape can absorb Ollama / OpenAI
+/ Bedrock / Anthropic adapters when v0.2 starts.
 
 ## Threat model
 
@@ -255,3 +285,23 @@ enforcement, protocol versioning, backend identity in `done`
 frames) are settled in [ADR 0009](adr/0009-pre-m1-open-questions-resolved.md).
 M1 starts against the resolved decisions; nothing in this
 section is unresolved.
+
+## Post-alpha tracked work
+
+The `0.1.0-alpha.1` tag ships everything above; these items are
+real but not GA-blocking on their own. Each has a `THREAT_MODEL.md`
+finding pointer.
+
+| Item | Finding | Notes |
+|---|---|---|
+| Real Gemma 4 GGUF run | M2c above | Operator drives once a model file is in hand |
+| Peer credentials (`SO_PEERCRED`, `GetNamedPipeClientProcessId`) | F-7 | ADR 0009 promises; alpha-1 follow-up |
+| Loopback TCP API key auth | F-8 | First-frame `X-Inferd-Key` per ADR 0009 |
+| systemd / launchd / Windows service hardening manifests | F-16 | Packaging `packaging/` subtree |
+| FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
+| GBNF parse-time complexity bound | F-11 | Accepted; bounded by `max_tokens` + queue |
+| TOCTOU mitigation on model verify | F-6 | Documented caveat; needs upstream `libllama` fd-based load |
+| `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
+| Tier 5 `security` feature aggregating regression tests | `docs/test-strategy.md` | Tests exist scattered; the feature flag does not |
+| Tier 6 fuzzing | `docs/test-strategy.md` | `cargo +nightly fuzz` against the proto frame parser |
+| Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |

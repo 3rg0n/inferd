@@ -7,260 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-05-16
+
+First tagged drop. Code-complete for v0.1's planned scope plus
+the pieces of M4 that landed before alpha; F-7/F-8/F-16 are the
+known follow-ups (see `docs/plan-v0.1.md` §"Post-alpha tracked
+work").
+
 ### Added
 
-- Repo scaffolding only: README, LICENSE (MIT), CONTRIBUTING, context
-  hand-off brief, v0.1 plan, protocol-v1 spec, four ADRs.
-- `.gitignore` with Rust + secrets + model-artefact patterns.
-- `docs/ai.internals.explained.md` — 15-component explainer of how
-  local LLM serving stacks are built; standalone reference.
-- `CLAUDE.md` at repo root — guidance for future Claude Code sessions
-  working in this repository.
-- ADR 0005 — consume `libllama` via FFI rather than running llamafile
-  as a subprocess. Supersedes 0003.
-- ADR 0006 — lean-core posture. HTTP, OpenAI-compat, web UI, and
-  per-app backend override are out of the daemon and live as
-  ecosystem extensions in separate processes.
-- ADR 0007 — backend routing model. Operator-configured policy,
-  no in-daemon retry, no mid-stream failover, circuit breaker as the
-  only stateful policy mechanism.
-- ADR 0008 — protocol v1 designed for inferd on its own merits;
-  supersedes 0001. v1 adds `stop_reason` and `backend` on `done`
-  frames and `code` on `error` frames. thlibo is refactored to
-  match, not the other way around.
-- ADR 0009 — pre-M1 open questions resolved (admin socket as a
-  separate `0600` endpoint, peer credentials enforced on UDS +
-  named pipe, protocol versioning via separate sockets, backend
-  identity in `done` frames).
-- `docs/protocol-v1.md` rewritten to reflect ADR 0008 — clean
-  inferd-native spec with `stop_reason`, `backend`, and
-  `code` fields documented.
-- `THREAT_MODEL.md` skeleton at repo root with 16 findings
-  (F-1 through F-16). v0.1 GA blocks until every "applies"
-  finding is `mitigated` with a code reference.
-- `vendor/llama.cpp/PIN.md` recording the chosen llama.cpp
-  pin (tag `b9159`, 2026-05-15) and the bump procedure. The
-  submodule itself is added in M2a.
-- `docs/test-strategy.md` describing the six test tiers
-  (unit, daemon-integration with mock, engine-integration
-  with libllama, functional replacement, security
-  regression, fuzzing), platform matrix, and cargo features.
-- `Cargo.toml` skeletons for all four crates
-  (`inferd-proto`, `inferd-engine`, `inferd-daemon`,
-  `inferd-stdio`) — package metadata, dependency lists,
-  feature flags. No `lib.rs`/`main.rs` yet; workspace
-  `members` array stays commented out until M1 adds the
-  source files.
+#### Crates
 
-### Changed
+- `inferd-proto` — wire format. `Request`/`Resolved` with Gemma 4
+  sampling defaults. `Response` enum with `stop_reason`,
+  `backend` on `done`, structured `code` on `error` per ADR
+  0008. `read_frame` / `write_frame` with a 64 MiB bounded
+  reader (THREAT_MODEL F-1 mitigated). 15 tests.
+- `inferd-engine` — `Backend` async trait, `TokenEvent` /
+  `TokenStream`, `GenerateError`. `mock` adapter with
+  failure-mode injection. `llamacpp::LlamaCpp` adapter behind
+  the `llamacpp` cargo feature: model load with constant-time
+  SHA-256 verification (F-5), `llama_context` allocation, decode
+  + sample loop on `spawn_blocking`, GBNF wired to
+  `llama_sampler_init_grammar`, cancellation by drop. 9 default
+  tests + 3 tier-3 stubs that skip without
+  `INFERD_TEST_MODEL_PATH`.
+- `inferd-daemon` — binary. Lifecycle, single-instance lock with
+  symlink rejection (F-2), bounded admission queue (1 active +
+  10 queued, non-blocking submit, `code: queue_full`), no-op
+  `Router` (ADR 0007 shape ready for v0.2), UDS / loopback TCP /
+  Windows named-pipe endpoints, ready-gated listener creation
+  (F-13), `clap`-driven CLI. 35 unit tests + 4 + 2 + 2
+  integration tests.
+- `inferd-stdio` — Cargo.toml scaffold only; sources land when a
+  caller needs the stdio variant.
 
-- `docs/plan-v0.1.md` M2 retitled "llama.cpp FFI backend" with
-  updated implementation steps and exit criteria. Routing section
-  added (no-op in v0.1, real in v0.2).
-- ADR 0003 status flipped to `superseded by 0005`. Body unchanged
-  per ADR-immutability rule.
-- ADR 0001 status flipped to `superseded by 0008`. Body unchanged
-  per ADR-immutability rule.
-- `docs/plan-v0.1.md` "Threat model" section replaced with a
-  pointer to `THREAT_MODEL.md` and a per-milestone mitigation
-  schedule. "Open questions for the implementer" section replaced
-  with a pointer to ADR 0009.
-- `CLAUDE.md` invariant #10 and architecture summary updated to
-  reflect ADRs 0005, 0006, 0007. Scope-gates section expanded with
-  the explicit "no HTTP, ever" / "no per-request backend override,
-  ever" rules.
+#### Activity log
 
-**M1 in progress**: `inferd-proto`, `inferd-engine`, and
-`inferd-daemon` (lock + queue) landed.
+- `LogxWriter` rotating NDJSON writer (3 generations, F-4)
+  with a write-time `redact_in_place` redactor (F-3) covering
+  Authorization headers, key=value secrets, JWTs, AWS
+  AKIA/ASIA, Slack `xox*`, GitHub `gh*_`, Cisco Things
+  `pat-`/`thingspat_`, OpenAI `sk-`.
+- `LogxLayer` `tracing_subscriber::Layer` serialising events as
+  NDJSON (`t`, `level`, `component`, `msg`, structured fields).
+- `lifecycle::handle_connection` emits `request_done` /
+  `request_error_mid_stream` events per request.
 
-- `inferd-proto`: types, NDJSON framing with 64 MiB bounded
-  reader (THREAT_MODEL F-1), request validation. 15 tests.
-- `inferd-engine`: `Backend` async trait, `TokenEvent`/
-  `TokenStream`, `GenerateError`, deterministic `mock`
-  adapter with failure-mode injection (pre-stream error,
-  mid-stream drop, ready toggle). 7 tests.
-- `inferd-daemon` section A: cross-platform single-instance
-  `Lock` (uses `std::fs::File::try_lock`, stable since 1.89),
-  symlink rejection (THREAT_MODEL F-2), bounded admission
-  `Queue` (1 active + N queued, non-blocking submit, returns
-  `SubmitError::QueueFull`). 8 tests.
-- `inferd-daemon` section B: endpoint listeners. `bind_tcp`
-  for cross-platform loopback TCP (default `127.0.0.1:47321`),
-  `bind_uds` (Unix only) for Unix domain sockets with mode
-  `0660`, optional group ownership via `nix::unistd::chown`,
-  and pre-binding symlink refusal. Windows named pipe
-  deferred to M4. `Connection` trait abstracts UDS/TCP
-  uniformly. 4 tests (3 enabled per platform).
-- `inferd-daemon` section D: M1 exit-criterion integration test
-  (`tests/echo.rs`). Boots the lifecycle in-process against the
-  mock backend over loopback TCP, connects a real client, and
-  asserts the full request → token → done flow. Coverage:
-  golden path with id echo + content concat + stop_reason +
-  backend per ADR 0008; invalid_request error frame; mid-stream
-  drop produces `code: backend_unavailable` per ADR 0007;
-  ready-gating regression for THREAT_MODEL F-13. 4 tests.
-
-### M4 sections A–C — Windows named pipe endpoint
-
-- `endpoint::bind_named_pipe(path, first)` (Windows-only): wraps
-  `tokio::net::windows::named_pipe::ServerOptions`. Default DACL
-  (creating user only) is adequate for v0.1; SDDL hardening +
-  `GetNamedPipeClientProcessId` peer-SID extraction are tracked
-  as v0.2 follow-ups under THREAT_MODEL F-7.
-- `endpoint::DEFAULT_PIPE_PATH = \\.\pipe\inferd-infer`.
-- `Connection` trait extended for `NamedPipeServer` with
-  `transport() == "pipe"`.
-- `lifecycle::serve_named_pipe` (Windows-only) implements the
-  multi-instance accept pattern. Takes a pre-bound first instance
-  so the listener is guaranteed live before callers receive the
-  pipe path — eliminates a race between `tokio::spawn` and the
-  first bind.
-- `config::Cli` adds `--pipe` / `INFERD_PIPE` (mutually exclusive
-  with `--tcp` and `--uds`). `require_one_transport()` now allows
-  exactly one of three.
-- `main.rs` routes `--pipe` → `bind_named_pipe(path, true)` →
-  `serve_named_pipe`. `--uds` on Windows still errors clearly.
-- `tests/echo_pipe.rs` (Windows-only): 2 integration tests over
-  the named-pipe transport. End-to-end `request → token → done`
-  with backend/stop_reason per ADR 0008, and a
-  `multi_instance_accept_serves_two_sequential_clients` test that
-  proves the accept loop rebinds between clients.
-- Test infra: `unique_pipe_path()` uses a process-wide
-  `AtomicU64` counter in addition to PID + ns timestamp, so
-  parallel tests in the same binary don't collide on the global
-  Windows named-pipe namespace. Verified 0/10 flakes across 10
-  full-suite runs.
-
-67/67 workspace tests pass on Windows (35 daemon unit + 4
-daemon-echo + 2 daemon-logx + 2 daemon-echo_pipe + 9 engine + 15
-proto). Workspace clippy clean. cargo audit clean (158 deps).
-
-### M3 — Activity log + redactor wired into the daemon
-
-- `LogxLayer`: a `tracing_subscriber::Layer` that serialises every
-  event into a JSON object and routes it through a shared
-  `LogxWriter`. Field shape: `t` (RFC3339), `level`, `component`
-  (target with crate prefix stripped), `msg`, plus any structured
-  fields the call site supplied. The redactor runs inside
-  `LogxWriter::write_record` so even debug-level dumps are scrubbed
-  before disk write.
-- `inferd-daemon` `main.rs`: `install_tracing()` now layers the
-  stderr `fmt` (operators tailing) with `LogxLayer` (NDJSON file
-  writes). `INFERD_LOG_DIR` overrides the default
-  `~/.inferd/logs/`. `INFERD_LOG=info|debug|0` controls verbosity.
-- `lifecycle::handle_connection` emits a `request_done` event
-  (target `inferd_daemon::activity`) on every successful generation
-  with `req_id`, `backend`, `stop_reason`, `prompt_tokens`,
-  `completion_tokens`. Mid-stream backend failures emit a paired
-  `request_error_mid_stream` warn-level event.
-- `tests/logx.rs`: 2 integration tests. (1) Boots the lifecycle
-  in-process with the real `LogxLayer`, drives one request, reads
-  the on-disk NDJSON, and asserts the `request_done` record carries
-  the right fields. (2) Embeds a synthetic credential in the
-  request id, drives the request, and asserts the literal does not
-  appear anywhere in the on-disk log — proving the F-3 redactor
-  runs end-to-end.
-
-THREAT_MODEL F-3 (write-time redactor) and F-4 (3-generation
-rotation) are now `mitigated` with named code sites.
-62/62 workspace tests pass. Workspace clippy clean.
-
-### M2b — `LlamaCpp` Backend adapter
-
-- `inferd-engine::llamacpp` module: real `Backend` impl built on
-  the FFI bindings. Compiled in only when the `llamacpp` feature
-  is enabled; default builds remain mock-only.
-- `loader.rs`: `load_model()` opens the GGUF file, optionally
-  verifies SHA-256 against an expected hash using
-  `subtle::ConstantTimeEq` (THREAT_MODEL F-5), then hands off to
-  `llama_model_load_from_file`. `ModelHandle` owns the
-  `llama_model*` and runs `llama_model_free` on drop. F-6 TOCTOU
-  caveat documented inline.
-- `backend.rs`: `LlamaCpp::new()` initialises libllama (idempotent
-  via `Once`), loads the model, allocates `llama_context` with
-  configurable `n_ctx`, flips ready. `generate()` renders the
-  model's chat template, tokenizes, then spawns a `spawn_blocking`
-  task that drives `llama_decode` + `llama_sampler_sample` and
-  streams `TokenEvent`s through a tokio mpsc channel.
-- Sampler chain: `top_k → top_p → temp → dist`, with grammar
-  inserted first when `Resolved::grammar` is non-empty (GBNF via
-  `llama_sampler_init_grammar`). Wires THREAT_MODEL F-11 — no
-  parse-time complexity bound yet, deferred per the threat-model
-  doc.
-- Cancellation: dropping the response stream drops the receiver,
-  which causes `tx.blocking_send` in the C++ loop to error and the
-  loop exits. KV cache is reset between generations via
-  `llama_memory_clear`.
-- Build script: switched to `Release` CMake configuration so the
-  C++ CRT matches Rust's release-CRT linkage on Windows. Linked
-  `Advapi32.lib` for `ggml-cpu`'s registry probes.
-- `tests/llamacpp.rs`: 3 tier-3 tests behind
-  `--features llamacpp-integration`. Skip cleanly with
-  `[skip] INFERD_TEST_MODEL_PATH not set` when no model is
-  available; otherwise verify load → stream → done with
-  `stop_reason ∈ {End, Length}` and `completion_tokens > 0`,
-  cancellation behaviour, and `InvalidRequest` for empty messages.
-
-48/48 tests pass under default features
-(15 proto + 9 engine + 20 daemon + 4 daemon-integration).
-12/12 with `llamacpp-integration` feature on (engine adapter
-compiles and tier-3 stubs skip clean). Workspace clippy clean
-in both configurations. `cargo audit` reports zero advisories
-across 137 dependencies.
-
-### M2a — llama.cpp build wiring
+#### Build + release
 
 - `vendor/llama.cpp` submodule pinned at tag `b9159` (commit
-  `5c0e94683`, dated 2026-05-15). Activated with
-  `git submodule update --init --recursive`.
-- `inferd-engine/build.rs`: behind feature `llamacpp`, runs
-  CMake on the submodule with `LLAMA_BUILD_SERVER`/`EXAMPLES`/
-  `TESTS`/`TOOLS=OFF`, `LLAMA_CURL=OFF`, `BUILD_SHARED_LIBS=OFF`.
-  Generates Rust bindings via bindgen 0.71 from
-  `vendor/llama.cpp/include/llama.h` into
-  `OUT_DIR/llama_bindings.rs`. GPU backends (`cuda`, `metal`,
-  `vulkan`, `rocm`) opt-in via cargo features; default is CPU-only.
-- `inferd-engine::ffi` includes the generated bindings. Crate
-  lint posture changed from `forbid(unsafe_code)` to
-  `deny(unsafe_code)` so the FFI module can scope an inner
-  `allow` to bindgen output. Every other module remains
-  unsafe-free.
-- Default `cargo build` (no features) still works without a
-  C++ toolchain or `libclang` — the build script short-circuits
-  on `CARGO_FEATURE_LLAMACPP`.
-- Smoke test on Windows 11: `cargo build -p inferd-engine
-  --features llamacpp` produces `llama.lib`, `ggml*.lib` static
-  archives plus a 1,865-line `llama_bindings.rs`. Workspace
-  clippy and tests pass with the feature on and off.
+  `5c0e94683`, 2026-05-15).
+- `inferd-engine/build.rs` runs CMake on the submodule under
+  feature `llamacpp` with server/CLI/examples/tools/curl off,
+  static-lib output, release CRT (Windows). Generates Rust
+  bindings via bindgen 0.71. GPU backends as opt-in cargo
+  features (`cuda`, `metal`, `vulkan`, `rocm`).
+- `.github/workflows/ci.yml` — fmt + clippy + test on
+  `[ubuntu, macos, windows]` with and without the `llamacpp`
+  feature. Go-client job builds the daemon binary then runs
+  `go vet` + `go test`. `cargo audit` on push-to-main +
+  schedule (does not block PRs).
+- `.github/workflows/release.yml` — tag-triggered (`v*`) matrix
+  build (linux x86_64, linux aarch64 via `cross`, macos
+  aarch64, windows x86_64). Generates CycloneDX SBOM via
+  `cargo cyclonedx`, signs each archive with keyless cosign
+  (Sigstore OIDC), publishes to GitHub Release. F-15 mitigated.
 
-### M1 status — ✅ exit criteria met
+#### Go client (M5)
 
-46/46 tests pass workspace-wide on Windows + the test suite
-proves the protocol invariants from ADR 0008, the routing
-semantics from ADR 0007, and the F-13 ready-gating mitigation.
-Crate ships an `inferd-daemon` binary you can run locally
-against `--backend mock`. Engine adapter for llama.cpp is M2.
+- `clients/go/` Go module at
+  `github.com/3rg0n/inferd/clients/go`. `Client` struct with
+  `DialTCP`, `DialUDS` (Unix-only), `DialPipe` (Windows-only).
+  `Generate(ctx, req)` returns a frame channel; `ctx` cancel
+  closes the connection. Bounded reader at 64 MiB to mirror the
+  Rust crate.
+- `client_test.go` — protocol-shape round-trip + end-to-end
+  against the live Rust daemon binary (auto-locates
+  `<workspace>/target/debug/inferd-daemon[.exe]`; override with
+  `INFERD_DAEMON_BIN`).
 
-- `inferd-daemon` section C: router, lifecycle, config, main.
-  `Router` (no-op v0.1 per ADR 0007) picks a single backend.
-  `lifecycle::handle_connection` reads `Request` frames, routes
-  through the `Backend`, and writes `Response::Token`/`Done`
-  with `stop_reason` and `backend` per ADR 0008. Mid-stream
-  failures emit `error` with `code: backend_unavailable`.
-  `lifecycle::wait_for_ready` polls every 50ms up to a
-  configured timeout (THREAT_MODEL F-13 — listener bound
-  AFTER ready). `lifecycle::serve_tcp` and `serve_uds`
-  accept-loops with shutdown via tokio oneshot channel
-  (SIGTERM/SIGINT on Unix, Ctrl-C on Windows). `clap`-based
-  CLI in `config.rs` with `--lock`, `--tcp`, `--uds`,
-  `--group`, `--queue-depth`, `--ready-timeout-secs`. Crate
-  now ships an `inferd-daemon` binary. 8 new tests
-  (router 3, config 4, lifecycle 3) — 20 daemon tests total.
+#### Documentation
+
+- `docs/protocol-v1.md` — clean inferd-native wire spec per ADR
+  0008.
+- `docs/ai.internals.explained.md` — 15-component explainer of
+  how local LLM serving stacks are built (standalone reference).
+- `docs/test-strategy.md` — six test tiers, platform matrix,
+  cargo features.
+- `docs/adr/0001`–`0009` — full architectural decision record set.
+  0001 superseded by 0008; 0003 superseded by 0005.
+- `THREAT_MODEL.md` — 16 findings (F-1 through F-16) with
+  per-finding mitigation status and code-site references.
+- `CLAUDE.md` — guidance for future Claude Code sessions in
+  this repository.
+- `vendor/llama.cpp.PIN.md` — pinned commit + bump procedure.
 
 ### Changed
-- Workspace MSRV bumped 1.76 → 1.89 to use `File::try_lock`
-  from `std`. The previous floor was speculative; 1.89 is
-  current.
 
-30/30 tests pass on Rust 1.92. Clippy clean. Daemon
-sections B–D still pending. See `docs/plan-v0.1.md`.
+- Workspace MSRV: floor of 1.89 (uses `std::fs::File::try_lock`,
+  stable since 1.89).
+- ADR 0001 → `superseded by 0008`. ADR 0003 → `superseded by
+  0005`. Body of each unchanged per the ADR-immutability rule.
+
+### Security
+
+- THREAT_MODEL F-1, F-2, F-3, F-4, F-5, F-13, F-14, F-15
+  → mitigated with named code sites and verifying tests.
+- F-6, F-7, F-8, F-9, F-10, F-11, F-12, F-16 → status `applies`,
+  documented as accepted-risk or post-alpha follow-up. See
+  `THREAT_MODEL.md` for per-finding rationale and
+  `docs/plan-v0.1.md` §"Post-alpha tracked work" for the
+  schedule.
+- `cargo audit` reports zero advisories across 158 dependencies.
+
+### Verified
+
+- 67/67 Rust tests pass on Windows under default features.
+- 80/80 Rust tests pass with `llamacpp-integration` enabled
+  (3 tier-3 stubs skip cleanly when no GGUF is present).
+- 2/2 Go tests pass, including the round-trip against the
+  spawned daemon binary.
+- Workspace clippy `-D warnings` clean in both feature
+  configurations.
+
+### Not yet verified
+
+- Real Gemma 4 GGUF run (M2c handle exists; runtime smoke is the
+  operator's call).
+- CI workflows on real GitHub Actions runners.
+- Linux + macOS test execution (Rust toolchain runs only on
+  Windows so far).
+- thlibo v0.2 importing `clients/go`.
