@@ -18,7 +18,8 @@ default = []
 # The daemon binary picks its engine adapters at compile time. CI builds
 # the full feature set; minimal builds (e.g. headless servers without GPU)
 # drop the GPU features.
-llamacpp = ["inferd-engine/llamacpp"]
+llamacpp             = ["inferd-engine/llamacpp"]
+llamacpp-integration = ["llamacpp", "inferd-engine/llamacpp-integration"]
 cuda     = ["inferd-engine/cuda"]
 metal    = ["inferd-engine/metal"]
 vulkan   = ["inferd-engine/vulkan"]
