@@ -1,0 +1,33 @@
+.github/workflows/release.yml
+  s_126aec4081f728::t_87de7d932885f2 84-86,89-98
+packaging/launchd/io.inferd.daemon.plist
+  s_126aec4081f728::t_8f8005485e7e2a 1-67
+packaging/README.md
+  s_126aec4081f728::t_0a92d81b06acd0 1-43
+packaging/windows/install.ps1
+  s_126aec4081f728::t_fcc5378da764a6 1-93
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_59d02cdbd84256 1-68
+CHANGELOG.md
+  s_126aec4081f728::t_d803d8c650bf96 10-93
+docs/plan-v0.1.md
+  s_126aec4081f728::t_0c3c4d225e7e54 301,306-309
+THREAT_MODEL.md
+  s_126aec4081f728::t_536a4f4e08b4c1 300-325
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "fe3e1fa95613e9ce529480d89530ae74ff740227",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
