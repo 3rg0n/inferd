@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_126aec4081f728::t_cc9ed08cb27957 10,12-15,17,19-57,60-104,108-141
+docs/plan-v0.1.md
+  s_126aec4081f728::t_54a452699de814 122-246
+  s_126aec4081f728::t_0f39372b2b24fd 113,115-118
+  s_126aec4081f728::t_e234acb56024f5 288-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "7160cbdaeaa68cd75e9adc988e7c1436ef2c9fb5",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
