@@ -1,0 +1,21 @@
+THREAT_MODEL.md
+  s_126aec4081f728::t_017f8577d05f0f 268-275
+.github/workflows/release.yml
+  s_126aec4081f728::t_f36ca77f12f46f 1-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "872604d592a553254056cbac6a0249633bb048eb",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
