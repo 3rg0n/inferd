@@ -7,14 +7,19 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
-/// Backend adapters the daemon can register at startup. v0.1 ships only
-/// the mock; M2 adds `llamacpp`.
+/// Backend adapters the daemon can register at startup.
+///
+/// `LlamaCpp` is gated behind the `llamacpp` cargo feature — default
+/// daemon builds only ship the mock adapter (per ADR 0006: lean core,
+/// extensions are separate concerns).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BackendKind {
     /// Deterministic test double — used by integration tests and the
     /// M1 echo daemon.
     Mock,
-    // Mock is the only one in v0.1. Llamacpp is M2.
+    /// Local llama.cpp backend via FFI (M2). Requires `--model-path`.
+    #[cfg(feature = "llamacpp")]
+    Llamacpp,
 }
 
 /// Top-level CLI for `inferd-daemon`.
@@ -61,6 +66,26 @@ pub struct Cli {
     /// startup.
     #[arg(long, default_value_t = 30, env = "INFERD_READY_TIMEOUT_SECS")]
     pub ready_timeout_secs: u64,
+
+    /// Path to the GGUF model file. Required when `--backend llamacpp`.
+    #[arg(long, env = "INFERD_MODEL_PATH")]
+    pub model_path: Option<PathBuf>,
+
+    /// Optional expected SHA-256 of the model file as a hex string
+    /// (64 chars). When present, the daemon verifies the file before
+    /// loading via `subtle::ConstantTimeEq` (THREAT_MODEL F-5).
+    #[arg(long, env = "INFERD_MODEL_SHA256")]
+    pub model_sha256: Option<String>,
+
+    /// Llama.cpp context window in tokens. Default 8192.
+    #[arg(long, default_value_t = 8192, env = "INFERD_N_CTX")]
+    pub n_ctx: u32,
+
+    /// Llama.cpp GPU layer offload count. 0 = CPU-only. GPU support
+    /// requires the `cuda`/`metal`/`vulkan`/`rocm` cargo feature at
+    /// build time.
+    #[arg(long, default_value_t = 0, env = "INFERD_N_GPU_LAYERS")]
+    pub n_gpu_layers: i32,
 }
 
 impl Cli {

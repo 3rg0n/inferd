@@ -38,6 +38,8 @@ async fn main() -> anyhow::Result<()> {
     // 2. Initialise backend.
     let backend: Arc<dyn Backend> = match cli.backend {
         BackendKind::Mock => Arc::new(Mock::new()),
+        #[cfg(feature = "llamacpp")]
+        BackendKind::Llamacpp => Arc::new(build_llamacpp(&cli)?),
     };
     info!(name = backend.name(), "backend constructed");
 
@@ -91,6 +93,59 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutdown complete");
     Ok(())
+}
+
+/// Build the LlamaCpp adapter from CLI flags. Validates that
+/// `--model-path` was supplied and parses `--model-sha256` (hex) if
+/// present.
+#[cfg(feature = "llamacpp")]
+fn build_llamacpp(cli: &Cli) -> anyhow::Result<inferd_engine::llamacpp::LlamaCpp> {
+    use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
+
+    let model_path = cli
+        .model_path
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--model-path is required for --backend llamacpp"))?;
+
+    let model_sha256 = cli
+        .model_sha256
+        .as_deref()
+        .map(parse_sha256_hex)
+        .transpose()?;
+
+    let backend = LlamaCpp::new(LlamaCppConfig {
+        model_path,
+        model_sha256,
+        n_ctx: cli.n_ctx,
+        n_gpu_layers: cli.n_gpu_layers,
+        ..Default::default()
+    })
+    .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;
+    Ok(backend)
+}
+
+#[cfg(feature = "llamacpp")]
+fn parse_sha256_hex(s: &str) -> anyhow::Result<[u8; 32]> {
+    if s.len() != 64 {
+        anyhow::bail!("--model-sha256 must be 64 hex chars (got {})", s.len());
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let hi = hex_digit(s.as_bytes()[i * 2])?;
+        let lo = hex_digit(s.as_bytes()[i * 2 + 1])?;
+        *byte = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "llamacpp")]
+fn hex_digit(b: u8) -> anyhow::Result<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => anyhow::bail!("invalid hex digit: {:?}", b as char),
+    }
 }
 
 /// Initialise tracing with two layers:
