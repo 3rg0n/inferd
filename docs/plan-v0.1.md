@@ -295,13 +295,15 @@ finding pointer.
 | Item | Finding | Notes |
 |---|---|---|
 | Real Gemma 4 GGUF run | M2c above | Operator drives once a model file is in hand |
-| Peer credentials (`SO_PEERCRED`, `GetNamedPipeClientProcessId`) | F-7 | ADR 0009 promises; alpha-1 follow-up |
-| Loopback TCP API key auth | F-8 | First-frame `X-Inferd-Key` per ADR 0009 |
-| systemd / launchd / Windows service hardening manifests | F-16 | Packaging `packaging/` subtree |
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | GBNF parse-time complexity bound | F-11 | Accepted; bounded by `max_tokens` + queue |
 | TOCTOU mitigation on model verify | F-6 | Documented caveat; needs upstream `libllama` fd-based load |
+| Windows service-ACL SDDL hardening | F-16 (Windows part) | `sc.exe sdset` to deny non-admins; alpha-2 ships per-user posture only |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
 | Tier 5 `security` feature aggregating regression tests | `docs/test-strategy.md` | Tests exist scattered; the feature flag does not |
 | Tier 6 fuzzing | `docs/test-strategy.md` | `cargo +nightly fuzz` against the proto frame parser |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
+
+**Closed in alpha.2** (2026-05-16): F-7 peer credentials,
+F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
+(see CHANGELOG.md `[0.1.0-alpha.2]`).
