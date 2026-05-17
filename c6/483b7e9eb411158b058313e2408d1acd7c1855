@@ -1,0 +1,28 @@
+crates/inferd-daemon/src/config.rs
+  s_126aec4081f728::t_ac56ee3bbcaf46 69-88
+  s_126aec4081f728::t_ad36b966541b2e 10-14,20-22
+crates/inferd-daemon/tests/echo_llamacpp.rs
+  s_126aec4081f728::t_78ee635220aa49 1-94,102-144
+  s_126aec4081f728::t_b5ef95c1f782f2 95-101
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_2eb19e004afb29 41-42
+  s_126aec4081f728::t_97d2ff87d12889 98-150
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_1eb173a7a1ea80 21-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "c6483b7e9eb411158b058313e2408d1acd7c1855",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
