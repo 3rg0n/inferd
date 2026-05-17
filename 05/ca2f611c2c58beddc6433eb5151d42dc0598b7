@@ -1,0 +1,20 @@
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_7ead52de9567bc 97-98,103,107-152
+  s_126aec4081f728::t_f68eae2a5fafe1 221-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "05ca2f611c2c58beddc6433eb5151d42dc0598b7",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
