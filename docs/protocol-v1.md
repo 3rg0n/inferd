@@ -149,12 +149,227 @@ Field guarantees:
   the first frame on the connection when exposed over TCP.
   Off by default; opt-in for container / WSL scenarios.
 
-The daemon also exposes an **admin endpoint** (default
-`/run/inferd/admin.sock` on Unix mode `0600`,
-`\\.\pipe\inferd-admin` on Windows) that broadcasts engine
-status to connected admin clients. Status frames carry
-`id: "admin"`. The admin socket is for operator tooling
-(`inferd status`-style commands), not for inference traffic.
+The daemon also exposes an **admin endpoint** for push-style
+lifecycle event broadcast. Operator tooling, installer GUIs, and
+middleware that wants progress UX during first-boot model
+download connect here. See §"Admin endpoint" below for the full
+contract.
+
+## Admin endpoint
+
+Push-style daemon-lifecycle event broadcast. Read-only NDJSON
+stream from daemon → client. Same framing rules as the inference
+stream (one JSON object per line, 64 MiB cap).
+
+### Path
+
+| Platform | Path | Permissions |
+|---|---|---|
+| Linux | `/run/inferd/admin.sock` | mode `0600`, daemon uid only |
+| macOS | `${TMPDIR}/inferd/admin.sock` | mode `0600`, daemon uid only |
+| Windows | `\\.\pipe\inferd-admin` | DACL grants current user SID only |
+
+Configurable via `--admin-addr` / `INFERD_ADMIN_ADDR` for tests
+and non-default deployments. Production deployments use the
+default. **No TCP admin endpoint** — admin is local-only.
+
+### Lifecycle vs. inference
+
+```
+t=0   daemon process starts
+t=0+  admin socket bound, accepting connections                 ← clients can connect
+t=N   model present + loaded, backend reports ready
+t=N+  inference socket bound, accepting connections             ← inference clients can connect
+```
+
+The admin socket is **bound first, before any model work**.
+Clients can connect immediately and watch lifecycle events
+while the daemon is bootstrapping. The inference socket comes
+up last, *after* `ready` is published on the admin channel.
+
+### Connect behaviour
+
+When a client connects to the admin socket:
+
+1. The daemon **immediately writes a snapshot frame** carrying
+   its current state. A client connecting mid-download gets a
+   `loading_model` frame with progress, not a stale earlier
+   state.
+2. Subsequent state transitions push as they happen.
+3. The connection stays open indefinitely. The daemon does not
+   close it; the client closes when done.
+
+A client that takes too long reading frames lets the broadcast
+queue overflow (256 frames) and gets disconnected (EOF).
+Reconnect to resume from the current snapshot.
+
+### Direction
+
+Read-only from the client's perspective. Daemon → client only
+in v1. A client that writes to the admin socket gets its bytes
+ignored. Future client→server commands (drain, reload) are
+reserved for v2.
+
+### Frame envelope
+
+Every admin event:
+
+```json
+{
+  "id":     "admin",
+  "type":   "status",
+  "status": "<state>",
+  "phase":  "<phase>",
+  "...detail keys flattened..."
+}
+```
+
+- `id` is the literal string `"admin"`.
+- `type` is the literal string `"status"`.
+- `status` is one of the lifecycle states below.
+- `phase` and detail keys (e.g. `downloaded_bytes`, `path`) are
+  flattened into the same JSON object — not nested under a
+  separate `phase`/`detail` envelope.
+
+### Lifecycle states
+
+| `status` | Meaning |
+|---|---|
+| `starting` | Daemon process is up; admin socket is bound. No backend work yet. Brief; usually <100ms. |
+| `loading_model` | Model is being prepared. Carries `phase` plus detail keys. May take seconds (cached file mmap) or hours (5 GB download on a slow link). |
+| `ready` | Inference socket is bound and accepting connections. The daemon is fully usable. |
+| `restarting` | Previously-`ready` daemon is reloading. Inference socket is closed; new connections refused. Carries the same `phase` enum as `loading_model`. |
+| `draining` | Daemon received a shutdown signal. Existing requests finish; new requests rejected. The daemon will exit shortly after this frame. |
+
+State transitions:
+
+```
+starting → loading_model → ready
+                ↓             ↓
+              (error)    restarting → loading_model → ready
+                ↓             ↓             ↓
+             draining    draining       draining → exit
+```
+
+### `loading_model` phases
+
+When `status: "loading_model"`, the frame includes `phase` plus
+phase-specific detail keys.
+
+| `phase` | Detail keys | Meaning |
+|---|---|---|
+| `checking_local` | `path` | Resolving model path on disk and checking SHA-256. |
+| `download` | `downloaded_bytes`, `total_bytes` (may be `null`), `source_url` | Downloading the GGUF. Progress emitted every 32 MiB or every 5 seconds, whichever first. |
+| `verify` | `path` | Streaming SHA-256 over downloaded bytes for final verification. |
+| `quarantine` | `path`, `expected_sha256`, `actual_sha256`, `quarantine_path` | Downloaded SHA mismatched config; file moved aside. Daemon will retry or refuse per `auto_pull`. |
+| `mmap` | `path` | Loading the file into the engine via FFI. |
+| `kv_cache` | `n_ctx` | Allocating the KV cache. |
+
+A typical first-boot sequence:
+
+```jsonl
+{"id":"admin","type":"status","status":"starting"}
+{"id":"admin","type":"status","status":"loading_model","phase":"checking_local","path":"/home/u/.inferd/models/gemma-4-e4b-ud-q4-k-xl.gguf"}
+{"id":"admin","type":"status","status":"loading_model","phase":"download","downloaded_bytes":33554432,"total_bytes":5126304928,"source_url":"https://huggingface.co/..."}
+{"id":"admin","type":"status","status":"loading_model","phase":"download","downloaded_bytes":67108864,"total_bytes":5126304928,"source_url":"https://huggingface.co/..."}
+... (~150 progress frames during a 5 GB download)
+{"id":"admin","type":"status","status":"loading_model","phase":"verify","path":"/home/u/.inferd/models/gemma-4-e4b-ud-q4-k-xl.gguf"}
+{"id":"admin","type":"status","status":"loading_model","phase":"mmap","path":"/home/u/.inferd/models/gemma-4-e4b-ud-q4-k-xl.gguf"}
+{"id":"admin","type":"status","status":"loading_model","phase":"kv_cache","n_ctx":8192}
+{"id":"admin","type":"status","status":"ready"}
+```
+
+### Forward compatibility
+
+- Clients **MUST ignore** unknown `status` values (display them,
+  log them, do not branch on them).
+- Clients **MUST ignore** unknown `phase` values within
+  `loading_model`.
+- Clients **MUST ignore** unknown detail keys.
+- The daemon **WILL NOT** introduce a new `status` or `phase`
+  that breaks existing semantics. Backwards-additive only;
+  breaking changes require v2 on a new socket path.
+
+### Error semantics
+
+The admin socket itself does not emit `error` frames in v1 —
+it is a status-broadcast channel; failures of the broadcast
+itself are reflected in the connection (EOF) rather than in
+protocol frames:
+
+- Daemon crash → admin socket closes, clients see EOF.
+- Daemon transitions to `draining` and exits → clients see a
+  `draining` frame followed by EOF.
+- Slow client → broadcast queue overflows, daemon disconnects
+  with EOF. Client reconnects to resume from the current
+  snapshot.
+
+## Client connection lifecycle
+
+Two patterns; pick based on whether the client cares about
+progress UX.
+
+### Pattern A — passive (recommended for inference-only consumers)
+
+The inference socket only exists when the daemon is `ready`
+(THREAT_MODEL F-13). A connect-with-retry loop against the
+inference socket *is* the wait-for-ready mechanism — the
+successful connect is the ready signal.
+
+```text
+loop:
+    try connect to inference socket
+    if success: break
+    if transient error (ECONNREFUSED, ENOENT, pipe-busy):
+        sleep with exponential backoff (start 100ms, cap 5s)
+        try again
+    else:
+        bail loudly — that's not transient
+```
+
+Recommended cap: 30 seconds for normal startup; longer
+(operator-configurable) for first-boot scenarios where a
+multi-GB model is downloading. After the cap, surface a clear
+error pointing at `systemctl status inferd` /
+`sc.exe query inferd-daemon`.
+
+This is the same pattern used by every database client library
+(libpq, redis, etcd-client). It works on every platform,
+including macOS where the service manager has no native
+readiness reporting.
+
+### Pattern B — active (for installer GUIs, dashboards, progress UX)
+
+Connect to the **admin** socket, watch for `status: "ready"`,
+then connect to the inference socket. Display progress along
+the way using the `loading_model` `phase: download` frames.
+
+```text
+connect to admin socket
+loop:
+    read one NDJSON frame
+    if frame.status == "loading_model" and frame.phase == "download":
+        update progress bar with frame.downloaded_bytes / frame.total_bytes
+    elif frame.status == "ready":
+        break
+close admin socket
+... now connect to inference and send traffic per Pattern A
+```
+
+Most middleware uses Pattern A. UI / installer / dashboard
+tools use Pattern B.
+
+### What to do during `restarting`
+
+If a client is connected to the admin socket and observes
+`restarting`:
+
+- The inference socket has closed. Existing inference
+  connections have already received EOF.
+- New inference connections will fail with `ECONNREFUSED` /
+  `ENOENT` until a subsequent `ready` event.
+- Stay connected to the admin socket — wait for `ready`, then
+  reconnect on inference per Pattern A.
 
 ## Per-caller identity
 
