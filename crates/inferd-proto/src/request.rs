@@ -67,7 +67,12 @@ impl ImageTokenBudget {
 }
 
 /// The inference request envelope sent by clients.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Default` produces an empty request: empty `messages`, all
+/// sampling fields `None` (server applies Gemma 4 defaults), no
+/// grammar. Useful for the `..Default::default()` shorthand in
+/// callers; remember to fill in `messages` before sending.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Request {
     /// Caller-assigned correlation id; echoed on every response frame.
     #[serde(default, skip_serializing_if = "String::is_empty")]

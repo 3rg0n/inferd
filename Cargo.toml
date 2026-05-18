@@ -4,6 +4,7 @@ members = [
     "crates/inferd-proto",
     "crates/inferd-engine",
     "crates/inferd-daemon",
+    "crates/inferd-client",
     # Activated as each crate's source files land in M1+:
     # "crates/inferd-stdio",
 ]
