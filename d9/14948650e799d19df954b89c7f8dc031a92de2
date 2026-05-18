@@ -1,0 +1,31 @@
+THREAT_MODEL.md
+  s_126aec4081f728::t_6b8106d54529c0 106-126
+docs/plan-v0.1.md
+  s_126aec4081f728::t_eb4f8d13344c68 309-313
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_1f4f82bbf1fa1f 41-44
+crates/inferd-engine/src/llamacpp/loader.rs
+  s_126aec4081f728::t_9407cba7acc46c 59
+  s_126aec4081f728::t_7bb130ebf67847 93-107,117-122,125,127-133,135-136,148-152
+  s_126aec4081f728::t_a5e4f1e58f1ec3 123-124,126
+  s_126aec4081f728::t_121e0eb4f847ed 208-258
+  s_126aec4081f728::t_386daa77833e10 33,45-47
+  s_126aec4081f728::t_41aceaf6143b0e 8-14,16-18,28
+  s_126aec4081f728::t_534e37aaab7826 53-58,62-65,86-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "d914948650e799d19df954b89c7f8dc031a92de2",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
