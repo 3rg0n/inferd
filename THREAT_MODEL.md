@@ -297,7 +297,7 @@ process settings is unnecessarily exposed (ptrace, core
 dumps containing tokens, capabilities the daemon does not
 need).
 
-**Status.** mitigated (Linux + macOS); Windows partial.
+**Status.** mitigated.
 
 - **Linux** — `packaging/systemd/inferd.service` applies
   `NoNewPrivileges`, `ProtectSystem=strict`,
@@ -316,11 +316,15 @@ need).
   the release tarball.
 - **Windows** — `packaging/windows/install.ps1` runs as
   `NT AUTHORITY\NetworkService`, sets recovery actions, and
-  populates the activity-log env var. Service-ACL SDDL
-  hardening (`sc.exe sdset` to deny non-admins from
-  controlling the service) is documented in
-  `packaging/README.md` as a post-alpha follow-up — narrower
-  scope than the Unix variants.
+  populates the activity-log env var. Custom service DACL
+  applied via `sc.exe sdset` denies non-admin
+  `SERVICE_STOP`/`SERVICE_START`/`SERVICE_PAUSE_CONTINUE`/
+  `SERVICE_CHANGE_CONFIG` while preserving query rights. Closes
+  the practical attack vector of a non-admin local user
+  killing the daemon to bind the named-pipe path themselves.
+  Narrower defence-in-depth than the Unix variants (no
+  syscall filter, no namespace isolation) but not the
+  weakest-link gap it was in alpha.2.
 - The release workflow bundles the matching manifest into
   each per-platform archive.
 

@@ -25,14 +25,18 @@ follow-up, tracked separately from the alpha tag).
 |---|---|---|---|
 | Privilege drop | `CapabilityBoundingSet=` (empty) | LaunchAgent (per-user) | `obj= NT AUTHORITY\NetworkService` |
 | Filesystem isolation | `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` | macOS app sandbox when signed | none |
+| Service-control ACL | (kernel-enforced unit ownership) | (LaunchAgent per-user) | `sc.exe sdset` denies non-admins stop/start/pause/config |
 | Syscall filter | `SystemCallFilter=@system-service` | n/a | n/a |
 | Restart on crash | `Restart=on-failure` | `KeepAlive` + `ThrottleInterval` | `sc.exe failure restart/2000` |
 | Memory write+exec | `MemoryDenyWriteExecute=yes` | n/a | n/a |
 | Namespace isolation | `RestrictNamespaces=yes` | n/a | n/a |
 
-The Windows posture is the weakest of the three. Service-ACL hardening
-(`sc.exe sdshow` / `sdset` to deny non-admins from controlling the
-service) is post-alpha work tracked under THREAT_MODEL F-16.
+The Windows posture is still the weakest of the three (no syscall
+filter, no namespace isolation), but the service-ACL hardening
+applied via `sc.exe sdset` in `install.ps1` closes the most
+practical attack vector: a non-admin local user
+`sc.exe stop inferd-daemon` to displace the daemon and bind the
+named-pipe path themselves.
 
 ## After install
 
