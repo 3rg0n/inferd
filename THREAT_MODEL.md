@@ -226,16 +226,26 @@ verbatim to the backend. A pathological grammar (deep
 recursion, exponential alternation) could cause the engine to
 spend unbounded CPU per token.
 
-**Status.** applies.
+**Status.** mitigated.
+`crates/inferd-engine/src/llamacpp/backend.rs::validate_grammar`
+runs before `llama_sampler_init_grammar`:
 
-**Mitigation.**
-- Frame cap (F-1, 64 MiB) bounds the grammar string size, but
-  pathological grammars can be small.
-- Per-request `max_tokens` bounds total work per request.
-- Admission queue (1 active, 10 queued) bounds concurrent
-  work.
-- Long-term: if abuse materialises, add a grammar parse-time
-  complexity check before forwarding to llama.cpp. Not v0.1.
+- Total length ≤ `MAX_GRAMMAR_BYTES` = 64 KB. Real grammars are
+  usually under 4 KB; this is a generous ceiling that catches
+  obviously-abusive payloads.
+- Alternation count (`|` byte count) ≤
+  `MAX_GRAMMAR_ALTERNATIONS` = 4096. Each `|` multiplies the
+  search space libllama walks per token; thousands of them is
+  the "exponential alternation" abuse case.
+
+This is not a full GBNF parser — operators wanting stricter
+validation should sanitize at the caller side. Defence in
+depth: frame cap (F-1) bounds the grammar payload at 64 MiB,
+admission queue bounds concurrent work, `max_tokens` bounds
+per-request work.
+
+Verified by `grammar_tests::oversized_grammar_is_rejected` and
+`grammar_tests::excessive_alternations_rejected`.
 
 ### F-12. Ecosystem extension trust boundary
 
