@@ -418,6 +418,14 @@ fn build_sampler_chain(
 
     // Grammar first so it can mask tokens before sampling.
     if !req.grammar.is_empty() {
+        // F-11: parse-time complexity bound. Reject grammars that are
+        // suspiciously large or contain pathologically many
+        // alternation operators before we hand them to libllama.
+        if let Err(e) = validate_grammar(&req.grammar) {
+            unsafe { ffi::llama_sampler_free(chain) };
+            return Err(e);
+        }
+
         // SAFETY: `grammar_c` outlives the call; libllama copies the
         // grammar text internally on parse.
         let grammar_c = CString::new(req.grammar.as_bytes()).map_err(|_| LlamaCppError::Sampler)?;
@@ -442,6 +450,41 @@ fn build_sampler_chain(
         ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_dist(seed));
     }
     Ok(chain)
+}
+
+/// Maximum GBNF grammar source length we'll forward to libllama.
+/// Real grammars are usually under 4 KB; 64 KB is a generous ceiling
+/// that catches obviously-abusive payloads. Codified for F-11.
+pub const MAX_GRAMMAR_BYTES: usize = 64 * 1024;
+
+/// Maximum number of alternation operators (`|`) we'll tolerate in a
+/// grammar. Each `|` multiplies the search space libllama walks per
+/// token; thousands of them in a single grammar is the
+/// "exponential alternation" case the threat model calls out.
+pub const MAX_GRAMMAR_ALTERNATIONS: usize = 4096;
+
+/// Cheap parse-time complexity check on a GBNF grammar.
+///
+/// Bounds:
+/// - Total length ≤ `MAX_GRAMMAR_BYTES`.
+/// - Top-level `|` alternation count ≤ `MAX_GRAMMAR_ALTERNATIONS`
+///   (counts every `|` in the source; conservative — `|` inside
+///   character classes still counts, which is fine because well-
+///   formed grammars don't use thousands of them).
+///
+/// This is **not** a full GBNF parser. It catches the common abuse
+/// shapes (huge grammar, exponential branching) without the cost of
+/// implementing a parser ahead of libllama. Operators who need
+/// stricter validation should sanitize at the caller side.
+fn validate_grammar(grammar: &str) -> Result<(), LlamaCppError> {
+    if grammar.len() > MAX_GRAMMAR_BYTES {
+        return Err(LlamaCppError::Sampler);
+    }
+    let alternations = grammar.bytes().filter(|&b| b == b'|').count();
+    if alternations > MAX_GRAMMAR_ALTERNATIONS {
+        return Err(LlamaCppError::Sampler);
+    }
+    Ok(())
 }
 
 fn tokenize(
@@ -510,4 +553,49 @@ fn token_to_piece(
     }
     let n = (n as usize).min(buf.len());
     &buf[..n]
+}
+
+#[cfg(test)]
+mod grammar_tests {
+    use super::*;
+
+    #[test]
+    fn small_grammar_is_accepted() {
+        let g = r#"root ::= "yes" | "no""#;
+        validate_grammar(g).unwrap();
+    }
+
+    #[test]
+    fn realistic_json_grammar_is_accepted() {
+        // ~700 bytes; well below MAX_GRAMMAR_BYTES.
+        let g = r#"
+            root   ::= object
+            object ::= "{" ws members? ws "}"
+            members ::= pair ("," ws pair)*
+            pair   ::= string ws ":" ws value
+            value  ::= object | string | number | "true" | "false" | "null"
+            string ::= "\"" [^"]* "\""
+            number ::= [0-9]+ ("." [0-9]+)?
+            ws     ::= [ \t\n]*
+        "#;
+        validate_grammar(g).unwrap();
+    }
+
+    #[test]
+    fn oversized_grammar_is_rejected() {
+        let g = "x".repeat(MAX_GRAMMAR_BYTES + 1);
+        assert!(validate_grammar(&g).is_err());
+    }
+
+    #[test]
+    fn excessive_alternations_rejected() {
+        let g = "|".repeat(MAX_GRAMMAR_ALTERNATIONS + 1);
+        assert!(validate_grammar(&g).is_err());
+    }
+
+    #[test]
+    fn alternation_count_under_threshold_accepted() {
+        let g = "|".repeat(MAX_GRAMMAR_ALTERNATIONS);
+        validate_grammar(&g).unwrap();
+    }
 }
