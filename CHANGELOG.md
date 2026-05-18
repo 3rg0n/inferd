@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS build**: `peercred::unix::from_stream` now uses
+  `sockopt::LocalPeerCred` + `sockopt::LocalPeerPid` (two separate
+  `getsockopt` calls) on macOS/iOS. `sockopt::PeerCredentials`
+  (`SO_PEERCRED`) is Linux/Android only in nix 0.27; the previous
+  code failed to compile on macOS with an unresolved import error.
+
 ### Added
 
 - **Shared content-addressable model store** ([ADR 0011](docs/adr/0011-shared-content-addressable-model-store.md)).
