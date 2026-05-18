@@ -1,0 +1,52 @@
+# cargo-fuzz harness for inferd-proto.
+#
+# This is a *separate* cargo project (not part of the workspace) so the
+# unstable nightly bits stay isolated. To run:
+#
+#   rustup install nightly
+#   cargo install cargo-fuzz
+#   cd crates/inferd-proto/fuzz
+#   cargo +nightly fuzz run frame_reader
+#
+# Targets currently exposed:
+#   - frame_reader: feed arbitrary bytes to inferd_proto::read_frame
+#                   and assert the bounded reader either returns
+#                   FrameTooLarge, returns a parsed Request, returns
+#                   Ok(None) on EOF, or returns a clean Decode/Io
+#                   error. Should never panic. Should never allocate
+#                   beyond MAX_FRAME_BYTES.
+#   - request_resolve: feed arbitrary bytes interpreted as a JSON
+#                      Request to Request::resolve(). Validation logic
+#                      should never panic; should always either return
+#                      a Resolved or an InvalidRequest error.
+#
+# Findings open issues, not block PRs. CI does not run fuzzing — see
+# docs/test-strategy.md §"Tier 6".
+
+[package]
+name = "inferd-proto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+inferd-proto  = { path = ".." }
+serde_json    = "1"
+
+[[bin]]
+name = "frame_reader"
+path = "fuzz_targets/frame_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_resolve"
+path = "fuzz_targets/request_resolve.rs"
+test = false
+doc = false
+bench = false

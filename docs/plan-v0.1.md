@@ -297,7 +297,6 @@ finding pointer.
 | Real Gemma 4 GGUF run | M2c above | Operator drives once a model file is in hand |
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
-| Tier 6 fuzzing | `docs/test-strategy.md` | `cargo +nightly fuzz` against the proto frame parser |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
 
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
@@ -315,3 +314,8 @@ F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
 - Tier 5 `security` cargo feature now aggregates the THREAT_MODEL
   regression suite under
   `crates/inferd-daemon/tests/security.rs`.
+- Tier 6 fuzz harness scaffolded at
+  `crates/inferd-proto/fuzz/` (cargo-fuzz, nightly-only,
+  excluded from workspace build). Targets: `frame_reader`,
+  `request_resolve`. Run on demand per
+  `docs/test-strategy.md` Tier 6.

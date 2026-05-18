@@ -7,6 +7,10 @@ members = [
     # Activated as each crate's source files land in M1+:
     # "crates/inferd-stdio",
 ]
+# fuzz harnesses are intentionally NOT workspace members — they require
+# nightly Rust + libfuzzer-sys + their own resolver. See
+# crates/inferd-proto/fuzz/Cargo.toml.
+exclude = ["crates/inferd-proto/fuzz"]
 
 [workspace.package]
 version = "0.1.0-alpha.0"
