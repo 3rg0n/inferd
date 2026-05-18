@@ -11,6 +11,7 @@
 //! module never touches sockets directly — Step 3's `admin.rs` owns
 //! that.
 
+use crate::admin::StatusBroadcaster;
 use crate::status::{LoadPhase, StatusEvent};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
@@ -18,7 +19,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
-use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 /// One downloadable GGUF model. The fetch contract is a single URL +
@@ -88,12 +88,12 @@ pub enum FetchError {
 pub fn fetch_model(
     spec: &ModelSpec,
     models_dir: &Path,
-    progress_tx: &broadcast::Sender<StatusEvent>,
+    broadcaster: &StatusBroadcaster,
 ) -> Result<PathBuf, FetchError> {
     let final_path = models_dir.join(&spec.filename);
 
     // Phase 1: check if the file is already correct on disk.
-    let _ = progress_tx.send(StatusEvent::LoadingModel {
+    broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::CheckingLocal {
             path: final_path.clone(),
         },
@@ -112,7 +112,7 @@ pub fn fetch_model(
                     "existing file SHA mismatch; quarantining"
                 );
                 let qpath = quarantine(&final_path)?;
-                let _ = progress_tx.send(StatusEvent::LoadingModel {
+                broadcaster.publish(StatusEvent::LoadingModel {
                     phase: LoadPhase::Quarantine {
                         path: final_path.clone(),
                         expected_sha256: spec.sha256_hex.clone(),
@@ -136,10 +136,10 @@ pub fn fetch_model(
     // Phase 2: download.
     std::fs::create_dir_all(models_dir)?;
     let partial = final_path.with_extension("partial");
-    download_with_progress(spec, &partial, progress_tx)?;
+    download_with_progress(spec, &partial, broadcaster)?;
 
     // Phase 3: verify.
-    let _ = progress_tx.send(StatusEvent::LoadingModel {
+    broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Verify {
             path: partial.clone(),
         },
@@ -147,7 +147,7 @@ pub fn fetch_model(
     let actual = sha256_of_path(&partial)?;
     if !hex_ct_eq(&actual, &spec.sha256_hex) {
         let qpath = quarantine(&partial)?;
-        let _ = progress_tx.send(StatusEvent::LoadingModel {
+        broadcaster.publish(StatusEvent::LoadingModel {
             phase: LoadPhase::Quarantine {
                 path: partial.clone(),
                 expected_sha256: spec.sha256_hex.clone(),
@@ -171,7 +171,7 @@ pub fn fetch_model(
 fn download_with_progress(
     spec: &ModelSpec,
     dest: &Path,
-    progress_tx: &broadcast::Sender<StatusEvent>,
+    broadcaster: &StatusBroadcaster,
 ) -> Result<(), FetchError> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
@@ -204,7 +204,7 @@ fn download_with_progress(
 
     // Publish initial "downloading 0 bytes" so subscribers know we got
     // past `checking_local`.
-    let _ = progress_tx.send(StatusEvent::LoadingModel {
+    broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Download {
             downloaded_bytes: 0,
             total_bytes: total,
@@ -224,7 +224,7 @@ fn download_with_progress(
         let due = downloaded >= next_byte_milestone
             || now.duration_since(last_publish) >= Duration::from_secs(5);
         if due {
-            let _ = progress_tx.send(StatusEvent::LoadingModel {
+            broadcaster.publish(StatusEvent::LoadingModel {
                 phase: LoadPhase::Download {
                     downloaded_bytes: downloaded,
                     total_bytes: total,
@@ -239,7 +239,7 @@ fn download_with_progress(
 
     // Final progress frame so the admin client sees a definitive
     // "download complete" before the verify phase starts.
-    let _ = progress_tx.send(StatusEvent::LoadingModel {
+    broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Download {
             downloaded_bytes: downloaded,
             total_bytes: total.or(Some(downloaded)),
@@ -287,9 +287,8 @@ fn hex_ct_eq(a: &str, b: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn dummy_progress() -> broadcast::Sender<StatusEvent> {
-        let (tx, _rx) = broadcast::channel(16);
-        tx
+    fn dummy_broadcaster() -> StatusBroadcaster {
+        StatusBroadcaster::new(StatusEvent::Starting)
     }
 
     #[test]
@@ -310,9 +309,9 @@ mod tests {
         };
 
         // Subscribe BEFORE calling fetch_model so we don't lose events.
-        let tx = dummy_progress();
-        let mut rx = tx.subscribe();
-        let got = fetch_model(&spec, dir.path(), &tx).unwrap();
+        let b = dummy_broadcaster();
+        let mut rx = b.subscribe();
+        let got = fetch_model(&spec, dir.path(), &b).unwrap();
         assert_eq!(got, path);
 
         // First event must be CheckingLocal.
@@ -344,8 +343,8 @@ mod tests {
             size_bytes: Some(11),
         };
 
-        let tx = dummy_progress();
-        let _ = fetch_model(&spec, dir.path(), &tx);
+        let b = dummy_broadcaster();
+        let _ = fetch_model(&spec, dir.path(), &b);
 
         // Original file is gone; a quarantine sibling exists.
         assert!(!path.exists(), "original file should have been quarantined");
@@ -370,8 +369,8 @@ mod tests {
             sha256_hex: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".into(),
             size_bytes: None,
         };
-        let tx = dummy_progress();
-        let err = fetch_model(&spec, dir.path(), &tx).unwrap_err();
+        let b = dummy_broadcaster();
+        let err = fetch_model(&spec, dir.path(), &b).unwrap_err();
         assert!(matches!(err, FetchError::InsecureUrl(_)));
     }
 

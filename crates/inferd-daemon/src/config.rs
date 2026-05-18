@@ -96,6 +96,22 @@ pub struct Cli {
     /// Comparison is constant-time. THREAT_MODEL F-8.
     #[arg(long, env = "INFERD_API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
+
+    /// Path to the operator JSON config file. Default
+    /// `~/.inferd/config.json`. When present, fetch + auto-pull are
+    /// driven from it; CLI flags (`--model-path`, `--model-sha256`,
+    /// `--n-ctx`, `--n-gpu-layers`) override config-file values when
+    /// both are supplied. When absent, the daemon falls back to
+    /// CLI-flag-only operation (dev mode).
+    #[arg(long, env = "INFERD_CONFIG")]
+    pub config: Option<PathBuf>,
+
+    /// Admin endpoint path. Defaults per-platform to the path
+    /// documented in `docs/protocol-v1.md` §"Admin endpoint" — e.g.
+    /// `/run/inferd/admin.sock` on Linux, `\\.\pipe\inferd-admin` on
+    /// Windows. Override for tests / non-default deployments.
+    #[arg(long, env = "INFERD_ADMIN_ADDR")]
+    pub admin_addr: Option<PathBuf>,
 }
 
 impl Cli {
