@@ -110,7 +110,7 @@ fn build_llamacpp() {
         dst.join("build").display()
     );
 
-    // Static link order matters: llama -> ggml.
+    // Static link order matters: llama -> ggml -> ggml-blas (if present).
     println!("cargo:rustc-link-lib=static=llama");
     println!("cargo:rustc-link-lib=static=ggml");
     println!("cargo:rustc-link-lib=static=ggml-base");
@@ -120,8 +120,15 @@ fn build_llamacpp() {
     // link the standard C++ library that llama.cpp was compiled against.
     if cfg!(target_os = "linux") {
         println!("cargo:rustc-link-lib=stdc++");
+        // ggml-cpu compiles with OpenMP on Linux; link libgomp so
+        // GOMP_barrier / GOMP_parallel etc. resolve.
+        println!("cargo:rustc-link-lib=gomp");
     } else if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=c++");
+        // ggml on macOS compiles a BLAS backend (ggml-blas) that calls
+        // vDSP_* and _ggml_backend_blas_reg from Accelerate.framework.
+        println!("cargo:rustc-link-lib=static=ggml-blas");
+        println!("cargo:rustc-link-lib=framework=Accelerate");
     }
 
     // Windows-specific system libraries pulled in by ggml-cpu (registry
