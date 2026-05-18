@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **llamacpp Linux link**: `build.rs` now links `-lgomp` on Linux so
+  `GOMP_barrier`/`GOMP_parallel`/`omp_*` symbols from `ggml-cpu`'s
+  OpenMP compilation resolve at link time.
+- **llamacpp macOS link**: `build.rs` now links `ggml-blas` (static)
+  and `Accelerate.framework` on macOS so `_ggml_backend_blas_reg` and
+  `vDSP_*` symbols resolve.
+- **Go e2e on Linux**: `TestEndToEndAgainstDaemon` now passes
+  `--admin-addr` pointing to a temp-dir socket instead of relying on
+  the platform default (`/run/inferd/admin.sock`), which requires root
+  on Linux and caused the daemon to fail before binding its TCP port.
 - **macOS build**: `peercred::unix::from_stream` now uses
   `sockopt::LocalPeerCred` + `sockopt::LocalPeerPid` (two separate
   `getsockopt` calls) on macOS/iOS. `sockopt::PeerCredentials`

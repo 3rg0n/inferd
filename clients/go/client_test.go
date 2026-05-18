@@ -119,6 +119,7 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	tmp := t.TempDir()
 	lock := filepath.Join(tmp, "inferd.lock")
 	logDir := filepath.Join(tmp, "logs")
+	adminSock := filepath.Join(tmp, "admin.sock")
 
 	// Pick a free port for the daemon to bind by asking the OS for one
 	// then immediately closing — small TOCTOU window but fine for a
@@ -137,6 +138,7 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 		"--backend", "mock",
 		"--lock", lock,
 		"--tcp", addr,
+		"--admin-addr", adminSock,
 	)
 	cmd.Env = append(os.Environ(), "INFERD_LOG_DIR="+logDir)
 	stdoutPipe, err := cmd.StdoutPipe()
