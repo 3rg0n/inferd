@@ -1,0 +1,25 @@
+crates/inferd-daemon/tests/security.rs
+  s_126aec4081f728::t_dd4f81b26c3873 98,111
+  s_126aec4081f728::t_ab76b547e586ac 133-136
+  s_126aec4081f728::t_227df43c0c1339 1-97,99-110,112-132,137-205
+docs/plan-v0.1.md
+  s_126aec4081f728::t_60c92bd5d0cc61 315-317
+.github/workflows/ci.yml
+  s_126aec4081f728::t_e30c5171fc5c9a 73-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "7eda720f43899fa4ceb038be305f22085cbb54d9",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
