@@ -1,0 +1,67 @@
+crates/inferd-daemon/src/config_file.rs
+  s_126aec4081f728::t_6be9f48a56cd95 12,17-18,26-31,50-54,73,77-81,84-85,89,94-96,183-190,230-231,251,256-257,271,346-347,357,363
+  s_126aec4081f728::t_9513ae8305ee02 274-277
+crates/inferd-daemon/src/fetch.rs
+  s_126aec4081f728::t_d05b02a8162e70 1,3-7,9-23,27,29,36,41-42,44-46,50-53,55-60,79,91,94-108,111,113-117,119-123,126,129-131,133,136,139-151,153,155,157-158,164-202,207-211,221,230-233,241-324,331,401,431-435,441-447,449-472,477,479-480,485-486,498-504,509,511-512,515-522,534-535,539,541-542,545,549-565,568,572-585,587-588
+  s_126aec4081f728::t_9513ae8305ee02 527-528
+crates/inferd-daemon/src/lib.rs
+  s_126aec4081f728::t_7de898f4f77a13 29
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_f9e40c39bda9e7 6
+docs/adr/0011-shared-content-addressable-model-store.md
+  s_126aec4081f728::t_633e79c4fb000c 1-254
+THREAT_MODEL.md
+  s_126aec4081f728::t_47a0eb4b8148cf 129-132
+docs/plan-v0.1.md
+  s_126aec4081f728::t_107c53de6eb98e 320-323
+  s_126aec4081f728::t_8e401cde2a83e7 298
+  s_126aec4081f728::t_f6e2a17dcb89ab 104
+  s_126aec4081f728::t_c2288939cecf5b 5-7,17-19,30
+  s_126aec4081f728::t_866de5f36af798 237-238
+  s_126aec4081f728::t_58b6438b6f9156 97-98
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_9513ae8305ee02 341-343,346
+  s_126aec4081f728::t_dc67c0f5b240ef 268-270,278,281-282,296-300,313-314,320-321,323-331,337-340,344-345,347-351,353,355-366,368-370,375,378
+docs/test-strategy.md
+  s_126aec4081f728::t_0ea881f63efb4d 58,60-61,63-67
+  s_126aec4081f728::t_c0ae92901a1c4a 16-19
+CLAUDE.md
+  s_126aec4081f728::t_c48da3f6d36e7c 7,9,11,13,25-36,39,45,49,51,53-56,59,63-69,73,78-83,85,95-96,99,106-107,111,121
+  s_126aec4081f728::t_01966a3b4c0d26 15
+crates/inferd-daemon/README.md
+  s_126aec4081f728::t_fc27da7770bf27 5-6,8,10-12,14-26
+clients/go/README.md
+  s_126aec4081f728::t_d9a2f876a11735 135-139
+README.md
+  s_126aec4081f728::t_cc14bcfe352213 5-7,11-12,16-20,22-23,32-42,46,48-53,55-58,60,68-69,71,74-75,82
+CHANGELOG.md
+  s_126aec4081f728::t_4e138eb5056416 128
+  s_126aec4081f728::t_e5d594657ff30c 10-45
+  s_126aec4081f728::t_23fa6a0bb25a08 261
+CONTRIBUTING.md
+  s_126aec4081f728::t_702408b94e55b4 5-8,10,20,27-28,32-34
+context.md
+  s_126aec4081f728::t_c8a0d588653c3f 1,3,7,9,11-17,24-35,38-42,44,46-49,53-63,70-79,83-88
+crates/inferd-daemon/src/store.rs
+  s_126aec4081f728::t_9513ae8305ee02 340-342,363
+  s_126aec4081f728::t_7582888214f24b 1-136,138-339,343-362,364-423
+  s_126aec4081f728::t_e7b4266dfb40e3 137
+docs/adr/README.md
+  s_126aec4081f728::t_212027eeca7c28 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "f49bc3b493c464874361e2dbbda76ce186f3add0",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
