@@ -11,6 +11,23 @@ import (
 	"time"
 )
 
+// dialAdminAddr is the platform-specific transport for the admin
+// socket. On Windows this is a named-pipe path. We reuse the same
+// retry-on-busy logic as DialPipe by way of dialing twice in tight
+// flow; the admin socket is bound at startup before any other
+// clients connect, so busy is rare.
+func dialAdminAddr(ctx context.Context, addr string) (net.Conn, error) {
+	c, err := DialPipe(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	// DialPipe wraps the pipe in a *Client; we want the underlying
+	// net.Conn for AdminClient. Pull it back out.
+	conn := c.conn
+	c.conn = nil // detach so Client.Close doesn't double-close
+	return conn, nil
+}
+
 // DialPipe opens a Windows named-pipe connection to the inferd daemon.
 //
 // Windows-only. v0.1 uses os.OpenFile against the pipe path with a
