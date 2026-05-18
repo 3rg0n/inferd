@@ -294,10 +294,10 @@ finding pointer.
 
 | Item | Finding | Notes |
 |---|---|---|
-| Real Gemma 4 GGUF run | M2c above | Operator drives once a model file is in hand |
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
+| Model installer / `inferd pull` | GA-prep | Port thlibo's pin-URL + SHA-256 download pattern; default path `~/.inferd/models/`. thlibo strips its installer once inferd's lands. |
 
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
@@ -319,3 +319,15 @@ F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
   excluded from workspace build). Targets: `frame_reader`,
   `request_resolve`. Run on demand per
   `docs/test-strategy.md` Tier 6.
+- B1 real-Gemma round-trip verified against
+  `~/.thlibo/models/gemma-4-e4b-ud-q4-k-xl.gguf` (5.1 GB
+  unsloth UD-Q4_K_XL). The `LlamaCpp` adapter loads the GGUF,
+  allocates KV cache, the daemon binds TCP, a real client
+  drives a request through the full
+  router → backend → token-stream path and receives a `Done`
+  frame with `backend="llamacpp"` + non-zero
+  `completion_tokens`. Bug fix: replaced
+  `llama_chat_apply_template` (which doesn't parse Jinja and
+  Gemma 4's GGUF embeds a Jinja template) with a direct
+  hand-rolled Gemma 4 chat format in
+  `inferd-engine::llamacpp::backend::render_chat_template`.
