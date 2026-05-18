@@ -18,12 +18,24 @@ Description=inferd local inference daemon
 Documentation=https://github.com/3rg0n/inferd
 After=network.target
 
+# Crash-loop containment: if the unit fails 3 times within 60s,
+# systemd stops auto-restarting until the operator intervenes. Without
+# this, a daemon that pre-empts on missing model + RestartSec=2 will
+# hammer the journal and burn CPU forever.
+StartLimitBurst=3
+StartLimitIntervalSec=60s
+
 [Service]
 Type=simple
+# %t expands to /run/user/<uid>/, which `RuntimeDirectory=inferd`
+# below auto-creates with mode 0700 before ExecStart. This matches
+# the resolution chain frozen in `docs/protocol-v1.md`
+# §"Default endpoint resolution" — clients compute the same path.
 ExecStart=%h/.local/bin/inferd-daemon \
     --backend mock \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
+    --admin-addr %t/inferd/admin.sock \
     --group inferd-users
 Restart=on-failure
 RestartSec=2s
