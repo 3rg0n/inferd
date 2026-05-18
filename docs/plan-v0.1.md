@@ -298,7 +298,6 @@ finding pointer.
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | GBNF parse-time complexity bound | F-11 | Accepted; bounded by `max_tokens` + queue |
 | TOCTOU mitigation on model verify | F-6 | Documented caveat; needs upstream `libllama` fd-based load |
-| Windows service-ACL SDDL hardening | F-16 (Windows part) | `sc.exe sdset` to deny non-admins; alpha-2 ships per-user posture only |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
 | Tier 5 `security` feature aggregating regression tests | `docs/test-strategy.md` | Tests exist scattered; the feature flag does not |
 | Tier 6 fuzzing | `docs/test-strategy.md` | `cargo +nightly fuzz` against the proto frame parser |
@@ -307,3 +306,6 @@ finding pointer.
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
 (see CHANGELOG.md `[0.1.0-alpha.2]`).
+
+**Closed in pre-GA work**: F-16 Windows service-ACL via
+`sc.exe sdset` in `packaging/windows/install.ps1`.

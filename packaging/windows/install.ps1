@@ -9,15 +9,16 @@
 #
 # THREAT_MODEL F-16: Windows service hardening is constrained relative
 # to systemd / launchd. The controls applied here:
-#   - Service runs in the user's session (no LocalSystem; sc.exe obj=).
+#   - Service runs as NT AUTHORITY\NetworkService (not LocalSystem).
 #   - Recovery actions reset the failure counter on success and
 #     restart on failure with a 2s delay.
+#   - Custom service DACL via sc.exe sdset: SYSTEM + Administrators get
+#     full control; Authenticated Users get query/interrogate only,
+#     no stop / start / pause / config-change. This stops a non-admin
+#     local user from killing or replacing the daemon out from under
+#     other middlewares on the same machine.
 #   - Service description points at the upstream documentation so
 #     ops staff can find the contract.
-#
-# For SDDL hardening of the service ACL itself (deny non-admins from
-# stopping the service), apply the SDDL via `sc.exe sdshow inferd-daemon`
-# / `sc.exe sdset` after install — beyond v0.1 scope.
 
 [CmdletBinding()]
 param(
@@ -75,6 +76,34 @@ if ($LASTEXITCODE -ne 0) {
 # Description and recovery.
 & sc.exe description $ServiceName "Local inference daemon. See https://github.com/3rg0n/inferd."
 & sc.exe failure $ServiceName reset= 60 actions= restart/2000/restart/2000/restart/2000
+
+# Custom service DACL (THREAT_MODEL F-16, Windows half).
+#
+# SDDL service-rights breakdown:
+#   CC SERVICE_QUERY_CONFIG       LC SERVICE_QUERY_STATUS
+#   SW SERVICE_ENUMERATE_DEPENDENTS  LO SERVICE_INTERROGATE
+#   RP SERVICE_START              WP SERVICE_STOP
+#   DT SERVICE_PAUSE_CONTINUE     CR SERVICE_USER_DEFINED_CONTROL
+#   RC READ_CONTROL
+#
+# Layout:
+#   D:                                            -- DACL
+#     (A;;CCLCSWRPWPDTLOCRRC;;;SY)                -- LOCAL_SYSTEM: full
+#     (A;;CCLCSWRPWPDTLOCRRC;;;BA)                -- Administrators: full
+#     (A;;CCLCLORC;;;AU)                          -- Auth Users: query/interrogate only
+#   S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)     -- SACL: audit failures from anyone
+#
+# This denies SERVICE_STOP / SERVICE_START / SERVICE_PAUSE_CONTINUE /
+# SERVICE_CHANGE_CONFIG to Authenticated Users. They retain
+# SERVICE_QUERY_STATUS / SERVICE_QUERY_CONFIG / SERVICE_INTERROGATE
+# / READ_CONTROL — enough to know it's running, not enough to mess
+# with it.
+$sddl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPDTLOCRRC;;;BA)(A;;CCLCLORC;;;AU)" +
+        "S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)"
+& sc.exe sdset $ServiceName $sddl | Write-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "sc.exe sdset exit=$LASTEXITCODE; service installed but DACL not hardened. Verify with sc.exe sdshow $ServiceName"
+}
 
 # Environment variables for the service. INFERD_LOG_DIR controls the
 # activity log location.
