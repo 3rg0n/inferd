@@ -12,6 +12,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
+pub mod admin;
 pub mod auth;
 pub mod config;
 pub mod config_file;

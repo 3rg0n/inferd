@@ -28,6 +28,30 @@ use tokio::net::{TcpListener, TcpStream};
 /// alongside an old thlibod during migration without port conflicts.
 pub const DEFAULT_TCP_ADDR: &str = "127.0.0.1:47321";
 
+/// Default admin endpoint per platform, per `docs/protocol-v1.md`
+/// §"Admin endpoint". Tilde-expanded against `$HOME` on Unix.
+pub fn default_admin_addr() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::PathBuf::from("/run/inferd/admin.sock")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut p = std::env::temp_dir();
+        p.push("inferd");
+        p.push("admin.sock");
+        p
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(DEFAULT_ADMIN_PIPE_PATH)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        std::path::PathBuf::from("/tmp/inferd/admin.sock")
+    }
+}
+
 /// Trait abstracting an accepted connection so the lifecycle can speak to
 /// either a Unix-socket stream or a TCP stream uniformly.
 pub trait Connection: AsyncRead + AsyncWrite + Unpin + Send {
@@ -94,6 +118,58 @@ pub async fn bind_uds(path: &Path, group: Option<&str>) -> io::Result<tokio::net
     Ok(listener)
 }
 
+/// Bind the *admin* Unix domain socket at `path` with mode `0600`
+/// (Unix only). Stricter than `bind_uds`: the admin socket is
+/// daemon-uid only — no group-shared inference, no operator group.
+/// Per ADR 0009 + `docs/protocol-v1.md` §"Admin endpoint".
+#[cfg(unix)]
+pub async fn bind_admin_uds(path: &Path) -> io::Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("admin uds path is a symlink (refused): {}", path.display()),
+            ));
+        }
+        std::fs::remove_file(path)?;
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let listener = tokio::net::UnixListener::bind(path)?;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(path, perms)?;
+    Ok(listener)
+}
+
+/// Non-Unix stub for `bind_admin_uds`. Use [`bind_admin_pipe`] on
+/// Windows.
+#[cfg(not(unix))]
+pub async fn bind_admin_uds(_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unix domain sockets are not supported on this platform; use bind_admin_pipe",
+    ))
+}
+
+/// Bind the *admin* Windows named pipe at `path` (Windows only). The
+/// default DACL applies (creating user only); per the inference-pipe
+/// rationale, that's adequate for the per-user daemon model.
+#[cfg(windows)]
+pub fn bind_admin_pipe(
+    path: &str,
+    first: bool,
+) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    let mut opts = ServerOptions::new();
+    opts.first_pipe_instance(first);
+    opts.create(path)
+}
+
 /// Stub for non-Unix platforms; always returns `Unsupported`. On Windows,
 /// callers should use [`bind_named_pipe`] instead.
 #[cfg(not(unix))]
@@ -110,6 +186,11 @@ pub async fn bind_uds(_path: &Path, _group: Option<&str>) -> io::Result<()> {
 /// alongside an old thlibod during migration without endpoint conflicts.
 #[cfg(windows)]
 pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\inferd-infer";
+
+/// Default Windows named-pipe path for the admin endpoint per
+/// `docs/protocol-v1.md` §"Admin endpoint".
+#[cfg(windows)]
+pub const DEFAULT_ADMIN_PIPE_PATH: &str = r"\\.\pipe\inferd-admin";
 
 /// Bind a Windows named-pipe **server endpoint** at `path`.
 ///
