@@ -70,6 +70,21 @@ jobs:
       - run: cargo clippy --all-targets --features inferd-engine/llamacpp -- -D warnings
       - run: cargo test --all --features inferd-engine/llamacpp
 
+  security:
+    name: ${{ matrix.os }} / Tier 5 security regression
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tier 5 security suite
+        run: cargo test -p inferd-daemon --features security --test security
+
   go-client:
     name: ${{ matrix.os }} / go client
     runs-on: ${{ matrix.os }}
