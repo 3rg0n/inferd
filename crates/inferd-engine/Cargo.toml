@@ -38,6 +38,10 @@ tracing      = { workspace = true }
 sha2         = { workspace = true }
 subtle       = { workspace = true }   # Constant-time hash compare (THREAT_MODEL F-5).
 bytes        = { workspace = true }
+# tempfile is needed at runtime for the F-6 TOCTOU mitigation in
+# llamacpp::loader: when an expected SHA-256 is supplied, the model is
+# copied into a daemon-owned tempdir before hashing + load.
+tempfile     = "3"
 
 [build-dependencies]
 # Only invoked when the `llamacpp` feature is enabled; the build.rs

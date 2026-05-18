@@ -297,7 +297,6 @@ finding pointer.
 | Real Gemma 4 GGUF run | M2c above | Operator drives once a model file is in hand |
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | GBNF parse-time complexity bound | F-11 | Accepted; bounded by `max_tokens` + queue |
-| TOCTOU mitigation on model verify | F-6 | Documented caveat; needs upstream `libllama` fd-based load |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
 | Tier 5 `security` feature aggregating regression tests | `docs/test-strategy.md` | Tests exist scattered; the feature flag does not |
 | Tier 6 fuzzing | `docs/test-strategy.md` | `cargo +nightly fuzz` against the proto frame parser |
@@ -307,5 +306,8 @@ finding pointer.
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
 (see CHANGELOG.md `[0.1.0-alpha.2]`).
 
-**Closed in pre-GA work**: F-16 Windows service-ACL via
-`sc.exe sdset` in `packaging/windows/install.ps1`.
+**Closed in pre-GA work**:
+- F-6 TOCTOU mitigation: copy-to-tempdir before hash + load in
+  `inferd-engine::llamacpp::loader::load_model`.
+- F-16 Windows service-ACL via `sc.exe sdset` in
+  `packaging/windows/install.ps1`.

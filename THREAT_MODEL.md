@@ -103,13 +103,27 @@ performed at load. If an attacker can rewrite the file
 between verification and `mmap`, the engine loads
 attacker-controlled bytes.
 
-**Status.** applies.
+**Status.** mitigated.
+`crates/inferd-engine/src/llamacpp/loader.rs::load_model`,
+when `expected_sha256` is `Some`, copies the model file into
+a daemon-owned `tempfile::TempDir`, then hashes the copy and
+hands the copy path to `llama_model_load_from_file`. The
+`NamedTempFile` is owned by the returned `ModelHandle` so the
+copy persists for the lifetime of the loaded model — an
+attacker rewriting the *original* path on disk after the copy
+cannot affect the in-process model state. The tempdir is
+deleted when the `ModelHandle` drops, after `llama_model_free`
+has released the mmap.
 
-**Mitigation.** Open the file once read-only, hash the open
-file descriptor, then `mmap` from the same descriptor — never
-re-open by path. Daemon runs per-user; the model file lives
-under the user's own control. Document the threat so packagers
-do not place model files in world-writable paths.
+When `expected_sha256` is `None`, the original path goes
+straight to `libllama` with no copy and no hash. Operators
+who do not configure a hash explicitly accept the
+"operator-trusted model file" mode — daemon runs per-user, the
+model file lives under the user's own control, an attacker
+who can rewrite the user's model file has already won.
+
+Verified by `loader::tests::load_model_with_wrong_hash_fails_at_hash_check`
+and `load_model_with_no_hash_skips_copy_path`.
 
 ### F-7. Per-caller identity (peer credentials)
 
