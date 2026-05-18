@@ -1,0 +1,25 @@
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_483205c32d708a 455-489
+  s_126aec4081f728::t_4ae79fdefa36a7 421-428
+  s_126aec4081f728::t_5c3780b7908877 557-601
+THREAT_MODEL.md
+  s_126aec4081f728::t_87bb5321b19d15 229-248
+docs/plan-v0.1.md
+  s_126aec4081f728::t_655cec9ff4d7f5 311-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "10b834446d0e2f0dfad64b80ba279882b9e3e6b6",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
