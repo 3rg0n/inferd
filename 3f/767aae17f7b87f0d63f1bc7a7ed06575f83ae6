@@ -1,0 +1,35 @@
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_9dbfda6357a4f8 28-40,44,63-86,88
+  s_126aec4081f728::t_96d78086a97637 87
+README.md
+  s_126aec4081f728::t_063a992a1faae5 79-144
+CHANGELOG.md
+  s_126aec4081f728::t_5668055d48dafc 12-28
+clients/go/admin.go
+  s_126aec4081f728::t_575a093b558156 84-90,94-100
+docs/protocol-v1.md
+  s_126aec4081f728::t_e0de4abe262ca9 168,176-204
+  s_126aec4081f728::t_3eb8d12ccbb77e 143-145
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_69ae94fd16b597 21-27,30-33,38
+crates/inferd-client/src/wait.rs
+  s_126aec4081f728::t_b80ae322e50be4 106-110,114-131
+clients/go/admin_test.go
+  s_126aec4081f728::t_5055d90b6cb079 175-179,191-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "3f767aae17f7b87f0d63f1bc7a7ed06575f83ae6",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
