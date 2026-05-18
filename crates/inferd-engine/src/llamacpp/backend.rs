@@ -213,69 +213,73 @@ impl Backend for LlamaCpp {
     }
 }
 
-/// Apply the model's chat template to the messages array and return the
-/// rendered prompt as bytes. Returns `None` if the model has no template
-/// or the call fails.
+/// Render messages into Gemma 4's chat-template format, by hand.
+///
+/// We don't use `llama_chat_apply_template`: it explicitly does not
+/// parse Jinja, and Gemma 4's canonical template is shipped as Jinja
+/// inside the GGUF metadata. llama.cpp does have a fallback table of
+/// hand-coded templates keyed by architecture name, but relying on
+/// that table to recognise a Gemma quant we vendored is brittle —
+/// especially with unsloth's repacks where the architecture string
+/// occasionally drifts.
+///
+/// Gemma 4's format is small and well-known, documented in
+/// `docs/protocol-v1.md` and in upstream's `tokenizer_config.json`:
+///
+/// ```text
+/// <start_of_turn>user
+/// <user message><end_of_turn>
+/// <start_of_turn>model
+/// <assistant message — for replay><end_of_turn>
+/// <start_of_turn>model
+/// ```
+///
+/// System messages are folded into the first user turn (Gemma 4 has
+/// no dedicated system role). The trailing `<start_of_turn>model\n`
+/// primes the model to emit the next assistant reply.
 fn render_chat_template(
-    state: &Arc<Mutex<State>>,
+    _state: &Arc<Mutex<State>>,
     messages: &[inferd_proto::Message],
 ) -> Option<Vec<u8>> {
-    let guard = state.lock().ok()?;
+    use inferd_proto::Role;
 
-    // Build the C-side `llama_chat_message` array.
-    let mut roles: Vec<CString> = Vec::with_capacity(messages.len());
-    let mut contents: Vec<CString> = Vec::with_capacity(messages.len());
+    if messages.is_empty() {
+        return None;
+    }
+
+    // Pre-allocate generously: each turn adds ~30 bytes of boilerplate.
+    let mut out = String::with_capacity(
+        messages.iter().map(|m| m.content.len()).sum::<usize>() + 64 * messages.len() + 32,
+    );
+
+    // Gemma has no system role. If the first message is a system
+    // prompt, prepend it to the first user turn we encounter.
+    let mut pending_system: Option<&str> = None;
     for m in messages {
-        roles.push(CString::new(role_str(m.role)).ok()?);
-        contents.push(CString::new(m.content.as_str()).ok()?);
-    }
-
-    let chat: Vec<ffi::llama_chat_message> = roles
-        .iter()
-        .zip(contents.iter())
-        .map(|(r, c)| ffi::llama_chat_message {
-            role: r.as_ptr(),
-            content: c.as_ptr(),
-        })
-        .collect();
-
-    // SAFETY: pointers in `chat` outlive the call (roles/contents kept
-    // alive in this scope). `model_chat_template` returns a borrowed
-    // C string owned by libllama; we copy out before letting it drop.
-    let tmpl_ptr = unsafe { ffi::llama_model_chat_template(guard.model.as_ptr(), ptr::null()) };
-
-    let mut out = vec![0u8; messages.iter().map(|m| m.content.len()).sum::<usize>() * 2 + 1024];
-    loop {
-        // SAFETY: FFI. `chat.as_ptr()` valid for `chat.len()` entries;
-        // `out.as_mut_ptr()` valid for `out.len()` bytes.
-        let n = unsafe {
-            ffi::llama_chat_apply_template(
-                tmpl_ptr,
-                chat.as_ptr(),
-                chat.len(),
-                true,
-                out.as_mut_ptr() as *mut std::os::raw::c_char,
-                out.len() as i32,
-            )
-        };
-        if n < 0 {
-            return None;
+        match m.role {
+            Role::System => {
+                pending_system = Some(m.content.as_str());
+            }
+            Role::User => {
+                out.push_str("<start_of_turn>user\n");
+                if let Some(sys) = pending_system.take() {
+                    out.push_str(sys);
+                    out.push_str("\n\n");
+                }
+                out.push_str(&m.content);
+                out.push_str("<end_of_turn>\n");
+            }
+            Role::Assistant => {
+                out.push_str("<start_of_turn>model\n");
+                out.push_str(&m.content);
+                out.push_str("<end_of_turn>\n");
+            }
         }
-        if (n as usize) <= out.len() {
-            out.truncate(n as usize);
-            return Some(out);
-        }
-        // Need more space; resize and retry.
-        out.resize(n as usize, 0);
     }
-}
+    // Prime the next assistant turn.
+    out.push_str("<start_of_turn>model\n");
 
-fn role_str(r: inferd_proto::Role) -> &'static str {
-    match r {
-        inferd_proto::Role::System => "system",
-        inferd_proto::Role::User => "user",
-        inferd_proto::Role::Assistant => "assistant",
-    }
+    Some(out.into_bytes())
 }
 
 /// Synchronous decode + sample loop. Runs on `spawn_blocking`.

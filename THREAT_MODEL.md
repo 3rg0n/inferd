@@ -125,6 +125,12 @@ who can rewrite the user's model file has already won.
 Verified by `loader::tests::load_model_with_wrong_hash_fails_at_hash_check`
 and `load_model_with_no_hash_skips_copy_path`.
 
+<!-- B1 verified: end-to-end real-Gemma run via
+     `tests/echo_llamacpp.rs` against `~/.thlibo/models/
+     gemma-4-e4b-ud-q4-k-xl.gguf`. Done frame carries
+     backend="llamacpp", stop_reason in {End, Length},
+     completion_tokens > 0. Full path validated. -->
+
 ### F-7. Per-caller identity (peer credentials)
 
 **Description.** Without per-caller identity, any local
