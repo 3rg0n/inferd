@@ -1,0 +1,29 @@
+clients/go/client_windows.go
+  s_126aec4081f728::t_ae2f37989329a1 14-30
+clients/go/client_unix.go
+  s_126aec4081f728::t_14ab840c848d39 21-27
+clients/go/README.md
+  s_126aec4081f728::t_b2dc9906def34f 8-11,13-16,19-25,49-118,120-124,128-133,135-139,144,147-148,152-154
+clients/go/admin_test.go
+  s_126aec4081f728::t_6ee0d88fff6cde 1-187
+clients/go/admin.go
+  s_126aec4081f728::t_8d46ce6089604f 309
+  s_126aec4081f728::t_b494561724a654 10
+  s_126aec4081f728::t_ffa91b680ee9d4 1-9,11-308,310-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "d0e038f95c87d4fc90d062463ae622bc8fdc8110",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
