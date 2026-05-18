@@ -26,3 +26,4 @@ pub mod queue;
 pub mod redact;
 pub mod router;
 pub mod status;
+pub mod store;

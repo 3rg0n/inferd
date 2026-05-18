@@ -13,9 +13,10 @@ config; it is the contract that the CI config implements.
   mitigation is removed.
 - Keep the developer-loop fast. Most tests run without a real
   GGUF model on disk and without a C++ toolchain.
-- Make the "drop-in functional replacement" claim verifiable.
-  M2 exit criterion is end-to-end test parity with thlibo's
-  integration harness, pointed at a running inferd.
+- Verify the cross-language wire surface. M2 exit criterion is
+  end-to-end Go and Rust client round-trips against a running
+  inferd, exercising the full `Request` / `Response` / admin
+  envelope.
 
 ## Test tiers
 
@@ -54,16 +55,16 @@ config; it is the contract that the CI config implements.
   cancellation propagation through the C++ generation loop,
   multi-request serialisation through the queue.
 
-### Tier 4 — functional replacement validation
+### Tier 4 — cross-language wire validation
 
-- The thlibo integration harness, repointed at a running
-  inferd. (thlibo will be refactored against the inferd Go
-  client; until then, the harness exercises raw NDJSON.)
+- Hand-written Go and Rust client suites, pointed at a running
+  inferd binary. Run on every supported platform.
 - Required to pass before tagging v0.1.0.
-- Exercises: any thlibo behaviour that crosses the wire —
-  request shape, response shape, streaming, cancellation,
-  errors. This is the load-bearing test for the "functional
-  replacement" claim.
+- Exercises: every wire shape the daemon ships — `Request` and
+  `Response` envelopes, NDJSON framing edge cases, streaming,
+  cancellation on disconnect, error frames, admin-socket
+  lifecycle events. This is the load-bearing test for the
+  cross-language stability claim.
 
 ### Tier 5 — security regression tests
 

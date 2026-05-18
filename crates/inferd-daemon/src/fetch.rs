@@ -1,42 +1,63 @@
-//! First-boot model bootstrap.
+//! First-boot model bootstrap into the shared CAS store.
 //!
-//! Downloads a pinned GGUF model, verifies SHA-256 with a constant-time
-//! compare, atomically renames into place, quarantines on mismatch. ADR
-//! 0010 carves a narrow HTTPS exception to ADR 0006's lean-core rule
-//! specifically for this purpose: outbound HTTPS to a configured
-//! registry, scoped to the model named in `~/.inferd/config.json`.
+//! Per ADR 0010 the daemon may issue outbound HTTPS for one purpose
+//! only: fetching a pinned GGUF named in `~/.inferd/config.json`. Per
+//! ADR 0011 the bytes land in the shared content-addressable store
+//! at `$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`, with a manifest
+//! written at `$MODELS_HOME/manifests/<name>.json`.
 //!
-//! Progress events publish through a `tokio::sync::broadcast` channel
-//! that the admin socket fans out to connected clients. The fetch
-//! module never touches sockets directly — Step 3's `admin.rs` owns
-//! that.
+//! Producer flow:
+//!
+//! 1. Acquire `LOCK_EX` on `$MODELS_HOME/locks/<name>.lock`.
+//! 2. If the manifest already names a blob and that blob exists:
+//!    optional re-verify, then return the blob path immediately.
+//! 3. Otherwise stream HTTPS into
+//!    `$MODELS_HOME/blobs/sha256/<aa>/.partial-<hash>/data.tmp`
+//!    with a running SHA-256.
+//! 4. Constant-time compare computed vs expected SHA (F-5).
+//! 5. On match: atomic-rename into place, write manifest. On
+//!    mismatch: move bad bytes into `locks/quarantine/` and bail.
+//! 6. Release the lock.
+//!
+//! Progress events publish through a `StatusBroadcaster` so the
+//! admin socket can fan them out to UIs and middleware.
 
 use crate::admin::StatusBroadcaster;
 use crate::status::{LoadPhase, StatusEvent};
+use crate::store::{format_blob_ref, parse_blob_ref, Manifest, ManifestSource, ModelStore};
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
-/// One downloadable GGUF model. The fetch contract is a single URL +
+/// One downloadable GGUF model. The fetch contract is one URL +
 /// expected SHA-256; anything more elaborate (registries, mirrors)
 /// belongs in the operator's HTTP proxy or a `wget` step, not here.
 #[derive(Debug, Clone)]
 pub struct ModelSpec {
-    /// Stable identifier, e.g. `"gemma-4-e4b"`.
+    /// Stable identifier, e.g. `"gemma-4-e4b"`. Used as the manifest
+    /// filename (`<name>.json`) and the lock-file basename.
     pub name: String,
-    /// Filename inside `models_dir`.
-    pub filename: String,
-    /// Direct-download HTTPS endpoint. Must be `https://`.
+    /// Direct-download HTTPS endpoint. Must be `https://`. Empty
+    /// string is permitted for CLI-only mode where the operator has
+    /// pre-placed bytes at a manifest-defined blob path.
     pub source_url: String,
     /// Lowercase hex SHA-256 of the GGUF bytes. Required.
     pub sha256_hex: String,
-    /// Advisory total size for progress reporting. `None` = unknown
-    /// (Content-Length missing); progress frames omit `total_bytes`.
+    /// Advisory total size for progress reporting + manifest. `None`
+    /// = unknown (Content-Length missing); progress frames omit
+    /// `total_bytes` and the manifest records the actually-downloaded
+    /// size.
     pub size_bytes: Option<u64>,
+    /// SPDX-style license id when known. Recorded in the manifest
+    /// for cross-tool consumers; not consulted at runtime.
+    pub license: Option<String>,
+    /// Diagnostic provenance for the manifest. Optional — falls back
+    /// to a derived shape from `source_url` if absent.
+    pub source: Option<ManifestSource>,
 }
 
 /// Errors produced by `fetch_model`.
@@ -55,7 +76,7 @@ pub enum FetchError {
     #[error("io: {0}")]
     Io(#[from] io::Error),
     /// SHA-256 mismatch between downloaded bytes and `sha256_hex`.
-    /// File has been moved to `<dest>.quarantine.<rfc3339>`.
+    /// File has been moved into `locks/quarantine/`.
     #[error(
         "SHA-256 mismatch (expected {expected}, got {actual}); quarantined to {quarantine_path}"
     )]
@@ -67,76 +88,127 @@ pub enum FetchError {
         /// Where the bad bytes were moved.
         quarantine_path: PathBuf,
     },
-    /// Atomic rename of the partial into the final path failed.
+    /// Atomic rename of the partial into the final blob path failed.
     #[error("finalise rename: {0}")]
     Finalise(io::Error),
+    /// Another producer holds the per-name lock. Another daemon is
+    /// currently fetching this same model.
+    #[error("model {name:?} is being fetched by another process")]
+    LockContended {
+        /// Model name that was contended.
+        name: String,
+    },
+    /// CLI-only mode: source_url is empty AND no manifest exists.
+    /// Operator must either set source_url or pre-write a manifest +
+    /// blob.
+    #[error("model {name:?} has no source_url and no manifest exists")]
+    NoSourceNoManifest {
+        /// Model name that couldn't be resolved.
+        name: String,
+    },
 }
 
-/// Resolve a model: if the file already exists at the expected path
-/// AND its SHA matches `spec.sha256_hex`, return immediately. Otherwise
-/// download into `<models_dir>/<filename>.partial`, verify, atomic-rename.
+/// Resolve a model into its CAS blob path.
 ///
-/// Publishes `StatusEvent`s to `progress_tx` throughout. Subscribers
-/// (the admin socket) get a stream of:
-/// - `LoadingModel(CheckingLocal)` when entering the function.
-/// - `LoadingModel(Download { downloaded, total })` periodically during
-///   the body stream.
-/// - `LoadingModel(Verify)` after download completes.
-/// - `LoadingModel(Quarantine { ... })` if SHA mismatches.
+/// If the manifest exists and its referenced blob is on disk, return
+/// the blob path immediately (no network, no re-hash by default).
+/// Otherwise — if `source_url` is set — download into the partial
+/// area, verify, atomic-rename into place, write the manifest, and
+/// return the blob path.
 ///
-/// Returns the absolute path of the verified model file.
+/// Publishes phase events through `broadcaster`:
+/// - `CheckingLocal { path }` on entry.
+/// - `Download { downloaded, total, source_url }` periodically.
+/// - `Verify { path }` after download completes.
+/// - `Quarantine { ... }` on SHA mismatch.
 pub fn fetch_model(
     spec: &ModelSpec,
-    models_dir: &Path,
+    store: &ModelStore,
     broadcaster: &StatusBroadcaster,
 ) -> Result<PathBuf, FetchError> {
-    let final_path = models_dir.join(&spec.filename);
+    store.ensure_layout()?;
 
-    // Phase 1: check if the file is already correct on disk.
+    let blob_path = store.blob_path(&spec.sha256_hex);
+
+    // Phase 1: check the manifest + blob.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::CheckingLocal {
-            path: final_path.clone(),
+            path: blob_path.clone(),
         },
     });
-    if final_path.exists() {
-        match sha256_of_path(&final_path) {
-            Ok(actual) if hex_ct_eq(&actual, &spec.sha256_hex) => {
-                info!(path = %final_path.display(), "model already present; SHA matches");
-                return Ok(final_path);
-            }
-            Ok(actual) => {
-                warn!(
-                    path = %final_path.display(),
-                    expected = %spec.sha256_hex,
-                    actual = %actual,
-                    "existing file SHA mismatch; quarantining"
+
+    if let Some(manifest) = store.read_manifest(&spec.name)? {
+        // Manifest names a SHA. If it matches the expected SHA AND
+        // the blob is on disk, we're done — content addressing is
+        // the trust boundary.
+        if let Some(manifest_sha) = parse_blob_ref(&manifest.blob) {
+            if hex_ct_eq(manifest_sha, &spec.sha256_hex) && blob_path.exists() {
+                info!(
+                    name = %spec.name,
+                    blob = %blob_path.display(),
+                    "manifest + blob already present; skipping fetch"
                 );
-                let qpath = quarantine(&final_path)?;
-                broadcaster.publish(StatusEvent::LoadingModel {
-                    phase: LoadPhase::Quarantine {
-                        path: final_path.clone(),
-                        expected_sha256: spec.sha256_hex.clone(),
-                        actual_sha256: actual,
-                        quarantine_path: qpath,
-                    },
-                });
-                // Fall through to download.
+                return Ok(blob_path);
             }
-            Err(e) => {
-                warn!(path = %final_path.display(), error = %e, "couldn't hash existing file; redownloading");
+            if !hex_ct_eq(manifest_sha, &spec.sha256_hex) {
+                warn!(
+                    name = %spec.name,
+                    expected = %spec.sha256_hex,
+                    in_manifest = %manifest_sha,
+                    "manifest blob ref disagrees with config sha; rewriting manifest"
+                );
             }
         }
     }
 
-    // Validate URL scheme before any network call.
+    // Acquire the per-name lock. Held until the function returns.
+    let _lock = acquire_name_lock(store, &spec.name)?;
+
+    // Re-check after lock acquisition (someone else may have
+    // finished between phase 1 and the lock).
+    if blob_path.exists() {
+        let actual = sha256_of_path(&blob_path)?;
+        if hex_ct_eq(&actual, &spec.sha256_hex) {
+            // Make sure the manifest reflects current truth.
+            write_manifest_for(store, spec, blob_path.metadata()?.len())?;
+            info!(name = %spec.name, "blob landed by concurrent producer; manifest written");
+            return Ok(blob_path);
+        }
+        // Blob exists at the right path but bytes are wrong. The CAS
+        // path IS the hash, so this should be impossible without
+        // tampering. Quarantine and re-fetch.
+        warn!(
+            name = %spec.name,
+            expected = %spec.sha256_hex,
+            actual = %actual,
+            "blob at CAS path failed re-hash; quarantining"
+        );
+        let qpath = store.quarantine(&blob_path, "sha-mismatch")?;
+        broadcaster.publish(StatusEvent::LoadingModel {
+            phase: LoadPhase::Quarantine {
+                path: blob_path.clone(),
+                expected_sha256: spec.sha256_hex.clone(),
+                actual_sha256: actual,
+                quarantine_path: qpath,
+            },
+        });
+    }
+
+    // Phase 2: download — guarded by source_url presence.
+    if spec.source_url.is_empty() {
+        return Err(FetchError::NoSourceNoManifest {
+            name: spec.name.clone(),
+        });
+    }
     if !spec.source_url.starts_with("https://") {
         return Err(FetchError::InsecureUrl(spec.source_url.clone()));
     }
 
-    // Phase 2: download.
-    std::fs::create_dir_all(models_dir)?;
-    let partial = final_path.with_extension("partial");
-    download_with_progress(spec, &partial, broadcaster)?;
+    let partial = store.partial_path(&spec.sha256_hex);
+    if let Some(parent) = partial.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let downloaded = download_with_progress(spec, &partial, broadcaster)?;
 
     // Phase 3: verify.
     broadcaster.publish(StatusEvent::LoadingModel {
@@ -146,7 +218,7 @@ pub fn fetch_model(
     });
     let actual = sha256_of_path(&partial)?;
     if !hex_ct_eq(&actual, &spec.sha256_hex) {
-        let qpath = quarantine(&partial)?;
+        let qpath = store.quarantine(&partial, "sha-mismatch")?;
         broadcaster.publish(StatusEvent::LoadingModel {
             phase: LoadPhase::Quarantine {
                 path: partial.clone(),
@@ -155,6 +227,10 @@ pub fn fetch_model(
                 quarantine_path: qpath.clone(),
             },
         });
+        // Best-effort cleanup of the empty `.partial-<hash>` dir.
+        if let Some(parent) = partial.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
         return Err(FetchError::HashMismatch {
             expected: spec.sha256_hex.clone(),
             actual,
@@ -162,17 +238,97 @@ pub fn fetch_model(
         });
     }
 
-    // Phase 4: atomic rename.
-    std::fs::rename(&partial, &final_path).map_err(FetchError::Finalise)?;
-    info!(path = %final_path.display(), "model installed");
-    Ok(final_path)
+    // Phase 4: atomic rename into the CAS path.
+    if let Some(parent) = blob_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(&partial, &blob_path).map_err(FetchError::Finalise)?;
+    if let Some(parent) = partial.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+
+    // Phase 5: write manifest last. Readers don't trust a manifest
+    // until its blob is on disk, so manifest-after-blob is the safe
+    // ordering.
+    write_manifest_for(store, spec, downloaded)?;
+    info!(
+        name = %spec.name,
+        blob = %blob_path.display(),
+        "model installed"
+    );
+    Ok(blob_path)
+}
+
+/// RAII handle on `$MODELS_HOME/locks/<name>.lock`. Dropped at
+/// function exit releases the lock.
+struct NameLock {
+    _file: File,
+}
+
+fn acquire_name_lock(store: &ModelStore, name: &str) -> Result<NameLock, FetchError> {
+    let lock_path = store.lock_path(name);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(NameLock { _file: file }),
+        Err(TryLockError::WouldBlock) => Err(FetchError::LockContended {
+            name: name.to_string(),
+        }),
+        Err(TryLockError::Error(e)) => Err(FetchError::Io(e)),
+    }
+}
+
+fn write_manifest_for(
+    store: &ModelStore,
+    spec: &ModelSpec,
+    size_bytes: u64,
+) -> Result<(), FetchError> {
+    let source = spec.source.clone().unwrap_or_else(|| ManifestSource {
+        registry: registry_from_url(&spec.source_url),
+        repo: String::new(),
+        revision: String::new(),
+        filename: filename_from_url(&spec.source_url),
+    });
+    let manifest = Manifest {
+        schema_version: 1,
+        name: spec.name.clone(),
+        format: "gguf".into(),
+        blob: format_blob_ref(&spec.sha256_hex),
+        size_bytes,
+        license: spec.license.clone(),
+        source,
+        produced_by: format!("inferd/{}", env!("CARGO_PKG_VERSION")),
+        produced_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    store
+        .write_manifest(&manifest)
+        .map_err(FetchError::Io)
+        .map(|_| ())
+}
+
+fn registry_from_url(url: &str) -> String {
+    url.strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn filename_from_url(url: &str) -> String {
+    url.rsplit('/').next().unwrap_or("").to_string()
 }
 
 fn download_with_progress(
     spec: &ModelSpec,
     dest: &Path,
     broadcaster: &StatusBroadcaster,
-) -> Result<(), FetchError> {
+) -> Result<u64, FetchError> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
         .build();
@@ -202,8 +358,6 @@ fn download_with_progress(
     let mut last_publish = Instant::now();
     let mut next_byte_milestone: u64 = 32 << 20; // every 32 MiB
 
-    // Publish initial "downloading 0 bytes" so subscribers know we got
-    // past `checking_local`.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Download {
             downloaded_bytes: 0,
@@ -237,8 +391,6 @@ fn download_with_progress(
     }
     file.flush()?;
 
-    // Final progress frame so the admin client sees a definitive
-    // "download complete" before the verify phase starts.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Download {
             downloaded_bytes: downloaded,
@@ -246,17 +398,7 @@ fn download_with_progress(
             source_url: spec.source_url.clone(),
         },
     });
-    Ok(())
-}
-
-/// Move `path` aside to `<path>.quarantine.<rfc3339>`. Used for
-/// SHA-mismatched files so we never silently re-download bytes that
-/// purport to be the right size — that's a tampering signal.
-fn quarantine(path: &Path) -> io::Result<PathBuf> {
-    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let qpath = path.with_extension(format!("quarantine.{ts}"));
-    std::fs::rename(path, &qpath)?;
-    Ok(qpath)
+    Ok(downloaded)
 }
 
 /// Streaming SHA-256 of a file as lowercase hex.
@@ -286,35 +428,63 @@ fn hex_ct_eq(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    // SHA-256("hello world").
+    const HELLO_WORLD_SHA: &str =
+        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 
     fn dummy_broadcaster() -> StatusBroadcaster {
         StatusBroadcaster::new(StatusEvent::Starting)
     }
 
+    fn write_blob_at(store: &ModelStore, sha: &str, contents: &[u8]) -> PathBuf {
+        let blob = store.blob_path(sha);
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, contents).unwrap();
+        blob
+    }
+
     #[test]
-    fn fetch_returns_immediately_when_file_present_and_hash_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("blob.gguf");
-        let mut f = File::create(&path).unwrap();
-        f.write_all(b"hello world").unwrap();
-        f.sync_all().unwrap();
+    fn fetch_returns_immediately_when_manifest_and_blob_present() {
+        let dir = tempdir().unwrap();
+        let store = ModelStore::open(dir.path());
+        store.ensure_layout().unwrap();
+
+        // Pre-seed manifest + blob.
+        let blob = write_blob_at(&store, HELLO_WORLD_SHA, b"hello world");
+        let manifest = Manifest {
+            schema_version: 1,
+            name: "test".into(),
+            format: "gguf".into(),
+            blob: format_blob_ref(HELLO_WORLD_SHA),
+            size_bytes: 11,
+            license: None,
+            source: ManifestSource {
+                registry: "example.invalid".into(),
+                repo: String::new(),
+                revision: String::new(),
+                filename: "blob.gguf".into(),
+            },
+            produced_by: "test".into(),
+            produced_at: "2026-05-18T00:00:00Z".into(),
+        };
+        store.write_manifest(&manifest).unwrap();
 
         let spec = ModelSpec {
             name: "test".into(),
-            filename: "blob.gguf".into(),
             source_url: "https://example.invalid/blob.gguf".into(),
-            // sha256("hello world")
-            sha256_hex: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".into(),
+            sha256_hex: HELLO_WORLD_SHA.into(),
             size_bytes: Some(11),
+            license: None,
+            source: None,
         };
 
-        // Subscribe BEFORE calling fetch_model so we don't lose events.
         let b = dummy_broadcaster();
         let mut rx = b.subscribe();
-        let got = fetch_model(&spec, dir.path(), &b).unwrap();
-        assert_eq!(got, path);
+        let got = fetch_model(&spec, &store, &b).unwrap();
+        assert_eq!(got, blob);
 
-        // First event must be CheckingLocal.
         let ev = rx.try_recv().unwrap();
         assert!(matches!(
             ev,
@@ -325,64 +495,97 @@ mod tests {
     }
 
     #[test]
-    fn fetch_quarantines_existing_file_with_wrong_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("blob.gguf");
-        let mut f = File::create(&path).unwrap();
-        f.write_all(b"different bytes").unwrap();
-        f.sync_all().unwrap();
+    fn fetch_quarantines_blob_with_wrong_bytes() {
+        let dir = tempdir().unwrap();
+        let store = ModelStore::open(dir.path());
+        store.ensure_layout().unwrap();
+
+        // Place WRONG bytes at the CAS path for HELLO_WORLD_SHA.
+        let blob = write_blob_at(&store, HELLO_WORLD_SHA, b"different bytes");
 
         let spec = ModelSpec {
             name: "test".into(),
-            filename: "blob.gguf".into(),
-            // example.invalid is RFC 2606-reserved; resolves but never
-            // connects. The download attempt fails AFTER quarantine,
-            // which is the path we're testing.
             source_url: "https://example.invalid/blob.gguf".into(),
-            sha256_hex: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".into(),
+            sha256_hex: HELLO_WORLD_SHA.into(),
             size_bytes: Some(11),
+            license: None,
+            source: None,
         };
-
         let b = dummy_broadcaster();
-        let _ = fetch_model(&spec, dir.path(), &b);
+        // Will fail to reach example.invalid AFTER quarantining the
+        // bad blob, which is the path under test.
+        let _ = fetch_model(&spec, &store, &b);
 
-        // Original file is gone; a quarantine sibling exists.
-        assert!(!path.exists(), "original file should have been quarantined");
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
+        assert!(!blob.exists(), "bad blob should have been quarantined");
+        let qdir = store.quarantine_dir();
+        assert!(qdir.is_dir());
+        let entries: Vec<_> = std::fs::read_dir(&qdir)
             .unwrap()
             .filter_map(Result::ok)
-            .map(|e| e.file_name().into_string().unwrap())
             .collect();
         assert!(
-            entries.iter().any(|n| n.contains("quarantine")),
-            "expected a *.quarantine.* sibling in {entries:?}"
+            !entries.is_empty(),
+            "expected at least one quarantined file"
         );
     }
 
     #[test]
     fn fetch_rejects_non_https_url() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
+        let store = ModelStore::open(dir.path());
         let spec = ModelSpec {
             name: "test".into(),
-            filename: "blob.gguf".into(),
             source_url: "http://example.invalid/blob.gguf".into(),
-            sha256_hex: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".into(),
+            sha256_hex: HELLO_WORLD_SHA.into(),
             size_bytes: None,
+            license: None,
+            source: None,
         };
         let b = dummy_broadcaster();
-        let err = fetch_model(&spec, dir.path(), &b).unwrap_err();
+        let err = fetch_model(&spec, &store, &b).unwrap_err();
         assert!(matches!(err, FetchError::InsecureUrl(_)));
     }
 
     #[test]
+    fn fetch_errors_when_no_source_and_no_manifest() {
+        let dir = tempdir().unwrap();
+        let store = ModelStore::open(dir.path());
+        let spec = ModelSpec {
+            name: "test".into(),
+            source_url: String::new(),
+            sha256_hex: HELLO_WORLD_SHA.into(),
+            size_bytes: None,
+            license: None,
+            source: None,
+        };
+        let b = dummy_broadcaster();
+        let err = fetch_model(&spec, &store, &b).unwrap_err();
+        assert!(matches!(err, FetchError::NoSourceNoManifest { .. }));
+    }
+
+    #[test]
     fn sha256_of_known_input() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let path = dir.path().join("blob");
         std::fs::write(&path, b"hello world").unwrap();
         let got = sha256_of_path(&path).unwrap();
+        assert_eq!(got, HELLO_WORLD_SHA);
+    }
+
+    #[test]
+    fn registry_from_url_pulls_hostname() {
         assert_eq!(
-            got,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+            registry_from_url("https://huggingface.co/foo/bar.gguf"),
+            "huggingface.co"
+        );
+        assert_eq!(registry_from_url("not-a-url"), "");
+    }
+
+    #[test]
+    fn filename_from_url_pulls_basename() {
+        assert_eq!(
+            filename_from_url("https://huggingface.co/foo/x.gguf"),
+            "x.gguf"
         );
     }
 }

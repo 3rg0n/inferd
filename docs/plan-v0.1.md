@@ -2,9 +2,9 @@
 
 - **Status**: draft
 - **Date**: 2026-05-14
-- **Scope**: v0.1 — drop-in replacement for thlibo's embedded
-  `thlibod` daemon. No cloud backends, no model-proxy-gateway mode
-  yet (that's v0.2).
+- **Scope**: v0.1 — standalone host-wide local-inference daemon.
+  Single warm model, NDJSON-over-IPC, llama.cpp via FFI. No cloud
+  backends and no model-proxy-gateway mode yet (that's v0.2).
 - **Posture**: lean core (ADR 0006). The daemon ships an inference
   engine consumed via FFI (ADR 0005), an admission queue, NDJSON
   IPC transport, and a routing layer (ADR 0007 — no-op in v0.1).
@@ -14,9 +14,9 @@
 
 ## Goal
 
-Stand up a standalone Rust inference daemon that thlibo v0.2 can
-consume as a dependency, so deleting `thlibo/internal/daemon/` and
-`thlibo/internal/ipc/` leaves a working product.
+Stand up a standalone Rust inference daemon that any consumer
+(CLI, IDE assistant, agent runtime, web app, middleware) can
+connect to in place of embedding its own engine.
 
 ## Non-goals for v0.1
 
@@ -27,8 +27,7 @@ consume as a dependency, so deleting `thlibo/internal/daemon/` and
   loopback TCP).
 - Multi-model warm pool. One warm model at a time in v0.1.
 - KV cache sharing across connections.
-- Attestation / signing of release artefacts (defer to v0.2, matches
-  thlibo's own deferral for #27/#28).
+- Attestation / signing of release artefacts (defer to v0.2).
 
 ## Crate layout
 
@@ -95,14 +94,14 @@ inferd/
 - **tokio** — single async runtime choice.
 - **serde + serde_json** — NDJSON de/serialisation.
 - **tracing + tracing-subscriber** — structured logging; export to
-  NDJSON via a custom layer so `logx` field names match thlibo's.
+  NDJSON via a custom layer with stable field names for ops
+  dashboards.
 - **anyhow + thiserror** — error plumbing.
 - **clap** — CLI flag parsing.
 - **nix** (Unix only) — `flock`, `SO_PEERCRED`, socket modes.
 - **windows-sys** (Windows only) — named pipe SDDL, `LockFileEx`.
 - **sha2** — GGUF verification.
-- **subtle** — constant-time hash compare (carried over from thlibo
-  threat-model finding #4).
+- **subtle** — constant-time hash compare (THREAT_MODEL F-5).
 - **bindgen** + **cmake** (build-time) — generate Rust bindings
   for `libllama` and build it from the vendored `llama.cpp`
   submodule. CI gets a C++17 toolchain on every target platform.
@@ -235,9 +234,8 @@ alpha commit: see [F-16 systemd hardening](#post-alpha-tracked-work).
 - `client_test.go`: protocol-shape round-trip + end-to-end
   against the Rust daemon binary (auto-locates
   `target/debug/inferd-daemon[.exe]`).
-- Exit criterion is "thlibo v0.2 imports this module and tests
-  pass." That's a downstream concern — verify when thlibo's
-  v0.2 branch picks this up.
+- Exit criterion is "an external Go consumer imports this module
+  and the full test suite passes against a running inferd."
 
 ### M6 (v0.2) — cloud backend adapters 🅿️
 
@@ -297,7 +295,7 @@ finding pointer.
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
 | `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
-| Model installer / `inferd pull` | GA-prep | Port thlibo's pin-URL + SHA-256 download pattern; default path `~/.inferd/models/`. thlibo strips its installer once inferd's lands. |
+| Model installer / `inferdctl pull` | GA-prep | Standalone CLI to pre-warm the shared CAS store (ADR 0011) without booting the daemon. v0.1 uses the daemon's first-boot fetch path (ADR 0010); the CLI is convenience plumbing. |
 
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
@@ -319,10 +317,10 @@ F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests
   excluded from workspace build). Targets: `frame_reader`,
   `request_resolve`. Run on demand per
   `docs/test-strategy.md` Tier 6.
-- B1 real-Gemma round-trip verified against
-  `~/.thlibo/models/gemma-4-e4b-ud-q4-k-xl.gguf` (5.1 GB
-  unsloth UD-Q4_K_XL). The `LlamaCpp` adapter loads the GGUF,
-  allocates KV cache, the daemon binds TCP, a real client
+- B1 real-Gemma round-trip verified against the configured
+  GGUF in the shared CAS store (5.1 GB unsloth UD-Q4_K_XL).
+  The `LlamaCpp` adapter loads the GGUF, allocates KV cache,
+  the daemon binds TCP, a real client
   drives a request through the full
   router → backend → token-stream path and receives a `Done`
   frame with `backend="llamacpp"` + non-zero

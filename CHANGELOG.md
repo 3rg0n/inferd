@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shared content-addressable model store** ([ADR 0011](docs/adr/0011-shared-content-addressable-model-store.md)).
+  Models now live at `$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`
+  with a `manifests/<name>.json` indirection layer and an advisory
+  `locks/<name>.lock` per writer. Resolution order: `models_home`
+  config field → `MODELS_HOME` env → platform default
+  (`%LOCALAPPDATA%\models`, `~/.local/share/models`, `~/Library/
+  Application Support/models`). Wire-compatible with the cross-tool
+  *Shared Local Model Store* convention so other tools that adopt
+  it can share the same blobs.
+- `crates/inferd-daemon/src/store.rs` — owns CAS path resolution,
+  manifest read/write (atomic via `<file>.tmp` + rename), and the
+  quarantine directory for SHA-mismatched bytes.
+
+### Changed
+
+- `crates/inferd-daemon/src/fetch.rs` — `fetch_model` now writes
+  into the CAS layout: streaming download into `.partial-<hash>/
+  data.tmp`, constant-time SHA verify (F-5), atomic rename into
+  `<aa>/<hash>/data`, then manifest write last. Acquires
+  `LOCK_EX` on `locks/<name>.lock` for the duration. The function
+  signature now takes `&ModelStore` instead of `&Path`.
+- `crates/inferd-daemon/src/config_file.rs` — `models_dir` field
+  removed; replaced with `models_home` (optional override of
+  `$MODELS_HOME`). The `model` block dropped its `filename` field
+  because the on-disk path is now derived from the SHA.
+
+### Documentation
+
+- `README.md`, `CLAUDE.md`, `context.md`, `THREAT_MODEL.md`,
+  `docs/plan-v0.1.md`, `CONTRIBUTING.md` reframed as a standalone
+  service. Reference consumers (e.g. middleware projects) are
+  examples of clients, not parents — inferd does not encode any
+  consumer's assumptions. ADR bodies (immutable) are unchanged.
+
 ## [0.1.0-alpha.2] - 2026-05-16
 
 Closes the three security follow-ups identified in alpha.1's
@@ -89,7 +125,7 @@ manifests.
 ### Not yet verified
 
 Same list as alpha.1 — real Gemma 4 GGUF run, CI on real
-Actions runners, Linux/macOS test execution, thlibo v0.2 import.
+Actions runners, Linux/macOS test execution.
 
 ## [0.1.0-alpha.1] - 2026-05-16
 
@@ -222,4 +258,4 @@ work").
 - CI workflows on real GitHub Actions runners.
 - Linux + macOS test execution (Rust toolchain runs only on
   Windows so far).
-- thlibo v0.2 importing `clients/go`.
+- External Go consumer importing `clients/go` end-to-end.

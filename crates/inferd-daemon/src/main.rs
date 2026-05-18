@@ -265,8 +265,9 @@ async fn build_backend(
     }
 }
 
-/// Resolve the model file (fetch if missing AND `auto_pull`), then
-/// construct the LlamaCpp adapter. Publishes phase events throughout.
+/// Resolve the model into the shared CAS store (ADR 0011). On
+/// success returns the verified blob's path so the engine can mmap
+/// it. Publishes phase events through the broadcaster throughout.
 #[cfg(feature = "llamacpp")]
 async fn build_llamacpp(
     cli: &Cli,
@@ -274,10 +275,11 @@ async fn build_llamacpp(
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
     use inferd_daemon::fetch::{fetch_model, ModelSpec};
+    use inferd_daemon::store::{default_models_home, ModelStore};
     use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 
-    // Resolve the spec: prefer config-file, fall back to CLI flags.
-    let (spec, models_dir, n_ctx, n_gpu_layers, model_sha256_bytes) = match config {
+    // Resolve the spec + store: prefer config-file, fall back to CLI flags.
+    let (spec, store, n_ctx, n_gpu_layers, model_sha256_bytes, cli_only_path) = match config {
         Some(cfg) => {
             let spec: ModelSpec = (&cfg.model).into();
             let n_ctx = if cli.n_ctx != 8192 {
@@ -291,7 +293,11 @@ async fn build_llamacpp(
                 cfg.n_gpu_layers
             };
             let sha = parse_sha256_hex(&cfg.model.sha256)?;
-            (spec, cfg.models_dir.clone(), n_ctx, n_gpu_layers, sha)
+            let store = match cfg.models_home.as_ref() {
+                Some(p) => ModelStore::open(p),
+                None => ModelStore::open(default_models_home()),
+            };
+            (spec, store, n_ctx, n_gpu_layers, sha, None)
         }
         None => {
             let path = cli.model_path.as_ref().ok_or_else(|| {
@@ -304,69 +310,72 @@ async fn build_llamacpp(
                 anyhow::anyhow!("--model-sha256 is required for --backend llamacpp")
             })?;
             let sha = parse_sha256_hex(sha_str)?;
-            // CLI-only mode: no fetch (no source URL configured); we
-            // expect the file to be present at `--model-path`.
+            // CLI-only mode: bypass the CAS store; the operator
+            // pointed us at a specific file. Useful for dev / CI.
             let spec = ModelSpec {
                 name: "cli".into(),
-                filename: path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("model.gguf")
-                    .to_string(),
                 source_url: String::new(),
                 sha256_hex: sha_str.clone(),
                 size_bytes: None,
+                license: None,
+                source: None,
             };
-            let models_dir = path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf();
-            (spec, models_dir, cli.n_ctx, cli.n_gpu_layers, sha)
+            // Store is constructed but unused in this branch.
+            (
+                spec,
+                ModelStore::open(default_models_home()),
+                cli.n_ctx,
+                cli.n_gpu_layers,
+                sha,
+                Some(path.clone()),
+            )
         }
     };
 
     // Resolve / fetch.
     let auto_pull = config.map(|c| c.auto_pull).unwrap_or(false);
-    let model_path = if !spec.source_url.is_empty() && auto_pull {
-        // Run the (synchronous) fetch on a blocking thread so we don't
-        // block the tokio runtime. fetch_model is sync — uses ureq
-        // blocking — so this is the right boundary.
-        let spec_clone = spec.clone();
-        let dir_clone = models_dir.clone();
-        let bcast = Arc::clone(&broadcaster);
-        let fetched =
-            tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &dir_clone, &bcast))
-                .await
-                .map_err(|e| anyhow::anyhow!("fetch task join: {e}"))?
-                .map_err(|e| anyhow::anyhow!("fetch failed: {e}"))?;
-        fetched
-    } else if !spec.source_url.is_empty() {
-        // auto_pull == false: file must already exist; fetch_model
-        // verifies the existing file's SHA without touching the
-        // network when source_url is set but the file is present
-        // and matches.
-        let final_path = models_dir.join(&spec.filename);
-        if !final_path.exists() {
-            anyhow::bail!(
-                "model not present at {} and auto_pull is disabled. \
-                 Place the file there manually or set auto_pull: true in config.",
-                final_path.display()
-            );
-        }
-        // Still publish the checking_local phase for symmetry.
+    let model_path = if let Some(direct) = cli_only_path {
+        // CLI-only mode: file must be at --model-path. No CAS lookup,
+        // no fetch.
         broadcaster.publish(StatusEvent::LoadingModel {
             phase: LoadPhase::CheckingLocal {
-                path: final_path.clone(),
+                path: direct.clone(),
             },
         });
-        final_path
+        if !direct.exists() {
+            anyhow::bail!("model not present at {} (CLI-only mode)", direct.display());
+        }
+        direct
+    } else if auto_pull {
+        // Run the (synchronous) fetch on a blocking thread so we
+        // don't block the tokio runtime.
+        let spec_clone = spec.clone();
+        let store_clone = store.clone();
+        let bcast = Arc::clone(&broadcaster);
+        tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
+            .await
+            .map_err(|e| anyhow::anyhow!("fetch task join: {e}"))?
+            .map_err(|e| anyhow::anyhow!("fetch failed: {e}"))?
     } else {
-        // CLI-only mode (no source_url): file must be at --model-path.
-        let p = cli.model_path.as_ref().unwrap().clone();
+        // auto_pull == false: blob must already exist in the CAS at
+        // its SHA path. fetch_model() returns immediately when the
+        // manifest + blob agree, so we still call it — it does no
+        // network when source_url is unset OR the cached blob
+        // matches.
+        let blob_path = store.blob_path(&spec.sha256_hex);
+        if !blob_path.exists() {
+            anyhow::bail!(
+                "model not present in store at {} and auto_pull is disabled. \
+                 Run `inferdctl pull` or set auto_pull: true in config.",
+                blob_path.display()
+            );
+        }
         broadcaster.publish(StatusEvent::LoadingModel {
-            phase: LoadPhase::CheckingLocal { path: p.clone() },
+            phase: LoadPhase::CheckingLocal {
+                path: blob_path.clone(),
+            },
         });
-        p
+        blob_path
     };
 
     // Mmap phase.

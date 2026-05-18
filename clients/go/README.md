@@ -132,11 +132,11 @@ shapes in `protocol.go` and the admin event shapes in
 verified by tests that launch the Rust daemon binary and
 round-trip frames through it.
 
-`thlibo v0.2` consumes this module to retire its embedded
-daemon: delete `internal/daemon/`, `internal/ipc/`, and the
-embedded llamafile subprocess code; import this module; call
-sites construct `inferd.Client` instead of the old
-`thlibod.Client`.
+Any Go consumer that wants local inference imports this
+module instead of embedding its own engine. Call sites
+construct `inferd.Client`, point it at the running daemon's
+endpoint (UDS / named pipe / loopback TCP), and stream
+tokens back through the same connection.
 
 ## Tests
 
