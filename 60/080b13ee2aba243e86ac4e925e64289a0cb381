@@ -1,0 +1,27 @@
+packaging/windows/install.ps1
+  s_126aec4081f728::t_dd6de652079d56 12,15-19
+  s_126aec4081f728::t_f5df66fd3e10ed 80-107
+packaging/README.md
+  s_126aec4081f728::t_69c01660cbecb1 28,34-39
+THREAT_MODEL.md
+  s_126aec4081f728::t_e46801028f1621 300
+  s_126aec4081f728::t_b72acfe80299a1 319-327
+docs/plan-v0.1.md
+  s_126aec4081f728::t_1a9b22eef70feb 309-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "60080b13ee2aba243e86ac4e925e64289a0cb381",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
