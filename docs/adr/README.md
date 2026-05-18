@@ -14,6 +14,7 @@ implementation choices aren't.
 | [0007](0007-backend-routing-and-failure-semantics.md) | Backend routing: operator policy, no in-daemon retry, no mid-stream failover | Accepted |
 | [0008](0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md) | Protocol v1 designed for inferd, not derived from thlibo | Accepted |
 | [0009](0009-pre-m1-open-questions-resolved.md) | Pre-M1 open questions resolved (admin socket, peer creds, versioning, backend identity) | Accepted |
+| [0010](0010-narrow-https-exception-for-model-bootstrap.md) | Narrow HTTPS exception for first-boot model bootstrap | Accepted |
 
 ## Writing a new ADR
 
