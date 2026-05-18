@@ -15,6 +15,7 @@
 pub mod auth;
 pub mod config;
 pub mod endpoint;
+pub mod fetch;
 pub mod lifecycle;
 pub mod lock;
 pub mod logx;
@@ -22,3 +23,4 @@ pub mod peercred;
 pub mod queue;
 pub mod redact;
 pub mod router;
+pub mod status;

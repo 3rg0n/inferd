@@ -43,6 +43,12 @@ bytes               = { workspace = true }
 regex               = "1"
 chrono              = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 subtle              = { workspace = true }
+sha2                = { workspace = true }
+# Pure-Rust HTTPS client for first-boot model bootstrap (ADR 0010).
+# Narrow scope: one URL, one SHA, one file. Operators wanting fancier
+# transports (proxies, custom DNS) wget the file themselves and drop
+# it in models_dir.
+ureq                = { version = "2", default-features = false, features = ["tls"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["fs", "user", "socket"] }
