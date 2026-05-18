@@ -2,6 +2,12 @@
 /target/
 **/*.rs.bk
 Cargo.lock.bak
+# cargo-fuzz state (corpus + crash artifacts; harness Cargo.toml +
+# fuzz_targets/ are tracked, but the per-run state is not).
+crates/*/fuzz/target/
+crates/*/fuzz/corpus/
+crates/*/fuzz/artifacts/
+crates/*/fuzz/Cargo.lock
 
 # IDE / OS
 .vscode/
