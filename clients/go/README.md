@@ -3,17 +3,26 @@
 Go client for the inferd daemon. Submodule of this monorepo at
 `github.com/3rg0n/inferd/clients/go`.
 
-**Status: M5 implemented.** Hand-written translation of `inferd-proto`,
-plus a `Client` wrapper that connects over loopback TCP, Unix
-domain socket (Unix), or Windows named pipe.
-
 ```go
 import inferd "github.com/3rg0n/inferd/clients/go"
+```
 
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+Single flat package — same shape as `lib/pq` / `pgx`. No
+`proto/v1` + `client` subdivision in v0.1.
+
+## Quickstart
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-client, err := inferd.DialTCP(ctx, "127.0.0.1:47321")
+// Pattern A: connect-and-retry against the inference socket.
+// The successful connect IS the readiness signal — F-13 in the
+// upstream threat model guarantees the inference socket only
+// exists when the daemon is `ready`.
+client, err := inferd.DialAndWaitReady(ctx, func(ctx context.Context) (*inferd.Client, error) {
+    return inferd.DialTCP(ctx, "127.0.0.1:47321")
+})
 if err != nil { /* handle */ }
 defer client.Close()
 
@@ -37,33 +46,109 @@ for frame := range stream {
 }
 ```
 
-## Transport
+## Transports
 
-- `DialTCP(ctx, "127.0.0.1:47321")` — anywhere.
-- `DialUDS(ctx, "/run/inferd/infer.sock")` — Unix only (`//go:build unix`).
-- `DialPipe(ctx, "\\\\.\\pipe\\inferd-infer")` — Windows only.
+| Function | Platform | Default |
+|---|---|---|
+| `DialTCP(ctx, "127.0.0.1:47321")` | All | Loopback only by convention; daemon refuses to bind public addresses unless explicitly configured. |
+| `DialUDS(ctx, path)` | Unix (`//go:build unix`) | `/run/inferd/infer.sock` |
+| `DialPipe(ctx, path)` | Windows | `\\.\pipe\inferd-infer` |
+
+`DialAndWaitReady(ctx, dial)` wraps any of the three with an
+exponential-backoff retry loop (start 100ms, cap 5s) for
+transient connect errors that surface during daemon bring-up
+(`ECONNREFUSED`, `ENOENT`, `ERROR_PIPE_BUSY`,
+`ERROR_FILE_NOT_FOUND`). Permanent errors (`EACCES`, malformed
+addr) bubble up immediately. Use this for inference-only
+consumers — see Pattern A in the upstream
+`docs/protocol-v1.md` §"Client connection lifecycle".
+
+## Wait-for-ready patterns
+
+The daemon may take seconds to hours to come up: the first-boot
+case downloads a multi-GB GGUF model. There are two patterns
+for waiting; pick based on whether you need progress UX.
+
+### Pattern A — passive (recommended)
+
+`DialAndWaitReady` against the inference transport. Successful
+connect is the ready signal. No admin-socket plumbing required.
+This is the standard Postgres / Redis / etcd client shape.
+
+### Pattern B — active (progress UX)
+
+Connect to the admin socket separately. Watch lifecycle frames.
+Display download progress along the way. Then connect to the
+inference socket per Pattern A.
+
+```go
+admin, err := inferd.DialAdmin(ctx, "")  // "" = platform default
+if err != nil { /* handle */ }
+defer admin.Close()
+
+for {
+    ev, err := admin.Recv(ctx)
+    if err != nil { return err }
+    switch ev.Status {
+    case "loading_model":
+        if ev.Phase == "download" {
+            total := int64(0)
+            if ev.TotalBytes != nil { total = *ev.TotalBytes }
+            fmt.Printf("download: %d / %d\n", ev.DownloadedBytes, total)
+        }
+    case "ready":
+        fmt.Println("inferd ready")
+        goto inference
+    case "draining":
+        return errors.New("inferd is shutting down")
+    }
+}
+inference:
+client, _ := inferd.DialAndWaitReady(ctx, func(c context.Context) (*inferd.Client, error) {
+    return inferd.DialTCP(c, "127.0.0.1:47321")
+})
+defer client.Close()
+// ... use client.Generate as in the quickstart.
+```
+
+`AdminClient.WaitReady(ctx)` is a one-call helper that loops
+`Recv` until it sees a `ready` event, useful when you don't
+need the progress frames in between.
+
+### Forward compatibility
+
+Per the spec, clients **MUST ignore** unknown `Status` and
+`Phase` values; the daemon may add new ones in any v1 release.
+This client surfaces unknown values verbatim in
+`AdminEvent.Status`/`AdminEvent.Phase` — branch only on values
+you recognise; default to logging-and-ignoring otherwise.
 
 ## Compatibility
 
-The wire format is frozen per ADR 0008 in the upstream repo. This module
-implements protocol v1: the request/response shapes in `protocol.go` are
-byte-compatible with `docs/protocol-v1.md` and verified by an end-to-end
-test that launches the Rust daemon binary with the mock backend and
-round-trips one request through it.
+The wire format is frozen per ADR 0008 in the upstream repo.
+This module implements protocol v1; the request/response
+shapes in `protocol.go` and the admin event shapes in
+`admin.go` are byte-compatible with `docs/protocol-v1.md` and
+verified by tests that launch the Rust daemon binary and
+round-trip frames through it.
 
-`thlibo v0.2` consumes this module to retire its embedded daemon —
-delete `internal/daemon/` and `internal/ipc/`, import this module,
-update call sites to construct `inferd.Client`.
+`thlibo v0.2` consumes this module to retire its embedded
+daemon: delete `internal/daemon/`, `internal/ipc/`, and the
+embedded llamafile subprocess code; import this module; call
+sites construct `inferd.Client` instead of the old
+`thlibod.Client`.
 
 ## Tests
 
 ```sh
-# Protocol shape only (no daemon):
+# Protocol-shape + admin-event tests (no daemon needed):
 go test ./...
 
-# End-to-end against the real daemon (requires `cargo build -p inferd-daemon`):
+# Full suite including end-to-end against the daemon binary
+# (requires `cargo build -p inferd-daemon` first):
 go test ./...
 ```
 
-The end-to-end test auto-detects the daemon at `<workspace>/target/debug/
-inferd-daemon[.exe]`. Override with `INFERD_DAEMON_BIN=/abs/path`.
+The end-to-end test auto-detects the daemon at
+`<workspace>/target/debug/inferd-daemon[.exe]`. Override with
+`INFERD_DAEMON_BIN=/abs/path`.

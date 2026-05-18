@@ -18,3 +18,10 @@ func DialUDS(ctx context.Context, path string) (*Client, error) {
 	}
 	return New(conn), nil
 }
+
+// dialAdminAddr is the platform-specific transport for the admin
+// socket. On Unix this is always a UDS path.
+func dialAdminAddr(ctx context.Context, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "unix", addr)
+}
