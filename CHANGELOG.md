@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI actions upgraded to Node 24**: `actions/checkout` → v6,
+  `actions/setup-go` → v6 in both CI and release workflows.
+- **Windows go e2e admin addr**: `testAdminAddr` returns a named-pipe
+  path on Windows so `TestEndToEndAgainstDaemon` passes the right
+  `--admin-addr` format on all three platforms.
 - **llamacpp Linux link**: `build.rs` now links `-lgomp` on Linux so
   `GOMP_barrier`/`GOMP_parallel`/`omp_*` symbols from `ggml-cpu`'s
   OpenMP compilation resolve at link time.

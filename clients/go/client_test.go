@@ -119,7 +119,7 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	tmp := t.TempDir()
 	lock := filepath.Join(tmp, "inferd.lock")
 	logDir := filepath.Join(tmp, "logs")
-	adminSock := filepath.Join(tmp, "admin.sock")
+	adminSock := testAdminAddr(tmp)
 
 	// Pick a free port for the daemon to bind by asking the OS for one
 	// then immediately closing — small TOCTOU window but fine for a
@@ -206,6 +206,17 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	if done.StopReason != inferd.StopEnd {
 		t.Errorf("done stop_reason: got %q want end", done.StopReason)
 	}
+}
+
+// testAdminAddr returns a per-test admin endpoint path that the daemon can
+// bind without requiring root. On Windows it must be a named-pipe path.
+func testAdminAddr(tmp string) string {
+	if runtime.GOOS == "windows" {
+		// Named pipe names are globally unique; embed the pid so parallel
+		// test runs don't collide.
+		return fmt.Sprintf(`\\.\pipe\inferd-test-admin-%d`, os.Getpid())
+	}
+	return filepath.Join(tmp, "admin.sock")
 }
 
 func defaultDaemonBin(t *testing.T) string {
