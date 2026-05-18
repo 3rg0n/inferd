@@ -81,10 +81,23 @@ func DialAdmin(ctx context.Context, addr string) (*AdminClient, error) {
 
 // DefaultAdminAddr returns the platform-appropriate default admin
 // socket path per docs/protocol-v1.md §"Admin endpoint".
+//
+// Linux resolution chain:
+//  1. $XDG_RUNTIME_DIR/inferd/admin.sock (set by systemd-logind on
+//     session start; the per-user equivalent of /run/<svc>/).
+//  2. $HOME/.inferd/run/admin.sock for sessions without logind
+//     (containers, ssh without a real login session).
+//  3. /tmp/inferd/admin.sock as a last resort.
 func DefaultAdminAddr() string {
 	switch runtime.GOOS {
 	case "linux":
-		return "/run/inferd/admin.sock"
+		if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+			return xdg + "/inferd/admin.sock"
+		}
+		if home := os.Getenv("HOME"); home != "" {
+			return home + "/.inferd/run/admin.sock"
+		}
+		return "/tmp/inferd/admin.sock"
 	case "darwin":
 		// macOS: ${TMPDIR}/inferd/admin.sock per the spec.
 		// Go's os.TempDir() returns the same.

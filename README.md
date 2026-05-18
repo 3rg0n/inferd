@@ -76,6 +76,72 @@ inferd/
 └── context.md              # "what is this, why are we building it"
 ```
 
+## Install
+
+### Linux
+
+inferd ships a per-user systemd unit at
+`packaging/systemd/inferd.service`. Install:
+
+```sh
+install -Dm755 inferd-daemon ~/.local/bin/inferd-daemon
+install -Dm644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
+systemctl --user daemon-reload
+systemctl --user enable --now inferd
+```
+
+The unit declares `RuntimeDirectory=inferd`, so systemd creates
+`/run/user/<uid>/inferd/` with the right ownership before
+`ExecStart`. Sockets and the lock file live there. The unit also
+applies the hardening directives documented in `THREAT_MODEL.md` F-16.
+
+> **Why not `/run/inferd/`?** That directory is for system daemons
+> running as root. `systemd --user` cannot write there. inferd
+> resolves runtime paths via `$XDG_RUNTIME_DIR` (set by
+> `systemd-logind`) on Linux per the algorithm in
+> `docs/protocol-v1.md` §"Default endpoint resolution".
+
+#### WSL note
+
+If you previously had a llamafile-style polyglot binary (Cosmopolitan
+Libc, `MZ` header) on `PATH` from another tool, remove it before
+running inferd inside WSL. WSL's `binfmt_misc` `WSLInterop` handler
+matches on the `MZ` magic and tries to run polyglot binaries through
+the Windows host, which breaks them. inferd itself ships a normal
+ELF (no Cosmopolitan, no `MZ` header), so it is unaffected — but a
+stale polyglot binary on `PATH` can still trip the handler if
+something execs it.
+
+If you need to disable WSLInterop entirely:
+
+```sh
+sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'   # per-boot
+```
+
+Or persistently, add `[interop] enabled = false` to `/etc/wsl.conf`
+and run `wsl.exe --shutdown` from Windows.
+
+### macOS
+
+Install the LaunchAgent at `packaging/launchd/io.inferd.daemon.plist`:
+
+```sh
+install -m755 inferd-daemon ~/Library/LaunchAgents/inferd-daemon
+install -m644 packaging/launchd/io.inferd.daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/io.inferd.daemon.plist
+```
+
+### Windows
+
+Run the elevated installer:
+
+```powershell
+.\packaging\windows\install.ps1
+```
+
+This installs the binary, creates the service via `sc.exe`, and
+sets the named-pipe ACL to grant the current user only.
+
 ## License
 
 MIT. Permissive on purpose — inferd is infrastructure for other tools

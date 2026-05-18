@@ -25,11 +25,23 @@ use tokio::net::{TcpListener, TcpStream};
 pub const DEFAULT_TCP_ADDR: &str = "127.0.0.1:47321";
 
 /// Default admin endpoint per platform, per `docs/protocol-v1.md`
-/// §"Admin endpoint". Tilde-expanded against `$HOME` on Unix.
+/// §"Admin endpoint".
+///
+/// On Linux the resolution chain is:
+/// 1. `$XDG_RUNTIME_DIR/inferd/admin.sock` (set by `systemd-logind`
+///    on session start; the per-user equivalent of `/run/<svc>/`).
+/// 2. `$HOME/.inferd/run/admin.sock` for sessions without logind
+///    (containers, ssh without a real login session).
+/// 3. `/tmp/inferd-<uid>/admin.sock` as a last resort.
+///
+/// Historically inferd defaulted to `/run/inferd/admin.sock`. That
+/// path is only writable by root and so was incompatible with
+/// `systemd --user` units; the chain above matches the path the
+/// systemd unit declares via `RuntimeDirectory=inferd`.
 pub fn default_admin_addr() -> std::path::PathBuf {
     #[cfg(target_os = "linux")]
     {
-        std::path::PathBuf::from("/run/inferd/admin.sock")
+        linux_runtime_path("admin.sock")
     }
     #[cfg(target_os = "macos")]
     {
@@ -46,6 +58,34 @@ pub fn default_admin_addr() -> std::path::PathBuf {
     {
         std::path::PathBuf::from("/tmp/inferd/admin.sock")
     }
+}
+
+/// Resolve a Linux runtime-dir path with the fallback chain
+/// documented on `default_admin_addr`. `leaf` is the basename to
+/// append (e.g. `admin.sock`, `infer.sock`, `inferd.lock`).
+#[cfg(target_os = "linux")]
+pub fn linux_runtime_path(leaf: &str) -> std::path::PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let mut p = std::path::PathBuf::from(xdg);
+        if !p.as_os_str().is_empty() {
+            p.push("inferd");
+            p.push(leaf);
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let mut p = std::path::PathBuf::from(home);
+        if !p.as_os_str().is_empty() {
+            p.push(".inferd");
+            p.push("run");
+            p.push(leaf);
+            return p;
+        }
+    }
+    // Last resort: `/tmp/inferd-<uid>/<leaf>` — `<uid>` keeps
+    // multi-user hosts from colliding on a shared /tmp.
+    let uid = nix::unistd::Uid::current().as_raw();
+    std::path::PathBuf::from(format!("/tmp/inferd-{uid}/{leaf}"))
 }
 
 /// Trait abstracting an accepted connection so the lifecycle can speak to

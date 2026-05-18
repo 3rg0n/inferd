@@ -172,8 +172,11 @@ func TestDefaultAdminAddrReturnsPlatformShape(t *testing.T) {
 	got := DefaultAdminAddr()
 	switch runtime.GOOS {
 	case "linux":
-		if got != "/run/inferd/admin.sock" {
-			t.Errorf("linux: got %q", got)
+		// Resolution chain: XDG_RUNTIME_DIR > HOME/.inferd/run > /tmp.
+		// Whichever path the test environment hits, it ends in
+		// `inferd/admin.sock`.
+		if !strings.HasSuffix(got, "/inferd/admin.sock") {
+			t.Errorf("linux: got %q (want suffix /inferd/admin.sock)", got)
 		}
 	case "windows":
 		if got != `\\.\pipe\inferd-admin` {
@@ -183,5 +186,30 @@ func TestDefaultAdminAddrReturnsPlatformShape(t *testing.T) {
 		if !strings.HasSuffix(got, "/inferd/admin.sock") {
 			t.Errorf("darwin: got %q", got)
 		}
+	}
+}
+
+func TestDefaultAdminAddrLinuxRespectsXdgRuntimeDir(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux only")
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+	got := DefaultAdminAddr()
+	want := "/run/user/1000/inferd/admin.sock"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestDefaultAdminAddrLinuxFallsBackToHome(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux only")
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("HOME", "/home/test")
+	got := DefaultAdminAddr()
+	want := "/home/test/.inferd/run/admin.sock"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
 	}
 }

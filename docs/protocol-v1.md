@@ -140,9 +140,9 @@ Field guarantees:
 
 ## Transport
 
-- **Unix domain socket** at `/run/inferd/infer.sock` (Linux),
-  `${TMPDIR}/inferd/infer.sock` (macOS). Mode `0660`, group
-  `inferd-users`.
+- **Unix domain socket** at the platform-specific path resolved
+  via the algorithm in §"Default endpoint resolution" below.
+  Mode `0660`, group `inferd-users`.
 - **Windows named pipe** `\\.\pipe\inferd-infer`. ACL grants
   the current user SID only; `Everyone` is denied.
 - **Loopback TCP** `127.0.0.1:47321`. Optional API-key auth as
@@ -165,13 +165,43 @@ stream (one JSON object per line, 64 MiB cap).
 
 | Platform | Path | Permissions |
 |---|---|---|
-| Linux | `/run/inferd/admin.sock` | mode `0600`, daemon uid only |
+| Linux | resolved via §"Default endpoint resolution" | mode `0600`, daemon uid only |
 | macOS | `${TMPDIR}/inferd/admin.sock` | mode `0600`, daemon uid only |
 | Windows | `\\.\pipe\inferd-admin` | DACL grants current user SID only |
 
 Configurable via `--admin-addr` / `INFERD_ADMIN_ADDR` for tests
 and non-default deployments. Production deployments use the
 default. **No TCP admin endpoint** — admin is local-only.
+
+### Default endpoint resolution
+
+To accommodate Linux's `systemd --user` lifecycle (which cannot
+write under `/run/<service>/` because that directory is root-only)
+the spec freezes a **resolution algorithm** rather than a literal
+path. Both the daemon and any compliant client compute the same
+path from the same algorithm.
+
+For the inference socket, admin socket, and lock file on Linux,
+the path is:
+
+```
+${XDG_RUNTIME_DIR}/inferd/<leaf>     if XDG_RUNTIME_DIR is set and non-empty
+${HOME}/.inferd/run/<leaf>           else if HOME is set and non-empty
+/tmp/inferd-${UID}/<leaf>            else (multi-user-safe last resort)
+```
+
+Where `<leaf>` is `infer.sock`, `admin.sock`, or `inferd.lock`
+respectively, and `${UID}` is the daemon's effective user id.
+
+`XDG_RUNTIME_DIR` is provisioned per-user by `systemd-logind` on
+session start (`/run/user/<uid>/`); the second branch covers
+containers / non-logind sessions. The systemd unit at
+`packaging/systemd/inferd.service` declares
+`RuntimeDirectory=inferd` so step 1 always succeeds when the
+unit is run via `systemctl --user`.
+
+On macOS and Windows the path is a single literal (see the
+relevant tables) and no resolution is required.
 
 ### Lifecycle vs. inference
 

@@ -103,10 +103,32 @@ pub fn is_transient_dial_error(err: &ClientError) -> bool {
 /// Default admin endpoint path per platform. Mirrors the daemon's
 /// `endpoint::default_admin_addr` so clients can reach the spec'd
 /// default without hard-coding it.
+///
+/// Linux resolution chain (per `docs/protocol-v1.md` §"Admin endpoint"):
+/// 1. `$XDG_RUNTIME_DIR/inferd/admin.sock`
+/// 2. `$HOME/.inferd/run/admin.sock`
+/// 3. `/tmp/inferd/admin.sock`
 pub fn default_admin_addr() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/run/inferd/admin.sock")
+        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let mut p = PathBuf::from(xdg);
+            if !p.as_os_str().is_empty() {
+                p.push("inferd");
+                p.push("admin.sock");
+                return p;
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let mut p = PathBuf::from(home);
+            if !p.as_os_str().is_empty() {
+                p.push(".inferd");
+                p.push("run");
+                p.push("admin.sock");
+                return p;
+            }
+        }
+        PathBuf::from("/tmp/inferd/admin.sock")
     }
     #[cfg(target_os = "macos")]
     {

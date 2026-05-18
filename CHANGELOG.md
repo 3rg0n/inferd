@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux runtime path defaults**: `default_admin_addr()` (daemon
+  + `inferd-client`) and `DefaultAdminAddr()` (Go client) now resolve
+  the Linux admin-socket path via `$XDG_RUNTIME_DIR/inferd/admin.sock`
+  with fallback chain `$HOME/.inferd/run/` → `/tmp/inferd-<uid>/`.
+  The previous literal `/run/inferd/admin.sock` is root-only and
+  was incompatible with `systemd --user` units (per the Linux
+  runtime handoff). `docs/protocol-v1.md` now freezes the
+  resolution algorithm rather than a literal path.
+- **systemd unit**: `packaging/systemd/inferd.service` now passes
+  `--admin-addr %t/inferd/admin.sock` explicitly and adds
+  `StartLimitBurst=3` / `StartLimitIntervalSec=60s` to contain
+  crash-loops when assets are missing. `RuntimeDirectory=inferd`
+  was already present and remains the source of `%t/inferd/`.
+- **README Linux install + WSL APE-binary advisory**: documents
+  the `systemctl --user` install path and warns WSL users about
+  stale Cosmopolitan-Libc binaries on `PATH` (`MZ` header tripping
+  the `binfmt_misc` `WSLInterop` handler).
 - **CI actions upgraded to Node 24**: `actions/checkout` → v6,
   `actions/setup-go` → v6 in both CI and release workflows.
 - **Windows go e2e admin addr**: `testAdminAddr` returns a named-pipe
