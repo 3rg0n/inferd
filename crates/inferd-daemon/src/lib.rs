@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod config_file;
 pub mod endpoint;
 pub mod fetch;
 pub mod lifecycle;
