@@ -9,19 +9,25 @@
 //! ```json
 //! {
 //!   "auto_pull": true,
-//!   "models_dir": "~/.inferd/models",
+//!   "models_home": "~/.local/share/models",
 //!   "model": {
 //!     "name":       "gemma-4-e4b",
-//!     "filename":   "gemma-4-e4b-ud-q4-k-xl.gguf",
 //!     "sha256":     "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
 //!     "size_bytes": 5126304928,
-//!     "source_url": "https://huggingface.co/unsloth/.../resolve/main/...gguf"
+//!     "source_url": "https://huggingface.co/unsloth/.../resolve/main/...gguf",
+//!     "license":    "apache-2.0"
 //!   },
 //!   "n_ctx":         8192,
 //!   "n_gpu_layers":  0,
 //!   "admin_addr":    "/run/inferd/admin.sock"
 //! }
 //! ```
+//!
+//! Resolution order for the model store (per ADR 0011):
+//!
+//! 1. `models_home` field if set in this config.
+//! 2. `MODELS_HOME` env var.
+//! 3. Platform default (XDG / Application Support / LOCALAPPDATA).
 //!
 //! All fields except `model` are optional. CLI flags override
 //! config-file values when both are present.
@@ -41,10 +47,11 @@ pub struct ConfigFile {
     #[serde(default = "default_auto_pull")]
     pub auto_pull: bool,
 
-    /// Directory where the daemon writes / reads model files.
-    /// Tilde-expanded on read. Default: `~/.inferd/models`.
-    #[serde(default = "default_models_dir")]
-    pub models_dir: PathBuf,
+    /// Override for the shared model store root. When unset the
+    /// daemon falls back to `MODELS_HOME` env, then the platform
+    /// default. Tilde-expanded on read.
+    #[serde(default)]
+    pub models_home: Option<PathBuf>,
 
     /// The model the daemon serves on this run. Required.
     pub model: ModelConfig,
@@ -63,34 +70,34 @@ pub struct ConfigFile {
     pub admin_addr: Option<String>,
 }
 
-/// Per-model entry: pinned URL + pinned SHA-256 + filename.
+/// Per-model entry: pinned URL + pinned SHA-256 + name.
 ///
 /// The shape mirrors `fetch::ModelSpec` but as a serde-deserialisable
 /// config-file type. Conversion is straightforward (`From` impl below).
+///
+/// Note: there is no `filename` field. The blob's on-disk location
+/// is derived from its SHA-256 (CAS layout, ADR 0011); the manifest
+/// at `<store>/manifests/<name>.json` is the only place a name maps
+/// to a blob.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
-    /// Stable identifier, e.g. `"gemma-4-e4b"`.
+    /// Stable identifier, e.g. `"gemma-4-e4b"`. Used as the manifest
+    /// filename and the lock-file basename.
     pub name: String,
-    /// Filename inside `models_dir`.
-    pub filename: String,
     /// Lowercase hex SHA-256 of the GGUF bytes. Required.
     pub sha256: String,
-    /// Advisory total size for progress reporting + disk preflight.
-    /// Optional: download still works without it (Content-Length used
-    /// instead, or progress reported without total).
+    /// Advisory total size for progress reporting + manifest.
     #[serde(default)]
     pub size_bytes: Option<u64>,
     /// Direct-download HTTPS endpoint. Must be `https://`.
     pub source_url: String,
+    /// SPDX-style license id when known. Recorded in the manifest.
+    #[serde(default)]
+    pub license: Option<String>,
 }
 
 fn default_auto_pull() -> bool {
     true
-}
-
-fn default_models_dir() -> PathBuf {
-    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".inferd").join("models")
 }
 
 fn default_n_ctx() -> u32 {
@@ -173,14 +180,14 @@ impl ConfigFile {
     }
 
     fn expand_paths(&mut self) {
-        // Tilde-expand models_dir if the operator wrote `~/.inferd/...`.
-        if let Some(stripped) = self
-            .models_dir
-            .to_str()
-            .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")))
-        {
-            if let Some(home) = home_dir() {
-                self.models_dir = home.join(stripped);
+        if let Some(p) = self.models_home.as_ref() {
+            if let Some(stripped) = p
+                .to_str()
+                .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")))
+            {
+                if let Some(home) = home_dir() {
+                    self.models_home = Some(home.join(stripped));
+                }
             }
         }
     }
@@ -188,11 +195,6 @@ impl ConfigFile {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.model.name.is_empty() {
             return Err(ConfigError::Invalid("model.name must not be empty".into()));
-        }
-        if self.model.filename.is_empty() {
-            return Err(ConfigError::Invalid(
-                "model.filename must not be empty".into(),
-            ));
         }
         if !self.model.source_url.starts_with("https://") {
             return Err(ConfigError::Invalid(format!(
@@ -222,10 +224,11 @@ impl From<&ModelConfig> for crate::fetch::ModelSpec {
     fn from(m: &ModelConfig) -> Self {
         crate::fetch::ModelSpec {
             name: m.name.clone(),
-            filename: m.filename.clone(),
             source_url: m.source_url.clone(),
             sha256_hex: m.sha256.clone(),
             size_bytes: m.size_bytes,
+            license: m.license.clone(),
+            source: None,
         }
     }
 }
@@ -245,13 +248,13 @@ mod tests {
     fn good_json() -> String {
         r#"{
             "auto_pull": true,
-            "models_dir": "/tmp/inferd-models",
+            "models_home": "/tmp/inferd-models-home",
             "model": {
                 "name": "gemma-4-e4b",
-                "filename": "gemma-4-e4b-ud-q4-k-xl.gguf",
                 "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
                 "size_bytes": 5126304928,
-                "source_url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+                "source_url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf",
+                "license": "apache-2.0"
             },
             "n_ctx": 8192,
             "n_gpu_layers": 0
@@ -265,8 +268,13 @@ mod tests {
         let cfg = ConfigFile::load(f.path()).unwrap();
         assert_eq!(cfg.model.name, "gemma-4-e4b");
         assert_eq!(cfg.model.size_bytes, Some(5_126_304_928));
+        assert_eq!(cfg.model.license.as_deref(), Some("apache-2.0"));
         assert!(cfg.auto_pull);
         assert_eq!(cfg.n_ctx, 8192);
+        assert_eq!(
+            cfg.models_home,
+            Some(PathBuf::from("/tmp/inferd-models-home"))
+        );
     }
 
     #[test]
@@ -325,7 +333,6 @@ mod tests {
         let json = r#"{
             "model": {
                 "name": "gemma-4-e4b",
-                "filename": "x.gguf",
                 "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
                 "source_url": "https://example.com/x.gguf"
             }
@@ -336,20 +343,23 @@ mod tests {
         assert_eq!(cfg.n_ctx, 8192);
         assert_eq!(cfg.n_gpu_layers, 0);
         assert!(cfg.model.size_bytes.is_none());
+        assert!(cfg.models_home.is_none());
+        assert!(cfg.model.license.is_none());
     }
 
     #[test]
     fn modelconfig_converts_to_fetch_modelspec() {
         let cfg = ModelConfig {
             name: "x".into(),
-            filename: "x.gguf".into(),
             sha256: "abc".into(),
             size_bytes: Some(42),
             source_url: "https://e/x.gguf".into(),
+            license: Some("mit".into()),
         };
         let spec: crate::fetch::ModelSpec = (&cfg).into();
         assert_eq!(spec.name, "x");
         assert_eq!(spec.size_bytes, Some(42));
         assert_eq!(spec.sha256_hex, "abc");
+        assert_eq!(spec.license.as_deref(), Some("mit"));
     }
 }

@@ -3,8 +3,7 @@
 //! v0.1 ships:
 //! - **Unix domain socket** (Unix only) — the default inference transport.
 //! - **Loopback TCP** — opt-in fallback for container / WSL scenarios; the
-//!   default port is `127.0.0.1:47321` (one above thlibo's historical
-//!   47320 to allow side-by-side operation).
+//!   default port is `127.0.0.1:47321`.
 //!
 //! Windows named pipe support is deferred to M4. This is fine for the M1
 //! exit criterion, which uses TCP for cross-platform integration testing.
@@ -23,9 +22,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 
 /// Default loopback port for the optional TCP transport.
-///
-/// Distinct from thlibo's historical `47320` so an inferd instance can run
-/// alongside an old thlibod during migration without port conflicts.
 pub const DEFAULT_TCP_ADDR: &str = "127.0.0.1:47321";
 
 /// Default admin endpoint per platform, per `docs/protocol-v1.md`
@@ -181,9 +177,6 @@ pub async fn bind_uds(_path: &Path, _group: Option<&str>) -> io::Result<()> {
 }
 
 /// Default Windows named-pipe path for the inference endpoint.
-///
-/// Distinct from any thlibo-shaped name so an inferd instance can run
-/// alongside an old thlibod during migration without endpoint conflicts.
 #[cfg(windows)]
 pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\inferd-infer";
 
