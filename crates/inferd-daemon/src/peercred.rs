@@ -80,6 +80,10 @@ impl fmt::Display for PeerIdentity {
 #[cfg(unix)]
 pub mod unix {
     //! Unix-side peer credentials via the `nix` crate.
+    //!
+    //! Linux: single `SO_PEERCRED` getsockopt returns uid/gid/pid together.
+    //! macOS: `LOCAL_PEERCRED` returns uid/gid (XuCred), `LOCAL_PEERPID` is
+    //! a separate call — nix exposes these as `LocalPeerCred`/`LocalPeerPid`.
 
     #![allow(unsafe_code)] // BorrowedFd::borrow_raw is unsafe; scope tight.
 
@@ -88,28 +92,59 @@ pub mod unix {
     use std::os::fd::AsRawFd;
     use tokio::net::UnixStream;
 
-    /// Extract peer credentials from a connected `UnixStream` via
-    /// `getsockopt(SO_PEERCRED)` (Linux) / `LOCAL_PEERCRED` (macOS,
-    /// BSDs); both are wrapped by `nix::sys::socket::getsockopt`
-    /// behind the `PeerCredentials` socket option.
+    /// Extract peer credentials from a connected `UnixStream`.
     pub fn from_stream(stream: &UnixStream) -> io::Result<PeerIdentity> {
-        use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
         let raw = stream.as_raw_fd();
-        // SAFETY of the FD: the UnixStream owns it and outlives this
-        // borrow. nix::getsockopt is safe to call on a connected fd.
-        let cred = getsockopt(
-            &unsafe { std::os::fd::BorrowedFd::borrow_raw(raw) },
-            PeerCredentials,
-        )
-        .map_err(|e| io::Error::other(format!("SO_PEERCRED: {e}")))?;
-        Ok(PeerIdentity {
-            uid: Some(cred.uid()),
-            gid: Some(cred.gid()),
-            pid: Some(cred.pid() as u32),
-            sid: None,
-            remote_addr: None,
-            transport: "unix",
-        })
+        let borrowed = || unsafe { std::os::fd::BorrowedFd::borrow_raw(raw) };
+
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        {
+            use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+            let cred = getsockopt(&borrowed(), PeerCredentials)
+                .map_err(|e| io::Error::other(format!("SO_PEERCRED: {e}")))?;
+            Ok(PeerIdentity {
+                uid: Some(cred.uid()),
+                gid: Some(cred.gid()),
+                pid: Some(cred.pid() as u32),
+                sid: None,
+                remote_addr: None,
+                transport: "unix",
+            })
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            use nix::sys::socket::{
+                getsockopt,
+                sockopt::{LocalPeerCred, LocalPeerPid},
+            };
+            let cred = getsockopt(&borrowed(), LocalPeerCred)
+                .map_err(|e| io::Error::other(format!("LOCAL_PEERCRED: {e}")))?;
+            let pid = getsockopt(&borrowed(), LocalPeerPid)
+                .map_err(|e| io::Error::other(format!("LOCAL_PEERPID: {e}")))?;
+            let gid = cred.groups().first().copied().unwrap_or(0);
+            Ok(PeerIdentity {
+                uid: Some(cred.uid()),
+                gid: Some(gid),
+                pid: Some(pid as u32),
+                sid: None,
+                remote_addr: None,
+                transport: "unix",
+            })
+        }
+
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+        )))]
+        {
+            let _ = borrowed;
+            Err(io::Error::other(
+                "SO_PEERCRED not supported on this platform",
+            ))
+        }
     }
 }
 
