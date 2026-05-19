@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-19
+
+The binary-size guard added in v0.1.4 (mac claude's commit
+`177b0c1`) had a false-positive: it assumed a real-llamacpp Linux
+binary would be ≥10 MB, but stripped Linux release binaries with
+statically-linked libllama come in around 9 MB. v0.1.4 + v0.1.5
+both failed the guard despite producing correctly-built binaries
+that did real inference.
+
+Verified directly: a 9.3MB WSL Linux build with the v0.1.5 source
+returns real Gemma 4 tokens via `--backend llamacpp` against a
+real GGUF. The guard threshold was wrong, not the build.
+
+### Fixed
+
+- **Replace size-based guard with `--help` substring check.**
+  Direct test: if `BackendKind::Llamacpp` got compiled out, clap's
+  value-enum doesn't list `llamacpp` and `--help` won't mention
+  it. No false positives from stripped-binary size variation.
+
 ## [0.1.5] - 2026-05-19
 
 The release-tarball saga continues. v0.1.4 was tagged with the
