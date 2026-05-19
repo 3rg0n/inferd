@@ -98,3 +98,13 @@ End-to-end tested against the live `inferd-daemon` binary:
 [`crates/inferd-daemon/tests/echo.rs`](https://github.com/3rg0n/inferd/blob/main/crates/inferd-daemon/tests/echo.rs).
 The Go sibling client at `clients/go/` follows the same wire
 contract.
+
+## License
+
+MIT. See `LICENSE`.
+
+## Contributing
+
+Bug reports, design discussions, and PRs welcome at
+[github.com/3rg0n/inferd](https://github.com/3rg0n/inferd). Read
+`CONTRIBUTING.md` in the upstream repo before opening a PR.

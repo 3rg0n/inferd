@@ -8,10 +8,13 @@ license.workspace      = true
 repository.workspace   = true
 homepage.workspace     = true
 authors.workspace      = true
+readme = "README.md"
+keywords    = ["inferd", "protocol", "llm", "ndjson", "ipc"]
+categories  = ["api-bindings", "encoding", "parser-implementations"]
 
 [lib]
-# Crate is published to crates.io once v0.1 stabilises (M5+). It is the
-# canonical schema reference for clients in any language.
+# Crate is the canonical schema reference for clients in any language.
+# Published to crates.io alongside `inferd-client`.
 
 [dependencies]
 serde       = { workspace = true }
