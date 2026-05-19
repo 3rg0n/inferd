@@ -1,0 +1,63 @@
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_2121ddff2c7418 31,33,36,41,277-278,463
+crates/inferd-daemon/tests/auth.rs
+  s_126aec4081f728::t_2121ddff2c7418 13,16
+crates/inferd-daemon/src/peercred.rs
+  s_126aec4081f728::t_2121ddff2c7418 162,164
+crates/inferd-daemon/tests/echo.rs
+  s_126aec4081f728::t_2121ddff2c7418 25,28
+crates/inferd-daemon/src/logx.rs
+  s_126aec4081f728::t_2121ddff2c7418 29,32
+crates/inferd-daemon/src/fetch.rs
+  s_126aec4081f728::t_2121ddff2c7418 27
+crates/inferd-daemon/tests/echo_pipe.rs
+  s_126aec4081f728::t_2121ddff2c7418 18,21
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_2121ddff2c7418 24
+crates/inferd-engine/src/mock.rs
+  s_126aec4081f728::t_2121ddff2c7418 16
+crates/inferd-daemon/src/windows_security.rs
+  s_126aec4081f728::t_2121ddff2c7418 40,42,45-46,49,233
+crates/inferd-daemon/tests/security.rs
+  s_126aec4081f728::t_2121ddff2c7418 20,24
+crates/inferd-client/src/wait.rs
+  s_126aec4081f728::t_2121ddff2c7418 155
+crates/inferd-proto/src/frame.rs
+  s_126aec4081f728::t_2121ddff2c7418 6
+crates/inferd-proto/src/lib.rs
+  s_126aec4081f728::t_2121ddff2c7418 16
+crates/inferd-proto/tests/wire.rs
+  s_126aec4081f728::t_2121ddff2c7418 5-6
+crates/inferd-daemon/src/store.rs
+  s_126aec4081f728::t_2121ddff2c7418 321-325,399-403
+crates/inferd-daemon/src/queue.rs
+  s_126aec4081f728::t_2121ddff2c7418 13
+crates/inferd-daemon/tests/logx.rs
+  s_126aec4081f728::t_2121ddff2c7418 15,19
+crates/inferd-daemon/tests/stress.rs
+  s_126aec4081f728::t_2121ddff2c7418 36,39,138,179-180,237-239,248-252,315-319
+crates/inferd-client/src/lib.rs
+  s_126aec4081f728::t_2121ddff2c7418 71,78-79
+crates/inferd-daemon/tests/echo_llamacpp.rs
+  s_126aec4081f728::t_2121ddff2c7418 18,21
+crates/inferd-daemon/src/lifecycle.rs
+  s_126aec4081f728::t_2121ddff2c7418 18,23
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_126aec4081f728::t_2121ddff2c7418 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "52e310738089052b71adce5865500c9e6bd1cefa",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
