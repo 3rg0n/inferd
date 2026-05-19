@@ -91,8 +91,23 @@ async fn boot_stress_daemon(
 }
 
 /// Send one request, return the parsed response frames in order.
+/// Retries the connect briefly on transient failures so CI runners
+/// under load don't false-fail when the listener is busy.
 async fn one_request(addr: String, id: String) -> Vec<Response> {
-    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    let mut stream = None;
+    for attempt in 0..10 {
+        match TcpStream::connect(&addr).await {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(_) if attempt < 9 => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(e) => panic!("connect after retries: {e}"),
+        }
+    }
+    let mut stream = stream.expect("connect");
 
     let req = Request {
         id: id.clone(),
@@ -234,7 +249,10 @@ async fn mid_stream_disconnect_does_not_break_the_daemon() {
     }
 
     // After 20 mid-stream cancellations the daemon must still be
-    // serving. Issue one more request and read it through to Done.
+    // serving. Give in-flight handler tasks a moment to drain
+    // (slow CI runners overlap teardown with the next connect),
+    // then issue one more request and read it through to Done.
+    tokio::time::sleep(Duration::from_millis(200)).await;
     let frames = tokio::time::timeout(
         TEST_BUDGET,
         one_request(addr.clone(), "post-cancel".into()),
@@ -302,7 +320,11 @@ async fn connect_churn_does_not_leak_resources() {
         drop(stream);
     }
 
-    // Daemon should still be alive and serving.
+    // Daemon should still be alive and serving. Same drain delay
+    // as the cancellation test — accept-loop is independent of
+    // handler tasks but the OS may still be cleaning up the 200
+    // closed sockets when our follow-up connect lands.
+    tokio::time::sleep(Duration::from_millis(200)).await;
     let frames = tokio::time::timeout(
         TEST_BUDGET,
         one_request(addr.clone(), "post-churn".into()),

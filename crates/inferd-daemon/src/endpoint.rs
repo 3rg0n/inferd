@@ -170,10 +170,10 @@ pub async fn bind_admin_uds(path: &Path) -> io::Result<tokio::net::UnixListener>
         }
         std::fs::remove_file(path)?;
     }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     let listener = tokio::net::UnixListener::bind(path)?;
     let mut perms = std::fs::metadata(path)?.permissions();
