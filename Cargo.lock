@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-client"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-daemon"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-engine"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "bindgen",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-proto"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bytes",
  "serde",
