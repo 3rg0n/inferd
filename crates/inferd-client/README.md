@@ -7,6 +7,22 @@ NDJSON-over-IPC. Wire protocol frozen as v1; full spec at
 [`docs/protocol-v1.md`](https://github.com/3rg0n/inferd/blob/main/docs/protocol-v1.md)
 in the upstream repo.
 
+## Install the daemon first
+
+The client connects to a **running `inferd-daemon`**. You install the
+daemon out-of-band; this crate doesn't bundle it.
+
+Pre-built binaries (Linux x86_64 + arm64, macOS arm64, Windows
+x86_64) ship with each release at
+<https://github.com/3rg0n/inferd/releases>. Each tarball signed with
+cosign keyless OIDC.
+
+The daemon defaults to `auto_pull: true`, which means on first start
+it downloads the configured model from the configured `source_url`,
+verifies SHA-256 with constant-time compare, then mmaps and starts
+serving. Watch progress on the admin socket (Pattern B below) or
+the daemon's stdout if you're running it directly.
+
 ## Quickstart
 
 ```rust,no_run
@@ -76,6 +92,19 @@ connection lifecycle":
   Use this for installer GUIs, dashboards, or middleware that
   wants progress UX during first-boot model download.
 
+## Daemon endpoints (default paths)
+
+| Platform | Inference | Admin |
+|---|---|---|
+| Linux | `${XDG_RUNTIME_DIR}/inferd/infer.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
+| macOS | `${TMPDIR}/inferd/infer.sock` | `${TMPDIR}/inferd/admin.sock` |
+| Windows | `\\.\pipe\inferd-infer` | `\\.\pipe\inferd-admin` |
+
+Operators may override via `--uds` / `--pipe` / `--admin-addr` on
+the daemon. Loopback TCP (`127.0.0.1:47321`) is opt-in for
+container / WSL scenarios and supports an API key as the first
+NDJSON frame.
+
 ## Versioning
 
 Pinned to the same major/minor as `inferd-proto` (this crate
@@ -87,10 +116,12 @@ contract:
 inferd-client = "0.1"
 ```
 
-`inferd-client 0.1` always uses `inferd-proto 0.1` and talks to
-`inferd-daemon 0.1`. Upstream protocol-v1 changes are
-backwards-additive only; breaking changes go to v2 on a separate
-socket.
+`inferd-client 0.1.x` always uses `inferd-proto 0.1.x` and talks
+to `inferd-daemon 0.1.x`. The published patch versions move in
+lockstep; the crate-level `=`-pin keeps the wire contract exact
+across the workspace at build time. Upstream protocol-v1 changes
+are backwards-additive only; breaking changes go to v2 on a
+separate socket.
 
 ## Compatibility
 

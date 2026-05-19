@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-19
+
+The "actually shippable" release. **First non-alpha publish to
+crates.io** since `0.1.0-alpha.0`. Closes the gap that left
+consumers (e.g. thlibo) stuck because `cargo add inferd-client`
+resolved to a pre-release version that requires explicit
+`=0.1.0-alpha.0` pinning.
+
+### Added
+
+- **`inferd-proto 0.1.8` and `inferd-client 0.1.8` published to
+  crates.io.** `cargo add inferd-client` now resolves to a
+  non-alpha version. Wire schema and client surface unchanged
+  from alpha.0 — same `Request`/`Response`/admin envelope.
+- **`INTEGRATING.md`** at the repo root: end-to-end "how to use
+  inferd from your own product" guide. Covers install, config,
+  per-language client examples (Rust + Go), Pattern A vs B
+  readiness, error contract, gotchas. Designed so a consumer
+  can copy snippets and have them work.
+- **`crates/inferd-client/README.md`**: expanded for crates.io
+  rendering. Explicit "install the daemon first" preamble,
+  per-platform endpoint paths, version-resolution semantics
+  spelled out so consumers know `0.1` works.
+- **Stdout download progress logging** (closes #3). `fetch_model`
+  emits `model download starting` / `progress` (every 32 MiB or
+  5 s) / `complete` log lines so an operator running the daemon
+  manually sees the 5 GB pull is alive. Mirrors the admin-socket
+  event cadence; subscribers and log tailers see the same
+  numbers.
+
+### Held / not in this release
+
+- **Windows arm64 release tarball** — the v0.1.7 attempt failed
+  on the `windows-11-arm` runner's llamacpp build. Per user,
+  not a GA gate; revisited when there's appetite to debug the
+  arm64 runner image. v0.1.7 was never tagged.
+
 ## [0.1.7] - 2026-05-19
 
 Adds Windows arm64 to the release matrix. Five released targets:
