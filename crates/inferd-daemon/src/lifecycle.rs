@@ -109,20 +109,20 @@ pub async fn handle_connection<C: Connection + 'static>(
     // F-8: TCP first-frame auth. UDS / pipe rely on F-7 peer creds and
     // skip this. Anonymous probers see the connection close with no
     // protocol error frame — we don't confirm endpoint existence.
-    if transport == "tcp" {
-        if let Some(expected) = ctx.expected_api_key.as_deref() {
-            match read_auth_frame(&mut reader).await {
-                Some(frame) if key_matches(&frame.key, expected) => {
-                    debug!(transport, "tcp auth ok");
-                }
-                _ => {
-                    warn!(
-                        target: "inferd_daemon::activity",
-                        peer = %peer,
-                        "tcp_auth_rejected"
-                    );
-                    return Ok(());
-                }
+    if transport == "tcp"
+        && let Some(expected) = ctx.expected_api_key.as_deref()
+    {
+        match read_auth_frame(&mut reader).await {
+            Some(frame) if key_matches(&frame.key, expected) => {
+                debug!(transport, "tcp auth ok");
+            }
+            _ => {
+                warn!(
+                    target: "inferd_daemon::activity",
+                    peer = %peer,
+                    "tcp_auth_rejected"
+                );
+                return Ok(());
             }
         }
     }

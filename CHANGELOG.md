@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-19
+
+First non-alpha release. Drops the `-alpha` suffix because:
+
+- The release tarball now ships a binary that does real inference
+  (Linux x86_64, macOS aarch64, Windows x86_64 — all with
+  `--features llamacpp`). Previous alpha tarball was mock-only,
+  reported by an external integrator. aarch64-linux still ships
+  mock-only pending a working cross-build for the C++ toolchain.
+- Cross-platform validation passed across Windows + macOS +
+  Linux + WSL2 systemd, including a 50-client concurrency
+  stress test, mid-stream cancellation, in-flight shutdown,
+  and 200-cycle connect churn.
+- The Windows named-pipe DACL is now SID-restricted at the
+  kernel-object level (F-7), not relying on default
+  CreateNamedPipe behaviour.
+- Documented multi-model decision (ADR 0012) means there are no
+  open architectural questions for v0.x.
+
+Known gap: the admission queue defined in
+`crates/inferd-daemon/src/queue.rs` is not yet wired into
+`handle_connection`. Today each connection runs its request
+handling inline, so the protocol-promised `queue_full` error frame
+is never emitted. With the llamacpp backend, concurrent requests
+serialise on the inner mutex (correct behaviour, just silent
+instead of `queue_full`-fronted). Tracked for v0.1.2.
+
+### Added
+
+- **Edition 2024 + Rust 1.95.** Workspace migrated; let-chains
+  collapsed in three sites (`config_file::expand_paths`,
+  `lifecycle::handle_connection`, `store::ModelStore::open`).
+- **Concurrency stress harness** at
+  `crates/inferd-daemon/tests/stress.rs`. Four tests covering
+  50-client saturation, mid-stream disconnect resilience,
+  graceful shutdown with jobs in-flight, and accept-loop pressure.
+  Uses the new `MockConfig::token_delay_ms` field so requests
+  overlap on the wire.
+- **ADR 0012**: one warm model per inferd process. Closes the
+  multi-model question that v0.1's plan flagged as a non-goal —
+  multi-model warm pooling is rejected for the foreseeable v0.x
+  cadence on lean-core (ADR 0006) and protocol-cost (ADR 0008)
+  grounds. Operators who need N concurrent models run N inferd
+  processes. The router (ADR 0007) multiplexes *backends*, not
+  *models*.
+
+### Changed
+
+- **release.yml builds with `--features inferd-engine/llamacpp`**
+  on ubuntu-latest x86_64, macos-latest aarch64, and
+  windows-latest x86_64. Closes the alpha tarball gap where the
+  shipped binary couldn't run real inference. aarch64-linux still
+  builds mock-only via `cross` because the cross image lacks the
+  C++ toolchain configuration for foreign-target cmake.
+- **systemd unit**: dropped F-16 hardening directives that need
+  `CAP_SYS_ADMIN` (`PrivateTmp`, `PrivateDevices`,
+  `ProtectSystem=strict`, `ProtectControlGroups`, `ProtectKernel*`,
+  `RestrictNamespaces`, `MemoryDenyWriteExecute`,
+  `CapabilityBoundingSet`, `AmbientCapabilities`). They fail
+  unit-level validation on `systemctl --user` with
+  `status=218/CAPABILITIES` because a non-root user has no
+  capabilities to bound or grant. The remaining set is the maximal
+  subset that works without root. A future
+  `inferd.service.system` template will ship the full F-16
+  hardening for system-unit deployments.
+
 ### Security
 
 - **F-7 Windows hardening**: named pipes are now created with an
@@ -20,31 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PipeSecurityDescriptor` plus
   `ServerOptions::create_with_security_attributes_raw` in both
   `bind_named_pipe` and `bind_admin_pipe`.
-
-### Added
-
-- **ADR 0012**: one warm model per inferd process. Closes the
-  multi-model question that v0.1's plan flagged as a non-goal —
-  multi-model warm pooling is rejected for the foreseeable v0.x
-  cadence on lean-core (ADR 0006) and protocol-cost (ADR 0008)
-  grounds. Operators who need N concurrent models run N inferd
-  processes. The router (ADR 0007) multiplexes *backends*, not
-  *models*.
-
-### Fixed
-
-- **systemd unit**: dropped F-16 hardening directives that need
-  `CAP_SYS_ADMIN` (`PrivateTmp`, `PrivateDevices`,
-  `ProtectSystem=strict`, `ProtectControlGroups`, `ProtectKernel*`,
-  `RestrictNamespaces`, `MemoryDenyWriteExecute`,
-  `CapabilityBoundingSet`, `AmbientCapabilities`). They fail
-  unit-level validation on `systemctl --user` with
-  `status=218/CAPABILITIES` because a non-root user has no
-  capabilities to bound or grant. The remaining set is the maximal
-  subset that works without root. A future
-  `inferd.service.system` template will ship the full F-16
-  hardening for system-unit deployments. Discovered via the new
-  CI fixture (below).
 
 ### CI
 
