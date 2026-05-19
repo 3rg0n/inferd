@@ -31,12 +31,19 @@ Type=simple
 # below auto-creates with mode 0700 before ExecStart. This matches
 # the resolution chain frozen in `docs/protocol-v1.md`
 # §"Default endpoint resolution" — clients compute the same path.
+#
+# `--group` is intentionally omitted from the default unit. Single-
+# user systems don't need an `inferd-users` group: `RuntimeDirectory=`
+# already grants the sockets `0700` ownership to the daemon user only,
+# which is the most-restrictive policy. Operators on multi-user hosts
+# who want a non-default group (e.g. for a service account that
+# shares the daemon) `groupadd inferd-users` first and append
+# `--group inferd-users` to the ExecStart line below.
 ExecStart=%h/.local/bin/inferd-daemon \
     --backend mock \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
-    --admin-addr %t/inferd/admin.sock \
-    --group inferd-users
+    --admin-addr %t/inferd/admin.sock
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=10s

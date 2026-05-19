@@ -18,10 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime handoff). `docs/protocol-v1.md` now freezes the
   resolution algorithm rather than a literal path.
 - **systemd unit**: `packaging/systemd/inferd.service` now passes
-  `--admin-addr %t/inferd/admin.sock` explicitly and adds
+  `--admin-addr %t/inferd/admin.sock` explicitly, drops
+  `--group inferd-users` from the default ExecStart (the group
+  doesn't exist on a fresh install; default `RuntimeDirectory=`
+  ownership is daemon-uid-only, which is the safer default; opt
+  in for multi-user shared deployments), and adds
   `StartLimitBurst=3` / `StartLimitIntervalSec=60s` to contain
-  crash-loops when assets are missing. `RuntimeDirectory=inferd`
-  was already present and remains the source of `%t/inferd/`.
+  crash-loops when assets are missing. Validated end-to-end on
+  Ubuntu / WSL2: daemon comes up under `systemctl --user`,
+  sockets bind at `/run/user/<uid>/inferd/{admin,infer}.sock`
+  with modes `0600`/`0660`, NDJSON request returns a `done`
+  frame.
 - **README Linux install + WSL APE-binary advisory**: documents
   the `systemctl --user` install path and warns WSL users about
   stale Cosmopolitan-Libc binaries on `PATH` (`MZ` header tripping
