@@ -58,32 +58,39 @@ Environment=INFERD_LOG=info
 Environment=INFERD_LOG_DIR=%S/inferd/logs
 
 # Hardening (THREAT_MODEL F-16). Each directive narrows what a
-# compromised daemon can do; nothing here is optional.
+# compromised daemon can do.
+#
+# `systemctl --user` constraint: many hardening directives that work
+# fine for root-owned `User=`-style system units fail unit-level
+# validation under per-user systemd because they require capabilities
+# the user can't grant. The directives below are the maximal subset
+# that is *both* effective for a per-user daemon AND accepted by
+# systemd's user-bus on stock Ubuntu/Debian/Fedora.
+#
+# Excluded from this baseline (operator-opt-in for system-unit
+# deployments via `User=` at install time):
+#   ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs
+#     — require CAP_SYS_ADMIN/CAP_SYSLOG in the bounding set
+#   RestrictNamespaces, MemoryDenyWriteExecute
+#     — interact with kernel features needing root or specific caps
+#   CapabilityBoundingSet=, AmbientCapabilities=
+#     — non-root has no capabilities to bound or grant
+#
+# Failure mode if these are added back to a per-user unit:
+# `status=218/CAPABILITIES` from systemd before ExecStart runs.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# CapabilityBoundingSet= and AmbientCapabilities= are intentionally
-# omitted for `systemctl --user` units. A non-root user has no
-# capabilities to bound or grant in the first place, and on some
-# systemd versions clearing an already-empty bounding set fails the
-# unit with `status=218/CAPABILITIES` before ExecStart runs.
-# `User=`-style system units would set them; per-user units don't
-# need to.
 
 # State + logs need write access; everything else is RO.
 ReadWritePaths=%t/inferd %S/inferd
