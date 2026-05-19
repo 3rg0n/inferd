@@ -25,7 +25,9 @@ connect to in place of embedding its own engine.
   implemented.
 - HTTP/gRPC transport. IPC-only (Unix socket / Windows named pipe /
   loopback TCP).
-- Multi-model warm pool. One warm model at a time in v0.1.
+- Multi-model warm pool. One warm model per inferd process — committed
+  for the foreseeable v0.x cadence by ADR 0012, not just v0.1. Operators
+  who need N concurrent models run N inferd processes.
 - KV cache sharing across connections.
 - Attestation / signing of release artefacts (defer to v0.2).
 

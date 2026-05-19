@@ -16,6 +16,7 @@ implementation choices aren't.
 | [0009](0009-pre-m1-open-questions-resolved.md) | Pre-M1 open questions resolved (admin socket, peer creds, versioning, backend identity) | Accepted |
 | [0010](0010-narrow-https-exception-for-model-bootstrap.md) | Narrow HTTPS exception for first-boot model bootstrap | Accepted |
 | [0011](0011-shared-content-addressable-model-store.md) | Shared content-addressable model store | Accepted |
+| [0012](0012-one-warm-model-per-inferd-process.md) | One warm model per inferd process (no in-daemon multi-model pool) | Accepted |
 
 ## Writing a new ADR
 

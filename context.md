@@ -117,4 +117,4 @@ A hand-written Go client lives at `clients/go/`. It is the canonical example for
 - Don't introduce async runtime pluralism. Tokio everywhere.
 - Don't make the daemon speak HTTP — *any* HTTP, in *any* direction except the ADR 0010 outbound model-fetch carve-out. Inbound HTTP-to-NDJSON adapters (Ollama-compat-as-a-server, OpenAI-compat-as-a-server, web UI) live in separate processes. Outbound NDJSON-to-HTTP adapters (cloud backends) are wrapped behind the `Backend` trait inside the daemon, but the trait abstracts the HTTP away — the rest of the daemon stays HTTP-free.
 - Don't embed registry-browsing or model-search in the daemon (ADR 0010). The fetch surface is one URL + one SHA.
-- Don't add multi-model warm pooling in v0.1. One warm model at a time.
+- Don't add multi-model warm pooling, ever (ADR 0012). One warm model per inferd process; operators who need N concurrent models run N inferd processes. The router multiplexes backends (local + cloud), not models.

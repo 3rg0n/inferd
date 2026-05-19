@@ -102,7 +102,7 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 - No in-daemon retry on backend failure (ADR 0007). Caller owns retry.
 - No mid-stream failover, ever (ADR 0007). Structurally broken; explicitly rejected.
 - No subprocess engines in v0.1 (ADR 0005). llama.cpp is linked, not spawned.
-- No multi-model warm pool in v0.1. One warm model at a time.
+- No multi-model warm pool, ever ([ADR 0012](docs/adr/0012-one-warm-model-per-inferd-process.md)). One warm model per inferd process; operators who need N concurrent models run N inferd processes. The router (ADR 0007) multiplexes *backends*, not *models*.
 - No registry browsing, model search, or arbitrary HTTP fetches in the daemon (ADR 0010). The fetch surface is one URL + one SHA.
 - No new v1 wire fields. v1 is frozen (ADR 0008). Extensions go to v2 on a separate socket.
 - No async runtime pluralism. Tokio everywhere.
