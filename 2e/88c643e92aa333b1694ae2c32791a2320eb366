@@ -1,0 +1,21 @@
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_a2ba6a1049962d 31-32
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_b29fa7a8bc5465 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "2e88c643e92aa333b1694ae2c32791a2320eb366",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
