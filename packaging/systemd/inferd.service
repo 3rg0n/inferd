@@ -77,8 +77,13 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=
-AmbientCapabilities=
+# CapabilityBoundingSet= and AmbientCapabilities= are intentionally
+# omitted for `systemctl --user` units. A non-root user has no
+# capabilities to bound or grant in the first place, and on some
+# systemd versions clearing an already-empty bounding set fails the
+# unit with `status=218/CAPABILITIES` before ExecStart runs.
+# `User=`-style system units would set them; per-user units don't
+# need to.
 
 # State + logs need write access; everything else is RO.
 ReadWritePaths=%t/inferd %S/inferd
