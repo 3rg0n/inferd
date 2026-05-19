@@ -1,0 +1,29 @@
+docs/adr/0012-one-warm-model-per-inferd-process.md
+  s_126aec4081f728::t_3bd72105b87067 1-189
+CLAUDE.md
+  s_126aec4081f728::t_aa0d5439ab4aa5 105
+context.md
+  s_126aec4081f728::t_8f3100ede44682 120
+CHANGELOG.md
+  s_126aec4081f728::t_7e70c8d7b22c3d 10-43
+docs/plan-v0.1.md
+  s_126aec4081f728::t_bc5a05f404b94a 28-30
+docs/adr/README.md
+  s_126aec4081f728::t_9d17cedea2152d 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "b7becdb38b3423359914bbd7835fa47c22345774",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
