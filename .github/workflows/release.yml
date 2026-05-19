@@ -75,10 +75,35 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          # Include the feature set in the cache key so a mock-only cache
+          # (built without --features inferd-engine/llamacpp) does not
+          # match this job and cause Cargo to skip the C++ build, producing
+          # a binary that silently rejects --backend llamacpp.
+          key: ${{ matrix.target }}-llamacpp
 
       - name: Build (with llamacpp)
         run: cargo build --release --bin inferd-daemon --features inferd-engine/llamacpp --target ${{ matrix.target }}
+
+      - name: Verify binary has llamacpp compiled in
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin="target/${{ matrix.target }}/release/inferd-daemon.exe"
+          else
+            bin="target/${{ matrix.target }}/release/inferd-daemon"
+          fi
+          size=$(wc -c < "$bin")
+          echo "Binary size: $size bytes"
+          # A mock-only binary is ~3 MB. A llamacpp-linked binary is ≥30 MB
+          # (static libllama + libggml). Guard at 10 MB to catch accidental
+          # mock builds before they're packaged into a release tarball.
+          if [ "$size" -lt 10000000 ]; then
+            echo "ERROR: binary is ${size} bytes — too small to contain llamacpp."
+            echo "The Swatinem rust-cache likely served a mock-only build."
+            echo "Check the cache key; it must include the feature set."
+            exit 1
+          fi
 
       - name: Stage release contents
         shell: bash
