@@ -28,8 +28,8 @@ rocm     = ["inferd-engine/rocm"]
 security = []
 
 [dependencies]
-inferd-proto  = { path = "../inferd-proto", version = "=0.1.3" }
-inferd-engine = { path = "../inferd-engine", version = "=0.1.3" }
+inferd-proto  = { path = "../inferd-proto", version = "=0.1.5" }
+inferd-engine = { path = "../inferd-engine", version = "=0.1.5" }
 tokio               = { workspace = true }
 tokio-stream        = "0.1"
 serde               = { workspace = true }

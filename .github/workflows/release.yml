@@ -73,13 +73,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install llvm
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Include the feature set in the cache key so a mock-only cache
-          # (built without --features inferd-engine/llamacpp) does not
-          # match this job and cause Cargo to skip the C++ build, producing
-          # a binary that silently rejects --backend llamacpp.
-          key: ${{ matrix.target }}-llamacpp
+      # No rust-cache for release builds. Release runs are rare,
+      # correctness > speed, and we've now seen Swatinem's cache
+      # serve a mock-only target dir for a llamacpp build twice
+      # (v0.1.1, v0.1.4). The binary-size guard catches it after
+      # the fact, but the cleaner fix is to never cache at all on
+      # the release path. Each release does a clean build from
+      # scratch — adds ~5 min per platform, eliminates the
+      # silent-mock-tarball failure mode.
 
       - name: Build (with llamacpp)
         # Use `inferd-daemon/llamacpp` (the daemon's own feature) not
