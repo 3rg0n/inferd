@@ -27,3 +27,5 @@ pub mod redact;
 pub mod router;
 pub mod status;
 pub mod store;
+#[cfg(windows)]
+pub mod windows_security;

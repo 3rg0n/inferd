@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **F-7 Windows hardening**: named pipes are now created with an
+  explicit SDDL DACL (`O:<sid>G:<sid>D:P(A;;GA;;;<sid>)`) that
+  grants `GENERIC_ALL` to the daemon's own user SID and nobody
+  else (protected DACL, no inheritance). Closes the documented
+  alpha.1 gap where the pipes relied on the default
+  `CreateNamedPipe` posture (creating-user-only by accident, not
+  by guarantee). Implementation:
+  `crates/inferd-daemon/src/windows_security.rs::
+  PipeSecurityDescriptor` plus
+  `ServerOptions::create_with_security_attributes_raw` in both
+  `bind_named_pipe` and `bind_admin_pipe`.
+
 ### Added
 
 - **ADR 0012**: one warm model per inferd process. Closes the
