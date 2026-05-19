@@ -192,18 +192,29 @@ pub async fn bind_admin_uds(_path: &Path) -> io::Result<()> {
     ))
 }
 
-/// Bind the *admin* Windows named pipe at `path` (Windows only). The
-/// default DACL applies (creating user only); per the inference-pipe
-/// rationale, that's adequate for the per-user daemon model.
+/// Bind the *admin* Windows named pipe at `path` (Windows only).
+///
+/// Applies the same SDDL DACL as the inference pipe — current user
+/// SID only — via `windows_security::PipeSecurityDescriptor`.
 #[cfg(windows)]
+#[allow(unsafe_code)] // Scoped: tokio's create_with_security_attributes_raw is unsafe.
 pub fn bind_admin_pipe(
     path: &str,
     first: bool,
 ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use crate::windows_security::PipeSecurityDescriptor;
     use tokio::net::windows::named_pipe::ServerOptions;
+
+    let mut sd = PipeSecurityDescriptor::current_user_only()?;
     let mut opts = ServerOptions::new();
     opts.first_pipe_instance(first);
-    opts.create(path)
+    // SAFETY: `sd.as_attrs_ptr()` is a stable pointer into `sd`'s
+    // own storage; `sd` lives across the create call. Windows copies
+    // the descriptor into the kernel object during CreateNamedPipe,
+    // so dropping `sd` after this returns is fine.
+    let server = unsafe { opts.create_with_security_attributes_raw(path, sd.as_attrs_ptr()) }?;
+    drop(sd);
+    Ok(server)
 }
 
 /// Stub for non-Unix platforms; always returns `Unsupported`. On Windows,
@@ -232,15 +243,12 @@ pub const DEFAULT_ADMIN_PIPE_PATH: &str = r"\\.\pipe\inferd-admin";
 /// (the standard Windows multi-instance pattern). `lifecycle::serve_named_pipe`
 /// owns that loop.
 ///
-/// **Security posture (THREAT_MODEL F-7, F-8):** v0.1 relies on the
-/// default DACL applied by `CreateNamedPipe` when no security
-/// attributes are passed — the creating user gets `GENERIC_ALL`,
-/// `Everyone`/`Anonymous` are denied. That is *adequate* for the
-/// per-user daemon model but not *sufficient* for the documented
-/// "current SID only" target. SDDL hardening (DACL constructed from
-/// the daemon's own SID, deny-all-others) is tracked as a v0.2
-/// follow-up alongside `GetNamedPipeClientProcessId` for caller
-/// identity. Documented in `THREAT_MODEL.md` F-7.
+/// **Security posture (THREAT_MODEL F-7):** the pipe is created with
+/// an explicit SDDL DACL that grants `GENERIC_ALL` to the current
+/// process's user SID and nobody else (protected DACL, no inheritance).
+/// Anyone not the daemon's own user is denied at the kernel-object
+/// level. See `windows_security::PipeSecurityDescriptor` for the
+/// descriptor construction.
 ///
 /// `first` controls whether the returned server is the very first
 /// instance for `path` (which sets `FILE_FLAG_FIRST_PIPE_INSTANCE` to
@@ -248,15 +256,24 @@ pub const DEFAULT_ADMIN_PIPE_PATH: &str = r"\\.\pipe\inferd-admin";
 /// accept loop calls `bind_named_pipe(path, false)` for subsequent
 /// instances.
 #[cfg(windows)]
+#[allow(unsafe_code)] // Scoped: tokio's create_with_security_attributes_raw is unsafe.
 pub fn bind_named_pipe(
     path: &str,
     first: bool,
 ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use crate::windows_security::PipeSecurityDescriptor;
     use tokio::net::windows::named_pipe::ServerOptions;
 
+    let mut sd = PipeSecurityDescriptor::current_user_only()?;
     let mut opts = ServerOptions::new();
     opts.first_pipe_instance(first);
-    opts.create(path)
+    // SAFETY: `sd.as_attrs_ptr()` is a stable pointer into `sd`'s
+    // own storage; `sd` lives across the create call. Windows copies
+    // the descriptor into the kernel object during CreateNamedPipe,
+    // so dropping `sd` after this returns is fine.
+    let server = unsafe { opts.create_with_security_attributes_raw(path, sd.as_attrs_ptr()) }?;
+    drop(sd);
+    Ok(server)
 }
 
 #[cfg(windows)]

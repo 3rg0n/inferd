@@ -154,8 +154,24 @@ by F-8. `crates/inferd-daemon/src/peercred.rs` extracts a
   — log-correlation only. Real perimeter is the API-key auth
   per F-8.
 
+**Windows DACL hardening.** The named pipes are created with
+an explicit SDDL DACL that grants `GENERIC_ALL` to the daemon's
+own user SID and nobody else (protected DACL, no inheritance).
+This is the kernel-object-level perimeter — peer-credential
+extraction (above) is the second line of defence after a peer
+has already passed the DACL check. Implemented in
+`crates/inferd-daemon/src/windows_security.rs` via
+`PipeSecurityDescriptor::current_user_only()` +
+`ServerOptions::create_with_security_attributes_raw`. Applies
+to both inference and admin pipes
+(`crates/inferd-daemon/src/endpoint.rs::bind_named_pipe` and
+`bind_admin_pipe`).
+
 Verified by `peercred::tests` (`tcp_identity_displays_remote_addr`
-unconditional; `unix_peer_credentials_self` `#[cfg(unix)]`).
+unconditional; `unix_peer_credentials_self` `#[cfg(unix)]`) and by
+`windows_security::tests::pipe_with_hardened_dacl_accepts_self`,
+which creates a real named pipe with the hardened DACL and
+round-trips a byte through it.
 
 ### F-8. Loopback TCP exposure
 
