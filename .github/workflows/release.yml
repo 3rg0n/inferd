@@ -10,18 +10,22 @@ name: Release
 #   - linux aarch64 (gnu)
 #   - macos aarch64 (Apple Silicon)
 #   - windows x86_64 (msvc)
-#   - windows aarch64 (msvc)
+#
+# Windows aarch64 was attempted via `windows-11-arm` in v0.1.7 but
+# the llamacpp build failed on the runner — likely an LLVM/clang
+# setup difference vs the x64 image. Held until that's debugged;
+# see #63 for the issue.
 #
 # Builds ship with the `llamacpp` feature so the binary supports
 # real inference out of the box (`--backend llamacpp`). Without
 # this, downloaded tarballs can only run the mock backend, which
 # is not what end users want from a release.
 #
-# Both arm64 targets use GitHub's native arm64 runners
-# (`ubuntu-24.04-arm`, `windows-11-arm`, free for public repos
-# since 2025). Native build means the same `cargo build
-# --features llamacpp` formula as x86_64 — no `cross`, no
-# foreign-target C++ toolchain headache.
+# aarch64-linux uses GitHub's native arm64 runner
+# (`ubuntu-24.04-arm`, free for public repos since January 2025).
+# Native build means the same `cargo build --features llamacpp`
+# formula as x86_64 — no `cross`, no foreign-target C++ toolchain
+# headache.
 
 on:
   push:
@@ -54,9 +58,6 @@ jobs:
             archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
             archive: zip
     steps:
       - uses: actions/checkout@v6

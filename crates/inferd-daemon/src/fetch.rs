@@ -333,6 +333,12 @@ fn download_with_progress(
         .timeout_connect(Duration::from_secs(30))
         .build();
 
+    info!(
+        url = %spec.source_url,
+        name = %spec.name,
+        "model download starting"
+    );
+
     let resp = agent
         .get(&spec.source_url)
         .call()
@@ -345,6 +351,15 @@ fn download_with_progress(
         .header("content-length")
         .and_then(|s| s.parse::<u64>().ok())
         .or(spec.size_bytes);
+    if let Some(t) = total {
+        info!(
+            total_bytes = t,
+            total_mib = t / (1024 * 1024),
+            "model download size known"
+        );
+    } else {
+        info!("model download size unknown (no Content-Length)");
+    }
 
     let mut reader = resp.into_reader();
     let mut file = OpenOptions::new()
@@ -385,6 +400,24 @@ fn download_with_progress(
                     source_url: spec.source_url.clone(),
                 },
             });
+            // Stdout/journal-visible progress so an operator running
+            // the daemon manually (or watching journalctl) sees the
+            // download is alive. Without this the daemon was silent
+            // for the duration of a 5 GB pull. Mirrors the milestone
+            // cadence of the admin-socket event so subscribers and
+            // log tailers see the same numbers.
+            let pct = total
+                .map(|t| (downloaded as f64 / t as f64) * 100.0)
+                .map(|p| format!("{p:5.1}%"))
+                .unwrap_or_else(|| "  ?  ".to_string());
+            let mib = downloaded / (1024 * 1024);
+            let total_mib = total.map(|t| t / (1024 * 1024)).unwrap_or(0);
+            info!(
+                downloaded_mib = mib,
+                total_mib = total_mib,
+                pct = %pct,
+                "model download progress"
+            );
             last_publish = now;
             next_byte_milestone = downloaded + (32 << 20);
         }
@@ -398,6 +431,10 @@ fn download_with_progress(
             source_url: spec.source_url.clone(),
         },
     });
+    info!(
+        downloaded_mib = downloaded / (1024 * 1024),
+        "model download complete"
+    );
     Ok(downloaded)
 }
 
