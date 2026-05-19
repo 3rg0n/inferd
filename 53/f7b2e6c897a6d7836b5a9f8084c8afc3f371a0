@@ -1,0 +1,30 @@
+CHANGELOG.md
+  s_126aec4081f728::t_ea9da73b6508d4 10,16-19,32-39
+.github/workflows/release.yml
+  s_126aec4081f728::t_993f4d681cf70f 191
+  s_126aec4081f728::t_d342ab68a0e6af 176
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_a087cc73cee98d 31-32
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_eeaad9e6d58870 30
+Cargo.toml
+  s_126aec4081f728::t_f2807bb51a72a7 17
+crates/inferd-client/Cargo.toml
+  s_126aec4081f728::t_548ac91d3461e2 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "53f7b2e6c897a6d7836b5a9f8084c8afc3f371a0",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
