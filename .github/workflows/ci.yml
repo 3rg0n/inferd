@@ -120,3 +120,132 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  systemd-unit:
+    name: systemd-unit smoke (ubuntu)
+    runs-on: ubuntu-latest
+    # The handoff doc (inferd-linux-handoff.md §6) called out a
+    # systemd-unit-on-real-systemd CI fixture as the way to catch
+    # regressions in:
+    #   - RuntimeDirectory= auto-creation
+    #   - the XDG_RUNTIME_DIR resolution chain in default_admin_addr
+    #   - the hardening directives (ProtectSystem=strict etc.)
+    #     accidentally locking the daemon out of paths it needs
+    #   - StartLimitBurst containment when the daemon panics on missing
+    #     assets
+    #
+    # GitHub's ubuntu-latest runner has systemd PID 1 and a working
+    # systemd --user, but the `runner` user isn't a logind login session
+    # by default — XDG_RUNTIME_DIR isn't exported to the action's shell
+    # and the user-bus may not be running. `loginctl enable-linger`
+    # plus a manual XDG_RUNTIME_DIR export bridges that.
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build daemon (mock backend, release)
+        run: cargo build --release -p inferd-daemon
+
+      - name: Set up systemd user session
+        # GitHub Actions doesn't export XDG_RUNTIME_DIR; systemd-logind
+        # has provisioned /run/user/<uid>/ but the env var isn't
+        # reaching `bash`. `loginctl enable-linger` keeps the user bus
+        # alive without an interactive session; we then export
+        # XDG_RUNTIME_DIR for every subsequent step.
+        run: |
+          uid=$(id -u)
+          sudo loginctl enable-linger "$USER"
+          # Give logind a moment to spin up the user bus.
+          for i in 1 2 3 4 5; do
+            if [ -S "/run/user/${uid}/bus" ]; then break; fi
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+
+      - name: Install daemon binary + systemd unit
+        run: |
+          mkdir -p ~/.local/bin ~/.config/systemd/user
+          install -m 755 target/release/inferd-daemon ~/.local/bin/inferd-daemon
+          install -m 644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
+
+      - name: Start inferd via systemctl --user
+        run: |
+          systemctl --user daemon-reload
+          systemctl --user start inferd
+          # Give it a moment to bind sockets.
+          for i in 1 2 3 4 5; do
+            if systemctl --user is-active --quiet inferd; then break; fi
+            sleep 1
+          done
+          systemctl --user status inferd --no-pager
+          systemctl --user is-active inferd
+
+      - name: Verify runtime artefacts and modes
+        run: |
+          ls -la "${XDG_RUNTIME_DIR}/inferd/"
+          # Sockets must exist and have the spec-mandated modes:
+          #   admin.sock   srw------- (0600)
+          #   infer.sock   srw-rw---- (0660)
+          test -S "${XDG_RUNTIME_DIR}/inferd/admin.sock"
+          test -S "${XDG_RUNTIME_DIR}/inferd/infer.sock"
+          test -f "${XDG_RUNTIME_DIR}/inferd/inferd.lock"
+          # `stat -c %a` prints octal mode; check exact bytes.
+          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/admin.sock")" = "600" ]
+          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/infer.sock")" = "660" ]
+
+      - name: Smoke an NDJSON request through the inference UDS
+        run: |
+          python3 - <<PY
+          import socket, json, os, sys
+          sock_path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "inferd", "infer.sock")
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.connect(sock_path)
+          req = {"id":"ci-systemd","messages":[{"role":"user","content":"hello"}],"max_tokens":4}
+          s.sendall((json.dumps(req)+"\n").encode())
+          buf = b""
+          done = False
+          while not done:
+              chunk = s.recv(4096)
+              if not chunk:
+                  print("EOF", file=sys.stderr); sys.exit(1)
+              buf += chunk
+              while b"\n" in buf:
+                  line, buf = buf.split(b"\n", 1)
+                  if not line: continue
+                  print("<-", line.decode())
+                  if b'"type":"done"' in line:
+                      done = True
+                      break
+                  if b'"type":"error"' in line:
+                      print("daemon returned error frame", file=sys.stderr); sys.exit(1)
+          PY
+
+      - name: Verify journal does not show start-loop containment trips
+        # Catches regressions where the unit panics on launch and
+        # StartLimitBurst engages — the handoff doc §3 bug-class.
+        run: |
+          journalctl --user -u inferd --no-pager --since=-2min \
+            | tee /tmp/inferd-journal.log
+          if grep -q "Start request repeated too quickly" /tmp/inferd-journal.log; then
+            echo "FAIL: StartLimitBurst engaged — daemon failed to start cleanly"
+            exit 1
+          fi
+          if grep -qE "(Failed with result|exit-code)" /tmp/inferd-journal.log; then
+            echo "FAIL: unit reported failure"
+            exit 1
+          fi
+
+      - name: Collect journal on failure
+        if: failure()
+        run: |
+          journalctl --user -u inferd --no-pager --since=-5min || true
+          systemctl --user status inferd --no-pager || true
+
+      - name: Stop and disable
+        if: always()
+        run: |
+          systemctl --user stop inferd || true
+          systemctl --user disable inferd || true
