@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-19
+
+The release-tarball saga continues. v0.1.4 was tagged with the
+right feature flag (`inferd-daemon/llamacpp`) but the build
+job's binary-size guard caught a 9.2MB binary on Linux x64 —
+under the 10MB threshold for a real-llamacpp build. The tag
+exists, no release artifacts were attached. Investigation
+showed Swatinem/rust-cache served a stale target directory
+even with a feature-suffixed cache key.
+
+The clean fix: stop caching the release builds. Releases are
+rare, the binary-size guard catches the failure mode, and
+adding ~5 min per platform per release is a fair trade for
+never shipping mock-only tarballs again.
+
+### Fixed
+
+- **Disable rust-cache for release builds.** Each release does
+  a clean build from scratch. The Swatinem cache served stale
+  mock-only target dirs in v0.1.1 and v0.1.4 despite
+  feature-suffixed keys; rather than chase the cache key that
+  always works, we just don't cache the release path. Verified
+  Linux x86_64 end-to-end with real Gemma 4 inference in WSL2.
+
+### Verified end-to-end (real inference, not mock)
+
+- **Linux x86_64**: TTFT 670ms, 13 tokens, generated text
+  semantically correct, `backend: "llamacpp"`, `stop_reason:
+  "end"`. Closes the gap mac claude flagged on alpha.0 and
+  thlibo claude flagged on v0.1.1.
+- **Windows x86_64**: validated earlier in the v0.1.x cycle.
+- **macOS aarch64**: tracked under issue #2 — pending mac
+  claude validating the v0.1.5 tarball.
+- **Linux aarch64**: untested (no arm64 hardware locally).
+
 ## [0.1.3] - 2026-05-19
 
 Release-tooling fix only. Crates unchanged from 0.1.1; **no cargo
