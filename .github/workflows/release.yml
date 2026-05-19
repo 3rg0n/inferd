@@ -11,9 +11,15 @@ name: Release
 #   - macos aarch64 (Apple Silicon)
 #   - windows x86_64 (msvc)
 #
-# Default builds only — no llamacpp feature in the shipped binaries.
-# Operators wanting the FFI engine build from source for now (M2c+
-# revisits this if a linkable libllama distribution becomes practical).
+# Builds ship with the `llamacpp` feature so the binary supports
+# real inference out of the box (`--backend llamacpp`). Without
+# this, downloaded tarballs can only run the mock backend, which
+# is not what end users want from a release.
+#
+# aarch64-linux is built without `llamacpp` for now: the cross
+# image doesn't have the C++ toolchain + libclang configured for
+# bindgen + cmake against the vendored llama.cpp submodule.
+# Tracked as a follow-up; native arm64 runners would simplify it.
 
 on:
   push:
@@ -50,6 +56,9 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@v6
+        with:
+          # llamacpp feature builds need the vendored llama.cpp submodule.
+          submodules: recursive
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -60,15 +69,27 @@ jobs:
         if: matrix.cross
         run: cargo install cross --locked
 
+      # libclang for bindgen, plus the platform's C++ toolchain. The CI
+      # workflow does the same setup; release inherits the formula.
+      - name: Install libclang (Ubuntu)
+        if: runner.os == 'Linux' && !matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build
+      - name: Build (with llamacpp)
         if: '!matrix.cross'
-        run: cargo build --release --bin inferd-daemon --target ${{ matrix.target }}
+        run: cargo build --release --bin inferd-daemon --features inferd-engine/llamacpp --target ${{ matrix.target }}
 
-      - name: Build (cross)
+      # aarch64-linux still ships mock-only: the cross image lacks the
+      # C++ toolchain configuration needed to build llama.cpp via cmake
+      # for the foreign target. See workflow header.
+      - name: Build (cross, mock only)
         if: matrix.cross
         run: cross build --release --bin inferd-daemon --target ${{ matrix.target }}
 

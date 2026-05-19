@@ -14,11 +14,13 @@ members = [
 exclude = ["crates/inferd-proto/fuzz"]
 
 [workspace.package]
-version = "0.1.0-alpha.0"
-edition = "2021"
-# 1.89 is required by std::fs::File::try_lock used in inferd-daemon::lock.
-# That API replaces a third-party crate (fs4) for cross-platform single-
-# instance locking and is the obvious right answer now that std ships it.
+version = "0.1.1"
+edition = "2024"
+# Edition 2024 (stable since Rust 1.85) requires rust-version >= 1.85.
+# 1.89 is the floor we already need for std::fs::File::try_lock used
+# in inferd-daemon::lock. That API replaces a third-party crate (fs4)
+# for cross-platform single-instance locking and is the obvious right
+# answer now that std ships it.
 rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/3rg0n/inferd"

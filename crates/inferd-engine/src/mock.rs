@@ -29,6 +29,11 @@ pub struct MockConfig {
     /// followed by a `Done`). Default: a single canned response so callers
     /// without a config still get something useful.
     pub tokens: Vec<String>,
+    /// Optional sleep between emitted tokens, in milliseconds. Used by
+    /// the concurrency stress harness to make per-request work
+    /// observable so admission queueing actually engages. `None` means
+    /// no delay (the historical behaviour).
+    pub token_delay_ms: Option<u64>,
 }
 
 /// Variants for `MockConfig::pre_stream_error`.
@@ -111,6 +116,10 @@ impl Backend for Mock {
 
         let tokens = self.config.tokens.clone();
         let drop_after = self.config.mid_stream_drop_after;
+        let token_delay = self
+            .config
+            .token_delay_ms
+            .map(std::time::Duration::from_millis);
         let (tx, rx) = tokio::sync::mpsc::channel(8);
 
         // Spawned so dropping the stream (which drops `rx`) cancels by
@@ -118,11 +127,14 @@ impl Backend for Mock {
         tokio::spawn(async move {
             let mut completion_tokens: u32 = 0;
             for (emitted, tok) in tokens.into_iter().enumerate() {
-                if let Some(n) = drop_after {
-                    if emitted >= n {
-                        // Simulate mid-stream failure: stop without Done.
-                        return;
-                    }
+                if let Some(n) = drop_after
+                    && emitted >= n
+                {
+                    // Simulate mid-stream failure: stop without Done.
+                    return;
+                }
+                if let Some(d) = token_delay {
+                    tokio::time::sleep(d).await;
                 }
                 if tx.send(TokenEvent::Token(tok)).await.is_err() {
                     return; // receiver dropped → cancellation

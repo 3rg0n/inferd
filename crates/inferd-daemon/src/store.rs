@@ -125,10 +125,9 @@ impl ModelStore {
         if let Some(stripped) = root
             .to_str()
             .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")))
+            && let Some(home) = home_dir()
         {
-            if let Some(home) = home_dir() {
-                root = home.join(stripped);
-            }
+            root = home.join(stripped);
         }
         Self { root }
     }
@@ -304,6 +303,7 @@ pub fn format_blob_ref(sha256_hex: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // Edition 2024 made env::set_var/remove_var unsafe.
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -407,17 +407,24 @@ mod tests {
 
     #[test]
     fn default_models_home_honours_models_home_env() {
-        // SAFETY: tests within a single process can race on env vars.
-        // We don't assert MODELS_HOME == anything specific here, just
-        // that it's non-empty and that the override path is reachable.
+        // SAFETY: edition 2024 made env::set_var/remove_var unsafe
+        // because environment mutation isn't thread-safe. Cargo runs
+        // unit tests in a multi-threaded harness by default. This
+        // test is fine if it's the only test in the process touching
+        // MODELS_HOME — which it is — and we restore the saved value
+        // before returning so we don't leak state to siblings.
         let saved = std::env::var_os("MODELS_HOME");
-        std::env::set_var("MODELS_HOME", "/tmp/inferd-test-models-home");
+        unsafe {
+            std::env::set_var("MODELS_HOME", "/tmp/inferd-test-models-home");
+        }
         let p = default_models_home();
         assert_eq!(p, PathBuf::from("/tmp/inferd-test-models-home"));
-        if let Some(v) = saved {
-            std::env::set_var("MODELS_HOME", v);
-        } else {
-            std::env::remove_var("MODELS_HOME");
+        unsafe {
+            if let Some(v) = saved {
+                std::env::set_var("MODELS_HOME", v);
+            } else {
+                std::env::remove_var("MODELS_HOME");
+            }
         }
     }
 }

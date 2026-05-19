@@ -180,15 +180,13 @@ impl ConfigFile {
     }
 
     fn expand_paths(&mut self) {
-        if let Some(p) = self.models_home.as_ref() {
-            if let Some(stripped) = p
+        if let Some(p) = self.models_home.as_ref()
+            && let Some(stripped) = p
                 .to_str()
                 .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")))
-            {
-                if let Some(home) = home_dir() {
-                    self.models_home = Some(home.join(stripped));
-                }
-            }
+            && let Some(home) = home_dir()
+        {
+            self.models_home = Some(home.join(stripped));
         }
     }
 
