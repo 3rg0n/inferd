@@ -57,33 +57,27 @@ LogsDirectory=inferd
 Environment=INFERD_LOG=info
 Environment=INFERD_LOG_DIR=%S/inferd/logs
 
-# Hardening (THREAT_MODEL F-16). Each directive narrows what a
-# compromised daemon can do.
+# Hardening (THREAT_MODEL F-16). The directives below are the
+# subset that works under `systemctl --user` on stock systemd
+# without requiring capabilities the user doesn't have.
 #
-# `systemctl --user` constraint: many hardening directives that work
-# fine for root-owned `User=`-style system units fail unit-level
-# validation under per-user systemd because they require capabilities
-# the user can't grant. The directives below are the maximal subset
-# that is *both* effective for a per-user daemon AND accepted by
-# systemd's user-bus on stock Ubuntu/Debian/Fedora.
+# Many hardening directives that look right for a daemon
+# (PrivateTmp=, ProtectSystem=strict, PrivateDevices=,
+# ProtectControlGroups=, ProtectKernel*=, RestrictNamespaces=,
+# MemoryDenyWriteExecute=, CapabilityBoundingSet=) require
+# CAP_SYS_ADMIN or similar to *set up* the namespace/mount/cgroup
+# barriers — capabilities a non-root user has no way to grant.
+# On systemd <= 250 (and several modern stock distros) these fail
+# unit-level validation with `status=218/CAPABILITIES` before
+# ExecStart runs even though the daemon itself doesn't need root.
 #
-# Excluded from this baseline (operator-opt-in for system-unit
-# deployments via `User=` at install time):
-#   ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs
-#     — require CAP_SYS_ADMIN/CAP_SYSLOG in the bounding set
-#   RestrictNamespaces, MemoryDenyWriteExecute
-#     — interact with kernel features needing root or specific caps
-#   CapabilityBoundingSet=, AmbientCapabilities=
-#     — non-root has no capabilities to bound or grant
-#
-# Failure mode if these are added back to a per-user unit:
-# `status=218/CAPABILITIES` from systemd before ExecStart runs.
+# For a system-unit deployment (multi-user host, root install via
+# `User=inferd-daemon` in a unit at /etc/systemd/system/), the full
+# F-16 hardening set is supported. See
+# `packaging/systemd/inferd.service.system` for that variant
+# (forthcoming).
 NoNewPrivileges=yes
-ProtectSystem=strict
 ProtectHome=read-only
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -92,8 +86,9 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
-# State + logs need write access; everything else is RO.
-ReadWritePaths=%t/inferd %S/inferd
+# `ReadWritePaths=` is only meaningful with `ProtectSystem=strict`,
+# which we drop above for per-user reasons. RuntimeDirectory= and
+# StateDirectory= already grant write access where it's needed.
 
 [Install]
 WantedBy=default.target
