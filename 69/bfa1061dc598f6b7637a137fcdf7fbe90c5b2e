@@ -1,0 +1,27 @@
+crates/inferd-proto/LICENSE
+  s_126aec4081f728::t_b7070e137c7005 1-21
+crates/inferd-client/LICENSE
+  s_126aec4081f728::t_b7070e137c7005 1-21
+crates/inferd-proto/README.md
+  s_126aec4081f728::t_4614e8680bb2b1 3-6,8-12,14-57
+crates/inferd-proto/Cargo.toml
+  s_126aec4081f728::t_2a5d640159f1d9 11-13,16-17
+crates/inferd-client/README.md
+  s_126aec4081f728::t_c58a524036b3c3 101-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "69bfa1061dc598f6b7637a137fcdf7fbe90c5b2e",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
