@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-19
+
+Release-tooling fix only. Crates unchanged from 0.1.1; **no cargo
+publish.** The point of the release is to get a real-inference
+binary into the aarch64-linux tarball that 0.1.1 shipped mock-only.
+
+### Fixed
+
+- **aarch64-linux release tarball ships with `--features llamacpp`.**
+  release.yml's aarch64 job switched from `cross` (which couldn't
+  configure a foreign-target C++ toolchain for llama.cpp's cmake
+  build) to GitHub's native arm64 runner (`ubuntu-24.04-arm`,
+  free for public repos since January 2025). Same `cargo build
+  --features llamacpp` formula as the other targets — no special
+  cases.
+
+### Changed
+
+- **GitHub Actions versions bumped** to current latest:
+  `actions/upload-artifact@v4` → `@v7`,
+  `actions/download-artifact@v4` → `@v8`,
+  `sigstore/cosign-installer@v3` → `@v4`,
+  `softprops/action-gh-release@v2` → `@v3`. All Node-24 era;
+  closes the deprecation annotations from the 0.1.1 run.
+- **Go version** in CI changed from pinned `1.21` to `stable`.
+  Tracks current stable; the Go module's `go 1.21` directive is
+  unchanged so external Go consumers on 1.21+ still work.
+- **setup-go cache disabled** for the Go client job — there's no
+  `go.sum` (zero external deps) so cache had nothing to key off
+  and emitted a cosmetic miss annotation on every run.
+
 ## [0.1.1] - 2026-05-19
 
 First non-alpha release. Drops the `-alpha` suffix because:
