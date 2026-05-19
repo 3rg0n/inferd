@@ -27,7 +27,7 @@ vulkan               = ["llamacpp"]
 rocm                 = ["llamacpp"]
 
 [dependencies]
-inferd-proto = { path = "../inferd-proto" }
+inferd-proto = { path = "../inferd-proto", version = "=0.1.0-alpha.0" }
 async-trait  = { workspace = true }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
