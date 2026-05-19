@@ -57,10 +57,11 @@ v0.1:
 - Hand-written Go client (`clients/go/`); Python and TypeScript
   clients to follow.
 
-v0.2 adds backend adapters for Ollama, OpenAI, Bedrock, Anthropic,
-and LiteLLM-compatible servers behind the same `Backend` trait —
-turning inferd into a local model-proxy-gateway whose backend is
-transparent to every consumer that talks to it.
+v0.2 adds backend adapters for OpenAI-compatible servers (vLLM,
+LM Studio, LocalAI, llama.cpp's HTTP server, and OpenAI/Anthropic/
+Bedrock proper) behind the same `Backend` trait — turning inferd
+into a local model-proxy-gateway whose backend is transparent to
+every consumer that talks to it.
 
 ## Layout
 
