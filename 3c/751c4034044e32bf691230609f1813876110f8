@@ -1,0 +1,20 @@
+context.md
+  s_126aec4081f728::t_b48e46ea301e1a 19-50,59,63
+  s_126aec4081f728::t_2f9f1e381169aa 118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "3c751c4034044e32bf691230609f1813876110f8",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
