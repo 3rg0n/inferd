@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-05-19
+## [0.1.3] - 2026-05-19
 
 Release-tooling fix only. Crates unchanged from 0.1.1; **no cargo
 publish.** The point of the release is to get a real-inference
 binary into the aarch64-linux tarball that 0.1.1 shipped mock-only.
+
+(0.1.2 was tagged but never released — the publish step failed on
+unresolvable Action versions before any artifacts were attached.
+0.1.3 lands the fix.)
 
 ### Fixed
 
@@ -25,12 +29,14 @@ binary into the aarch64-linux tarball that 0.1.1 shipped mock-only.
 
 ### Changed
 
-- **GitHub Actions versions bumped** to current latest:
-  `actions/upload-artifact@v4` → `@v7`,
-  `actions/download-artifact@v4` → `@v8`,
-  `sigstore/cosign-installer@v3` → `@v4`,
-  `softprops/action-gh-release@v2` → `@v3`. All Node-24 era;
-  closes the deprecation annotations from the 0.1.1 run.
+- **GitHub Actions versions bumped** to current latest available
+  major-version tags: `actions/upload-artifact@v4` → `@v7`,
+  `actions/download-artifact@v4` → `@v8`. Both Node-24, closing the
+  deprecation annotations from the 0.1.1 run.
+  `sigstore/cosign-installer` and `softprops/action-gh-release`
+  stay at `@v3`/`@v2` respectively — those projects publish 4.x /
+  3.x point releases but haven't tagged a new major-version
+  float, so the floats remain on v3 / v2.
 - **Go version** in CI changed from pinned `1.21` to `stable`.
   Tracks current stable; the Go module's `go 1.21` directive is
   unchanged so external Go consumers on 1.21+ still work.

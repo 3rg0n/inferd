@@ -173,7 +173,7 @@ jobs:
           ls -la release-assets
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v3
 
       - name: Sign artefacts (keyless OIDC)
         run: |
@@ -188,7 +188,7 @@ jobs:
           ls -la
 
       - name: Create release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             release-assets/*.tar.gz
