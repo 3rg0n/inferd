@@ -2,7 +2,12 @@
 
 > Local inference daemon. One warm model, many consumers.
 
-**Status: alpha.** Code is in flight; v0.1 is shipping toward GA. See
+[![inferd-proto on crates.io](https://img.shields.io/crates/v/inferd-proto?label=inferd-proto)](https://crates.io/crates/inferd-proto)
+[![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Status: alpha.** v0.1.0-alpha.0 of `inferd-proto` and `inferd-client`
+is on crates.io. The daemon binary ships via GitHub releases. See
 `docs/plan-v0.1.md` for the design and `context.md` for the hand-off
 brief to first-time contributors.
 

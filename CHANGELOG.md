@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.0] - 2026-05-19
+
+First crates.io release.
+
+### Released
+
+- **`inferd-proto` 0.1.0-alpha.0** on crates.io. Wire format types
+  (`Request`, `Response`, `Message`, `ErrorCode`, `StopReason`),
+  NDJSON framing with 64 MiB per-frame cap. Canonical schema for
+  any-language clients.
+- **`inferd-client` 0.1.0-alpha.0** on crates.io. NDJSON-over-IPC
+  client (UDS / Windows named pipe / loopback TCP), admin event
+  subscriber, retry-and-wait helpers (Pattern A passive +
+  Pattern B active). Re-exports `inferd-proto` so consumers don't
+  need both deps.
+- Both crates pinned to `inferd-daemon 0.1.0-alpha.0` via `=`-strict
+  versioning so the wire-protocol contract is enforced at the
+  Cargo.lock layer.
+
 ### Fixed
 
 - **Linux runtime path defaults**: `default_admin_addr()` (daemon
