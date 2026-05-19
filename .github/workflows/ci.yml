@@ -98,7 +98,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.21'
+          # Track stable; the go.mod requires 1.21+ so this only ever
+          # widens compatibility with the test toolchain.
+          go-version: 'stable'
+          # No go.sum (zero external deps) so the module cache has
+          # nothing to key off — disable to silence the cache-miss
+          # annotation.
+          cache: false
       - uses: Swatinem/rust-cache@v2
       # The end-to-end Go test launches the daemon binary; build it first.
       - run: cargo build -p inferd-daemon
