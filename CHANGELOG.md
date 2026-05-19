@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ADR 0012**: one warm model per inferd process. Closes the
+  multi-model question that v0.1's plan flagged as a non-goal —
+  multi-model warm pooling is rejected for the foreseeable v0.x
+  cadence on lean-core (ADR 0006) and protocol-cost (ADR 0008)
+  grounds. Operators who need N concurrent models run N inferd
+  processes. The router (ADR 0007) multiplexes *backends*, not
+  *models*.
+
+### Fixed
+
+- **systemd unit**: dropped F-16 hardening directives that need
+  `CAP_SYS_ADMIN` (`PrivateTmp`, `PrivateDevices`,
+  `ProtectSystem=strict`, `ProtectControlGroups`, `ProtectKernel*`,
+  `RestrictNamespaces`, `MemoryDenyWriteExecute`,
+  `CapabilityBoundingSet`, `AmbientCapabilities`). They fail
+  unit-level validation on `systemctl --user` with
+  `status=218/CAPABILITIES` because a non-root user has no
+  capabilities to bound or grant. The remaining set is the maximal
+  subset that works without root. A future
+  `inferd.service.system` template will ship the full F-16
+  hardening for system-unit deployments. Discovered via the new
+  CI fixture (below).
+
+### CI
+
+- **systemd-unit smoke job** on `ubuntu-latest`. Boots the daemon
+  through `systemctl --user` with the shipped unit file, verifies
+  socket modes (0600 admin, 0660 inference), drives an NDJSON
+  request through the inference UDS, asserts the journal contains
+  no crash-loop containment trips. Closes the WSL2-systemd gap
+  flagged in the Linux runtime handoff §6.
+
 ## [0.1.0-alpha.0] - 2026-05-19
 
 First crates.io release.
