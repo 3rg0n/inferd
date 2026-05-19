@@ -37,17 +37,16 @@
 
 use std::io;
 use std::ptr;
-use windows_sys::core::PWSTR;
-use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, FALSE, HANDLE, HLOCAL};
+use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TokenUser, TOKEN_QUERY,
-    TOKEN_USER,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::core::PWSTR;
 
 /// Owns a heap-allocated security descriptor produced by
 /// `ConvertStringSecurityDescriptorToSecurityDescriptorW`.
@@ -231,10 +230,7 @@ mod tests {
 
         // Use a unique-per-pid pipe name so parallel tests don't
         // collide on a system pipe namespace.
-        let path = format!(
-            r"\\.\pipe\inferd-sddl-test-{}",
-            std::process::id()
-        );
+        let path = format!(r"\\.\pipe\inferd-sddl-test-{}", std::process::id());
 
         let mut sd = PipeSecurityDescriptor::current_user_only().unwrap();
         // SAFETY: as_attrs_ptr returns a stable pointer for the

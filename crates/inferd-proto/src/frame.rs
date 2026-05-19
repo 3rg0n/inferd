@@ -3,7 +3,7 @@
 //! See `docs/protocol-v1.md` §Framing and THREAT_MODEL.md F-1.
 
 use crate::error::ProtoError;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::io::{BufRead, Write};
 
 /// Hard cap on a single NDJSON frame in bytes (64 MiB).

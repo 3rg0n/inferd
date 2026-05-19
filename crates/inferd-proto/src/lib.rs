@@ -13,6 +13,6 @@ mod request;
 mod response;
 
 pub use error::{ErrorCode, ProtoError};
-pub use frame::{read_frame, write_frame, MAX_FRAME_BYTES};
+pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 pub use request::{ImageTokenBudget, Message, Request, Resolved, Role, VALID_IMAGE_TOKEN_BUDGETS};
 pub use response::{Response, StopReason, Usage};

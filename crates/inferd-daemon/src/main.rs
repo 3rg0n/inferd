@@ -28,19 +28,19 @@ use inferd_daemon::endpoint::bind_admin_uds;
 #[cfg(unix)]
 use inferd_daemon::endpoint::bind_uds;
 use inferd_daemon::endpoint::{bind_tcp, default_admin_addr};
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
+use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
 use inferd_daemon::lock::Lock;
-use inferd_daemon::logx::{default_log_dir, LogxLayer, LogxWriter, DEFAULT_ROTATE_BYTES};
+use inferd_daemon::logx::{DEFAULT_ROTATE_BYTES, LogxLayer, LogxWriter, default_log_dir};
 use inferd_daemon::router::Router;
 use inferd_daemon::status::{LoadPhase, StatusEvent};
-use inferd_engine::{mock::Mock, Backend};
+use inferd_engine::{Backend, mock::Mock};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -274,8 +274,8 @@ async fn build_llamacpp(
     config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
-    use inferd_daemon::fetch::{fetch_model, ModelSpec};
-    use inferd_daemon::store::{default_models_home, ModelStore};
+    use inferd_daemon::fetch::{ModelSpec, fetch_model};
+    use inferd_daemon::store::{ModelStore, default_models_home};
     use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 
     // Resolve the spec + store: prefer config-file, fall back to CLI flags.
@@ -460,7 +460,7 @@ fn install_shutdown_signal() -> anyhow::Result<tokio::sync::oneshot::Receiver<()
     tokio::spawn(async move {
         #[cfg(unix)]
         let result: Result<(), std::io::Error> = async {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm = signal(SignalKind::terminate())?;
             let mut sigint = signal(SignalKind::interrupt())?;
             tokio::select! {

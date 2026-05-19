@@ -24,7 +24,7 @@
 
 use crate::admin::StatusBroadcaster;
 use crate::status::{LoadPhase, StatusEvent};
-use crate::store::{format_blob_ref, parse_blob_ref, Manifest, ManifestSource, ModelStore};
+use crate::store::{Manifest, ManifestSource, ModelStore, format_blob_ref, parse_blob_ref};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};

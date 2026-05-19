@@ -12,8 +12,8 @@
 use crate::backend::{Backend, GenerateError, TokenEvent, TokenStream};
 use async_trait::async_trait;
 use inferd_proto::{Resolved, StopReason, Usage};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Configuration for `Mock` failure-mode injection.

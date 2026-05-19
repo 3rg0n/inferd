@@ -2,8 +2,8 @@
 //! `docs/test-strategy.md`.
 
 use inferd_proto::{
-    read_frame, write_frame, ErrorCode, Message, ProtoError, Request, Response, Role, StopReason,
-    Usage, MAX_FRAME_BYTES,
+    ErrorCode, MAX_FRAME_BYTES, Message, ProtoError, Request, Response, Role, StopReason, Usage,
+    read_frame, write_frame,
 };
 use std::io::Cursor;
 

@@ -68,13 +68,13 @@ mod wait;
 
 pub use admin::{AdminClient, AdminEvent};
 pub use client::{Client, ClientError, FrameStream};
-pub use wait::{default_admin_addr, dial_and_wait_ready, is_transient_dial_error, WaitError};
+pub use wait::{WaitError, default_admin_addr, dial_and_wait_ready, is_transient_dial_error};
 
 /// Re-exports from `inferd-proto` so consumers don't need a separate
 /// `inferd-proto` dep for the wire types. The proto crate IS the
 /// version-pin contract for protocol compatibility — `inferd-client
 /// 0.1` always uses `inferd-proto 0.1`.
 pub use inferd_proto::{
-    ErrorCode, ImageTokenBudget, Message, ProtoError, Request, Resolved, Response, Role,
-    StopReason, Usage, MAX_FRAME_BYTES, VALID_IMAGE_TOKEN_BUDGETS,
+    ErrorCode, ImageTokenBudget, MAX_FRAME_BYTES, Message, ProtoError, Request, Resolved, Response,
+    Role, StopReason, Usage, VALID_IMAGE_TOKEN_BUDGETS,
 };
