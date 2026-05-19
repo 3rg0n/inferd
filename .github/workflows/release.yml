@@ -82,7 +82,15 @@ jobs:
           key: ${{ matrix.target }}-llamacpp
 
       - name: Build (with llamacpp)
-        run: cargo build --release --bin inferd-daemon --features inferd-engine/llamacpp --target ${{ matrix.target }}
+        # Use `inferd-daemon/llamacpp` (the daemon's own feature) not
+        # `inferd-engine/llamacpp`. The daemon's `llamacpp` feature
+        # activates `inferd-engine/llamacpp` via dep-feature forwarding
+        # AND sets `cfg(feature = "llamacpp")` in the daemon crate so the
+        # `BackendKind::Llamacpp` match arm compiles in. Passing only
+        # `inferd-engine/llamacpp` compiles the engine code but leaves the
+        # daemon arm gated out — resulting in a binary that rejects
+        # `--backend llamacpp` at runtime.
+        run: cargo build --release --bin inferd-daemon --features inferd-daemon/llamacpp --target ${{ matrix.target }}
 
       - name: Verify binary has llamacpp compiled in
         shell: bash
