@@ -12,11 +12,11 @@
 //!    redactor runs end-to-end).
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
+use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
 use inferd_daemon::logx::{LogxLayer, LogxWriter};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
-use inferd_proto::{write_frame, Message, Request, Response, Role};
+use inferd_proto::{Message, Request, Response, Role, write_frame};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;

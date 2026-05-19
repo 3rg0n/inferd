@@ -13,4 +13,4 @@ pub mod backend;
 pub mod loader;
 
 pub use backend::{LlamaCpp, LlamaCppConfig, LlamaCppError};
-pub use loader::{load_model, ModelHandle, ModelLoadError};
+pub use loader::{ModelHandle, ModelLoadError, load_model};

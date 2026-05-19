@@ -15,12 +15,12 @@
 //! Per ADR 0007 the daemon emits no terminal frame on cancel — the EOF
 //! is the signal.
 
-use crate::auth::{key_matches, AuthFrame};
+use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
 use crate::router::{Router, RouterError};
 use inferd_engine::{GenerateError, TokenEvent};
-use inferd_proto::{write_frame, ErrorCode, ProtoError, Request, Response};
+use inferd_proto::{ErrorCode, ProtoError, Request, Response, write_frame};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

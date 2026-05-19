@@ -26,12 +26,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Layer;
 
 use crate::redact::redact_in_place;
 

@@ -151,8 +151,8 @@ pub fn default_admin_addr() -> PathBuf {
 mod tests {
     use super::*;
     use std::io;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn io_err(kind: io::ErrorKind, msg: &str) -> ClientError {
         ClientError::Io(io::Error::new(kind, msg))

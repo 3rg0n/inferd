@@ -22,10 +22,10 @@
 //!   only after `bind_tcp` returns.
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
+use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
-use inferd_proto::{write_frame, ErrorCode, Message, Request, Response, Role, StopReason};
+use inferd_proto::{ErrorCode, Message, Request, Response, Role, StopReason, write_frame};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

@@ -318,9 +318,11 @@ mod tests {
         assert!(s.ends_with("data") || s.ends_with("data\\") || s.ends_with("data/"));
         // Fanout dir is "ab" (first two chars).
         let parts: Vec<_> = p.components().collect();
-        assert!(parts
-            .iter()
-            .any(|c| c.as_os_str() == std::ffi::OsStr::new("ab")));
+        assert!(
+            parts
+                .iter()
+                .any(|c| c.as_os_str() == std::ffi::OsStr::new("ab"))
+        );
     }
 
     #[test]
@@ -394,9 +396,11 @@ mod tests {
         let qpath = store.quarantine(&bad, "sha-mismatch").unwrap();
         assert!(!bad.exists());
         assert!(qpath.exists());
-        assert!(qpath
-            .to_string_lossy()
-            .contains(&format!("locks{}quarantine", std::path::MAIN_SEPARATOR)));
+        assert!(
+            qpath
+                .to_string_lossy()
+                .contains(&format!("locks{}quarantine", std::path::MAIN_SEPARATOR))
+        );
     }
 
     #[test]

@@ -15,10 +15,10 @@
 #![cfg(feature = "llamacpp-integration")]
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
+use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
 use inferd_daemon::router::Router;
 use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
-use inferd_proto::{write_frame, Message, Request, Response, Role, StopReason};
+use inferd_proto::{Message, Request, Response, Role, StopReason, write_frame};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

@@ -10,7 +10,7 @@
 //! time. The lifecycle wires this up to the inference backend.
 
 use std::sync::Arc;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 /// Errors returned by `Queue::submit`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

@@ -17,11 +17,11 @@
 
 #![cfg(feature = "security")]
 
-use inferd_daemon::auth::{key_matches, AuthFrame};
+use inferd_daemon::auth::{AuthFrame, key_matches};
 use inferd_daemon::lock::{Lock, LockError};
 use inferd_daemon::peercred::PeerIdentity;
 use inferd_daemon::redact::redact_in_place;
-use inferd_proto::{read_frame, write_frame, Message, ProtoError, Request, Role, MAX_FRAME_BYTES};
+use inferd_proto::{MAX_FRAME_BYTES, Message, ProtoError, Request, Role, read_frame, write_frame};
 use std::io;
 use std::io::Cursor;
 

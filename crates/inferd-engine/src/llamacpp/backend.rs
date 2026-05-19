@@ -21,7 +21,7 @@
 
 use crate::backend::{Backend, GenerateError, TokenEvent, TokenStream};
 use crate::ffi;
-use crate::llamacpp::loader::{load_model, ModelHandle, ModelLoadError};
+use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
 use async_trait::async_trait;
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::ffi::CString;

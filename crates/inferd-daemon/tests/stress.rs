@@ -33,10 +33,10 @@
 //! constants below.
 
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{serve_tcp, wait_for_ready, AcceptContext};
+use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
-use inferd_proto::{write_frame, Message, Request, Response, Role};
+use inferd_proto::{Message, Request, Response, Role, write_frame};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -135,8 +135,7 @@ async fn one_request(addr: String, id: String) -> Vec<Response> {
         if n == 0 {
             break;
         }
-        let resp: Response =
-            serde_json::from_slice(&line).expect("decode response frame");
+        let resp: Response = serde_json::from_slice(&line).expect("decode response frame");
         let terminal = matches!(&resp, Response::Done { .. } | Response::Error { .. });
         frames.push(resp);
         if terminal {
@@ -177,12 +176,8 @@ async fn fifty_concurrent_clients_each_get_a_done_frame() {
     let mut done_count = 0usize;
     let mut error_count = 0usize;
     for (i, frames) in all_results.iter().enumerate() {
-        let has_done = frames
-            .iter()
-            .any(|f| matches!(f, Response::Done { .. }));
-        let has_error = frames
-            .iter()
-            .any(|f| matches!(f, Response::Error { .. }));
+        let has_done = frames.iter().any(|f| matches!(f, Response::Done { .. }));
+        let has_error = frames.iter().any(|f| matches!(f, Response::Error { .. }));
         let token_count = frames
             .iter()
             .filter(|f| matches!(f, Response::Token { .. }))
@@ -239,12 +234,9 @@ async fn mid_stream_disconnect_does_not_break_the_daemon() {
         let mut reader = BufReader::with_capacity(8 * 1024, read_half);
         let mut line = Vec::new();
         // Pull the first token, then drop the entire stream.
-        let _ = tokio::time::timeout(
-            Duration::from_secs(1),
-            reader.read_until(b'\n', &mut line),
-        )
-        .await
-        .expect("first token timeout");
+        let _ = tokio::time::timeout(Duration::from_secs(1), reader.read_until(b'\n', &mut line))
+            .await
+            .expect("first token timeout");
         // `reader` and the underlying socket drop here.
     }
 
@@ -253,16 +245,11 @@ async fn mid_stream_disconnect_does_not_break_the_daemon() {
     // (slow CI runners overlap teardown with the next connect),
     // then issue one more request and read it through to Done.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let frames = tokio::time::timeout(
-        TEST_BUDGET,
-        one_request(addr.clone(), "post-cancel".into()),
-    )
-    .await
-    .expect("daemon hung after cancellations");
+    let frames = tokio::time::timeout(TEST_BUDGET, one_request(addr.clone(), "post-cancel".into()))
+        .await
+        .expect("daemon hung after cancellations");
 
-    let has_done = frames
-        .iter()
-        .any(|f| matches!(f, Response::Done { .. }));
+    let has_done = frames.iter().any(|f| matches!(f, Response::Done { .. }));
     assert!(
         has_done,
         "daemon failed to serve a request after 20 mid-stream cancellations: frames={frames:?}"
@@ -325,16 +312,11 @@ async fn connect_churn_does_not_leak_resources() {
     // handler tasks but the OS may still be cleaning up the 200
     // closed sockets when our follow-up connect lands.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let frames = tokio::time::timeout(
-        TEST_BUDGET,
-        one_request(addr.clone(), "post-churn".into()),
-    )
-    .await
-    .expect("daemon hung after connect churn");
+    let frames = tokio::time::timeout(TEST_BUDGET, one_request(addr.clone(), "post-churn".into()))
+        .await
+        .expect("daemon hung after connect churn");
 
-    let has_done = frames
-        .iter()
-        .any(|f| matches!(f, Response::Done { .. }));
+    let has_done = frames.iter().any(|f| matches!(f, Response::Done { .. }));
     assert!(
         has_done,
         "daemon failed to serve a request after connect churn: frames={frames:?}"
