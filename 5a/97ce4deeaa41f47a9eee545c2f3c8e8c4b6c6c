@@ -1,0 +1,23 @@
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_bf9cb05e18c6be 173-176
+crates/inferd-daemon/tests/stress.rs
+  s_126aec4081f728::t_8030f4ab2db4a6 94-95,97-110
+  s_126aec4081f728::t_178287871d7665 323-327
+  s_126aec4081f728::t_2b12e465372494 252-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "5a97ce4deeaa41f47a9eee545c2f3c8e8c4b6c6c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
