@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-19
+
+Adds Windows arm64 to the release matrix. Five released targets:
+
+  - x86_64-unknown-linux-gnu
+  - aarch64-unknown-linux-gnu
+  - aarch64-apple-darwin
+  - x86_64-pc-windows-msvc
+  - aarch64-pc-windows-msvc *(new)*
+
+### Added
+
+- **Windows arm64 release tarball.** Built natively on
+  `windows-11-arm` (free for public repos since 2025), same
+  formula as the x86_64 Windows job — no `cross`, no foreign-
+  target C++ toolchain. Closes the last platform gap a v0.1.x
+  user could plausibly hit.
+- **CI runs on `windows-11-arm` too.** All four Windows-touching
+  jobs (default, llamacpp feature, Tier 5 security, go client)
+  now matrix in arm64 alongside x64. Catches arm64-specific
+  build issues at PR time, not release time.
+
 ## [0.1.6] - 2026-05-19
 
 The binary-size guard added in v0.1.4 (mac claude's commit
