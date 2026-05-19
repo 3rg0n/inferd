@@ -16,6 +16,38 @@ The cost of *not* having inferd is:
 
 inferd is small, hardened, and standalone. It does not know which apps are connected to it, what those apps want to do with the tokens, or what prompts they intend to send. It is plumbing.
 
+## The architectural shape
+
+```
+                                   ┌─→ local model     (llama.cpp FFI today,
+                                   │                    GGML/MLX/etc. in scope later)
+[any consumer] ←—NDJSON-IPC v1—→ inferd
+                                   └─→ remote model    (OpenAI-compat, Anthropic,
+                                                        Bedrock, etc. — v0.2)
+```
+
+Three things this fixes:
+
+1. **The consumer side is open.** Middleware, CLI tool, IDE plugin, agent runtime, web app — anything that speaks NDJSON-over-IPC v1. We do not pick consumers, compete for them, or gate them.
+
+2. **The model side is the abstraction.** `Backend` trait + router (ADR 0007). v0.1 ships one concrete backend (`llamacpp` local). v0.2 adds remote backends behind the same trait. **The wire surface to consumers is identical regardless of where the model lives.** A consumer cannot tell whether the model is on the same machine or in `us-east-1` from anything except the `backend` field on the `done` frame.
+
+3. **Anything HTTP-shaped lives outside.** Ollama-compat-as-a-server, OpenAI-compat-as-a-server, web UI, REST gateway — all are ecosystem-extension processes, separate repos, separate release cadences. ADR 0006 is load-bearing for that. The daemon never grows an HTTP server, never speaks SSE, never parses request bodies.
+
+The reason this asymmetry exists in concrete terms: if `inferd-daemon` spoke HTTP itself, ADR 0006 would die. The daemon would have content negotiation, request body limits, CORS, OpenAPI schemas, rate-limit headers — all the things "lean core" exists to keep out. And every "compat with X" demand becomes a daemon feature. Keeping HTTP outside the daemon is what keeps the protocol stable enough to freeze (ADR 0008).
+
+### v0.1 → v0.2 — what changes, what doesn't
+
+| | v0.1 | v0.2 |
+|---|---|---|
+| Consumer wire surface | NDJSON-over-IPC v1 | **identical** |
+| `Backend` trait | one concrete (llamacpp) | many concretes (cloud + local) |
+| Router | no-op (single backend) | operator-policy across N backends, circuit breakers per ADR 0007 |
+| Daemon HTTP | none | none |
+| Protocol changes | n/a | none — frozen, additive only |
+
+The load-bearing claim of the architecture is that v0.2's cloud work changes **what's behind the protocol**, not the protocol itself. That's why ADR 0008 froze v1 before any of the cloud adapters existed.
+
 ## What inferd has to be
 
 A small, hardened Rust daemon that:
@@ -24,11 +56,11 @@ A small, hardened Rust daemon that:
 2. Accepts NDJSON-framed requests on a Unix socket, Windows named pipe, or loopback TCP.
 3. Serialises inference through a single active generation + bounded admission queue.
 4. Streams tokens back over the same connection. Terminates with one `done` or one `error` frame.
-5. Supports multiple backend adapters behind a single `Backend` trait so the operator can switch from local llama.cpp to Ollama to OpenAI to Bedrock without consumers noticing.
+5. Supports multiple backend adapters behind a single `Backend` trait. v0.1 ships local-only; v0.2 adds remote (OpenAI-compat covers vLLM/LM Studio/LocalAI/llama.cpp's HTTP server in addition to OpenAI itself; further adapters added behind the same trait).
 6. Enforces per-caller identity (UID on Unix, SID on Windows) and an optional API key for TCP deployments.
 7. Stores models in a shared content-addressable layout under `$MODELS_HOME` so multiple tools that adopt the same convention can reuse blobs.
 
-For v0.1, **only the local llama.cpp backend is required** (linked via FFI from a vendored `llama.cpp` submodule). The adapter trait must be designed in from day one so v0.2 can add Ollama + cloud backends without a rewrite.
+For v0.1, **only the local llama.cpp backend is required** (linked via FFI from a vendored `llama.cpp` submodule). The adapter trait must be designed in from day one so v0.2 can add cloud + remote backends without a rewrite.
 
 ## Wire protocol
 
@@ -83,6 +115,6 @@ A hand-written Go client lives at `clients/go/`. It is the canonical example for
 - Don't invent a new wire protocol or modify v1. Extensions go to v2 on a separate socket.
 - Don't add features beyond the v0.1 scope without an ADR explaining why. The lean-core posture (ADR 0006) is the default.
 - Don't introduce async runtime pluralism. Tokio everywhere.
-- Don't make the daemon speak HTTP. If a consumer needs HTTP, it puts an HTTP→IPC adapter in its own process.
+- Don't make the daemon speak HTTP — *any* HTTP, in *any* direction except the ADR 0010 outbound model-fetch carve-out. Inbound HTTP-to-NDJSON adapters (Ollama-compat-as-a-server, OpenAI-compat-as-a-server, web UI) live in separate processes. Outbound NDJSON-to-HTTP adapters (cloud backends) are wrapped behind the `Backend` trait inside the daemon, but the trait abstracts the HTTP away — the rest of the daemon stays HTTP-free.
 - Don't embed registry-browsing or model-search in the daemon (ADR 0010). The fetch surface is one URL + one SHA.
 - Don't add multi-model warm pooling in v0.1. One warm model at a time.
