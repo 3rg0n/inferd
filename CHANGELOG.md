@@ -98,6 +98,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings and reuses shared types from `crate::ffi` via bindgen's
   `blocklist_type` + `raw_line` directives so `llama_model` and
   friends aren't redeclared.
+- **inferd-engine: Tier 3 v2 multimodal smoke** (Phase 3B). New
+  `crates/inferd-engine/tests/llamacpp_multimodal.rs` exercises the
+  v2 generate_v2 path against a real Gemma 4 GGUF + mmproj. Two
+  tests:
+    - `v2_text_only_streams_to_done` — confirms the v2 dispatch
+      path works against a multimodal-capable backend with a
+      text-only request. Asserts capabilities advertise v2 and
+      Done is `EndTurn` or `MaxTokens` with non-zero usage counts.
+    - `v2_image_attachment_round_trips` — decodes a JPEG/PNG to
+      raw RGB via the `image` crate (consumer-side, per ADR
+      0016), wraps it in `Attachment::Image` with width/height,
+      sends through the v2 wire, asserts the multimodal prompt
+      results in input_tokens > 50 (vs ~10 for text-only).
+  Both tests gated behind the existing `llamacpp-integration`
+  feature; skip with explanatory message when
+  `INFERD_TEST_MODEL_PATH` / `INFERD_TEST_MMPROJ_PATH` /
+  `INFERD_TEST_MULTIMODAL_IMAGE` are unset. Skip-on-vision-cap
+  branch handles the case where the loaded mmproj is
+  audio-only. `image` 0.25 (jpeg + png features only) added as
+  a dev-dependency. Tests are deliberately not asserting on
+  generated text content — that's fragile across quants and
+  seeds; the contract under test is "wire round-trip survives
+  end to end."
 - **inferd-engine: `LlamaCpp::generate_v2`** (Phase 3A part 2).
   The llamacpp adapter now serves v2 requests end-to-end when
   configured with an `mmproj_path`:

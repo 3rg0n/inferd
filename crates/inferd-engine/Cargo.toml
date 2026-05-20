@@ -56,3 +56,9 @@ bindgen = "0.71"
 [dev-dependencies]
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+# Tier 3 multimodal smoke tests act as a consumer: decode JPEG/PNG
+# inputs to raw RGB before sending through the v2 wire shape (per
+# ADR 0016, decoding lives consumer-side; the daemon never links a
+# codec). image is dev-only.
+image    = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64   = "0.22"
