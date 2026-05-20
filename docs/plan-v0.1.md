@@ -65,10 +65,15 @@ inferd/
 │   │   │   └── config.rs       # env + CLI flags
 │   │   └── Cargo.toml
 │   │
-│   └── inferd-stdio/           # variant that speaks NDJSON on stdin/stdout
-│       ├── src/main.rs         # same request handling, no listener
-│       └── Cargo.toml
+│   └── inferd/                 # single CLI binary (gh / kubectl shape):
+│       ├── src/main.rs         # status, watch, pull, doctor — and a
+│       └── Cargo.toml          # future default `-p "..."` prompt mode
 │
+│   # NOTE: An earlier `inferd-stdio` crate was scaffolded for the
+│   # stdio shape; retired in v0.1.10 — its planned `-p` behaviour
+│   # folds into the `inferd` CLI's default subcommand instead. One
+│   # binary, many shapes.
+
 ├── clients/
 │   ├── go/                     # github.com/3rg0n/inferd-go
 │   │   └── (generated from inferd-proto via a later milestone)
@@ -295,9 +300,9 @@ finding pointer.
 | Item | Finding | Notes |
 |---|---|---|
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
-| `inferd-stdio` crate | plan §"crate layout" | Stub Cargo.toml only; sources land when a caller needs it |
+| `inferd -p "..."` prompt mode | plan §"crate layout" | Default subcommand of the `inferd` CLI. Replaces the previously-scaffolded `inferd-stdio` crate (retired in v0.1.10 — one binary, many shapes). |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
-| Model installer / `inferdctl pull` | GA-prep | Standalone CLI to pre-warm the shared CAS store (ADR 0011) without booting the daemon. v0.1 uses the daemon's first-boot fetch path (ADR 0010); the CLI is convenience plumbing. |
+| Model installer / `inferd pull` | shipping in v0.1.9+ | Subcommand of the `inferd` CLI to pre-warm the shared CAS store (ADR 0011) without booting the daemon. v0.1 also still supports the daemon's first-boot fetch path (ADR 0010). |
 
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests

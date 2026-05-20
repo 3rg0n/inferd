@@ -98,11 +98,14 @@ jobs:
         # `--backend llamacpp` at runtime.
         run: cargo build --release --bin inferd-daemon --features inferd-daemon/llamacpp --target ${{ matrix.target }}
 
-      - name: Build inferdctl
-        # Operator CLI (status, watch, pull, doctor). No llamacpp
-        # dependency — pulls in inferd-daemon as a library for shared
-        # types but doesn't enable the FFI feature.
-        run: cargo build --release --bin inferdctl --target ${{ matrix.target }}
+      - name: Build inferd CLI
+        # Single CLI binary in the gh / kubectl shape: subcommands
+        # status, watch, pull, doctor (and, in a future release, a
+        # default `-p "..."` prompt mode replacing the previously-
+        # scaffolded `inferd-stdio`). No llamacpp dependency —
+        # pulls in `inferd-daemon` as a library for shared store +
+        # fetch types but doesn't enable the FFI feature.
+        run: cargo build --release --bin inferd --target ${{ matrix.target }}
 
       # Belt-and-braces: assert the produced binary's CLI actually
       # accepts `--backend llamacpp`. This is the *direct* test —
@@ -141,13 +144,13 @@ jobs:
           cp README.md LICENSE CHANGELOG.md "$stage/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferd.exe" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/windows/install.ps1 "$stage/packaging/"
             cp packaging/README.md "$stage/packaging/"
           else
             cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferdctl" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferd" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/README.md "$stage/packaging/"
             case "${{ runner.os }}" in
