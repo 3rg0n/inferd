@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-05-20
+
+Hotfix: v0.1.11 macOS tarball was missing
+`packaging/launchd/install-launchagent.sh` and
+`packaging/launchd/uninstall-launchagent.sh`. The scripts existed
+in the source tree (added in 6095a2e) but the release workflow's
+macOS staging step only copied the plist. Anyone unpacking the
+v0.1.11 tarball on macOS could not run the documented install
+flow without grabbing the scripts from the repo separately.
+
+### Fixed
+
+- **`.github/workflows/release.yml`**: macOS staging step now
+  copies `install-launchagent.sh` and `uninstall-launchagent.sh`
+  alongside the plist, with `chmod +x` applied so they're
+  directly executable from the unpacked tarball.
+
 ## [0.1.11] - 2026-05-20
 
 Tarball-only release. Crates on crates.io stay at 0.1.9 (no

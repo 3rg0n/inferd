@@ -159,6 +159,9 @@ jobs:
                 ;;
               macOS)
                 cp packaging/launchd/io.inferd.daemon.plist "$stage/packaging/"
+                cp packaging/launchd/install-launchagent.sh "$stage/packaging/"
+                cp packaging/launchd/uninstall-launchagent.sh "$stage/packaging/"
+                chmod +x "$stage/packaging/install-launchagent.sh" "$stage/packaging/uninstall-launchagent.sh"
                 ;;
             esac
           fi
