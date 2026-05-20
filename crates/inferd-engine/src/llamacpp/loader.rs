@@ -131,6 +131,14 @@ pub fn load_model(
         .ok_or(ModelLoadError::LlamaLoadFailed)
 }
 
+/// Constant-time-verify a SHA-256 of a generic file (mmproj, etc.).
+/// Same shape as the model verification path; reused for the
+/// multimodal projector blob. Public so the `LlamaCpp` adapter can
+/// call it before handing the path to mtmd.
+pub fn verify_mmproj_sha256(path: &Path, expected: &[u8; 32]) -> Result<(), ModelLoadError> {
+    verify_sha256(path, expected)
+}
+
 fn verify_sha256(path: &Path, expected: &[u8; 32]) -> Result<(), ModelLoadError> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();

@@ -98,6 +98,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings and reuses shared types from `crate::ffi` via bindgen's
   `blocklist_type` + `raw_line` directives so `llama_model` and
   friends aren't redeclared.
+- **inferd-engine: `LlamaCpp::generate_v2`** (Phase 3A part 2).
+  The llamacpp adapter now serves v2 requests end-to-end when
+  configured with an `mmproj_path`:
+    - `LlamaCppConfig` gains `mmproj_path` + `mmproj_sha256`.
+    - `State` holds an `Option<Mtmd>` plus a cached capability
+      snapshot (vision / audio / audio_sample_rate, probed at
+      construction).
+    - `Backend::capabilities()` advertises v2 + tools + thinking
+      (Gemma 4 baseline) when an mmproj is loaded; vision and
+      audio reflect what the mmproj's projector actually
+      supports. No mmproj => default-zero caps (text-only).
+    - `Backend::generate_v2()`: renders prompt + ordered
+      attachments via `Gemma4Renderer`, base64-decodes each
+      attachment's bytes into a `Bitmap` (raw RGB or f32 PCM per
+      ADR 0016), runs `Mtmd::tokenize` + `mtmd_helper_eval_chunks`
+      to fill the KV cache from the multimodal prompt, then runs
+      a token sampler loop emitting `TokenEventV2::Text` deltas
+      and a terminal `Done` (EndTurn or MaxTokens) with `UsageV2`
+      input/output token counts. Pre-stream errors from any of
+      these stages map to `GenerateError`; mid-stream backend
+      failures terminate the channel without `Done` so the
+      lifecycle layer can synthesise a terminal `Error` per ADR
+      0007.
+    - `mtmd::Mtmd::eval_chunks` (new): safe wrapper over
+      `mtmd_helper_eval_chunks`. Picks up upstream's gemma-3
+      non-causal mask handling, per-chunk batching, and decode
+      error forwarding.
+    - bindgen now also generates `mtmd-helper.h` bindings (the
+      output file is unchanged at `OUT_DIR/mtmd_bindings.rs` —
+      bindgen merges both headers into one generated module).
+    - `inferd-engine` gains `base64` (~10 KB) and `serde_json`
+      dependencies for the v2 path.
+    - `crates/inferd-engine/src/llamacpp/chat_template/` is the
+      new home of the Gemma 4 renderer + tests (moved from
+      `crates/inferd-daemon/src/chat_template/`). The renderer
+      is an engine-level concern: it shapes prompts for a
+      specific engine, not gateway logic. The integration test
+      `crates/inferd-engine/tests/chat_template_gemma4.rs` is
+      gated behind `#![cfg(feature = "llamacpp")]` so default-
+      feature builds (which don't link the engine) skip it.
+    - The daemon's `lifecycle_v2` already dispatches v2 to the
+      backend's `generate_v2`; this commit just makes that
+      backend-side path actually do something instead of
+      returning `Internal("not supported")`.
 - **inferd-engine: safe Rust mtmd wrapper**. New
   `crates/inferd-engine/src/llamacpp/mtmd.rs` exposes:
   `Mtmd` (owning `mtmd_context`, supports `tokenize` plus

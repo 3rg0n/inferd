@@ -38,6 +38,14 @@ tracing      = { workspace = true }
 sha2         = { workspace = true }
 subtle       = { workspace = true }   # Constant-time hash compare (THREAT_MODEL F-5).
 bytes        = { workspace = true }
+# v2 multimodal: base64-decode the wire-shape RGB / PCM bytes before
+# handing them to libmtmd. Pulled in unconditionally; tiny crate
+# (no_std-compatible, ~10 KB binary growth).
+base64       = "0.22"
+# Used by the chat_template module to render tool-use input objects
+# and tool-result content into Gemma 4's wire format. Already pulled
+# in transitively via `inferd-proto`'s v2 ToolUseInput type alias.
+serde_json   = { workspace = true }
 
 [build-dependencies]
 # Only invoked when the `llamacpp` feature is enabled; the build.rs

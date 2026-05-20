@@ -179,6 +179,55 @@ impl Mtmd {
         if n <= 0 { None } else { Some(n as u32) }
     }
 
+    /// Run the helper-driven evaluation loop over `chunks` against
+    /// `lctx`. For each text chunk, runs `llama_decode`; for each
+    /// image/audio chunk, runs `mtmd_encode_chunk` and splices the
+    /// resulting embeddings into the next `llama_decode`. Forwards
+    /// any non-zero internal error.
+    ///
+    /// Returns the new `n_past` (token position after this batch
+    /// has been consumed). This is what the sampler loop should
+    /// resume from when generating the response.
+    ///
+    /// # Safety
+    ///
+    /// Caller guarantees:
+    ///   - `lctx` was created from the same `llama_model` this
+    ///     `Mtmd` borrows.
+    ///   - `chunks` was produced by `Mtmd::tokenize` against `self`
+    ///     (using a different `Mtmd` is undefined behaviour even
+    ///     though both wrap an `mtmd_context`).
+    pub unsafe fn eval_chunks(
+        &self,
+        lctx: *mut crate::ffi::llama_context,
+        chunks: &InputChunks,
+        n_past: i32,
+        seq_id: i32,
+        n_batch: i32,
+        logits_last: bool,
+    ) -> Result<i32, MtmdError> {
+        let mut new_n_past: i32 = 0;
+        // SAFETY: pointers all valid for the call's duration. The
+        // helper is documented as not thread-safe; v0.1's admission
+        // queue serialises generations.
+        let rc = unsafe {
+            ffi::mtmd_helper_eval_chunks(
+                self.ctx.as_ptr(),
+                lctx.cast(),
+                chunks.raw(),
+                n_past,
+                seq_id,
+                n_batch,
+                logits_last,
+                &mut new_n_past,
+            )
+        };
+        if rc != 0 {
+            return Err(MtmdError::EncodeChunk(rc));
+        }
+        Ok(new_n_past)
+    }
+
     /// Tokenise `text` (containing `<__media__>` markers) plus the
     /// matching ordered slice of bitmaps. Number of bitmaps must
     /// equal number of markers.
