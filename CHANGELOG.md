@@ -85,6 +85,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crates/inferd-proto/src/v2/attachment.rs`, request validation
   in `crates/inferd-proto/src/v2/request.rs`, and downstream
   consumers (chat-template renderer, integration tests).
+- **inferd-engine: libmtmd FFI bridge** (Phase 3A per ADR 0015 +
+  ADR 0016). New `crates/inferd-engine/cpp/CMakeLists.txt` wraps
+  `vendor/llama.cpp` and adds a `mtmd` static library target
+  (rebuilds the source list inline because tools/mtmd/CMakeLists.txt
+  also defines CLI executables we don't ship and that depend on
+  `llama-common`, which we don't build). `build.rs` drives the
+  wrapper, links `mtmd → llama → ggml → ggml-base → ggml-cpu` in
+  static order, and runs bindgen against `mtmd.h` (output:
+  `OUT_DIR/mtmd_bindings.rs`). New private module
+  `crates/inferd-engine/src/mtmd_ffi.rs` includes the generated
+  bindings and reuses shared types from `crate::ffi` via bindgen's
+  `blocklist_type` + `raw_line` directives so `llama_model` and
+  friends aren't redeclared.
+- **inferd-engine: safe Rust mtmd wrapper**. New
+  `crates/inferd-engine/src/llamacpp/mtmd.rs` exposes:
+  `Mtmd` (owning `mtmd_context`, supports `tokenize` plus
+  `supports_vision` / `supports_audio` /
+  `audio_sample_rate` capability probes), `Bitmap` (image RGB or
+  audio f32 PCM, owning `mtmd_bitmap`, with id-set helper for
+  upstream's KV-cache de-duplication), `InputChunks` (owning
+  collection populated by `tokenize`), `InputChunk<'_>` (borrow,
+  `kind`/`n_tokens`/`n_pos`/`id`), `MmprojCaps` +
+  `probe_mmproj_caps` (capability probe without instantiating a
+  full context), `default_media_marker` (the `<__media__>`
+  literal mtmd injects fences around). All types `Send + Sync`,
+  Drop calls the matching mtmd_*_free. Safe wrapper does not yet
+  call mtmd_encode_chunk — that lives in the `LlamaCpp` adapter's
+  Phase 3A-followup work where `generate_v2` actually splices
+  encoded embeddings into `llama_decode`. The bridge is the
+  testable boundary; the adapter's encode loop is the next
+  commit.
 - **inferd-daemon: chat-template renderer** (Phase 2B per ADR
   0013/0015). New `chat_template` module with a `Gemma4Renderer`
   that translates a `ResolvedV2` into the byte-exact Gemma 4

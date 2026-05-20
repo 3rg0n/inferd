@@ -11,6 +11,11 @@
 
 pub mod backend;
 pub mod loader;
+pub mod mtmd;
 
 pub use backend::{LlamaCpp, LlamaCppConfig, LlamaCppError};
 pub use loader::{ModelHandle, ModelLoadError, load_model};
+pub use mtmd::{
+    Bitmap, InputChunk, InputChunkKind, InputChunks, MmprojCaps, Mtmd, MtmdConfig, MtmdError,
+    default_media_marker, probe_mmproj_caps,
+};
