@@ -1,17 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   inferd-daemon LaunchAgent (per-user, runs in login session).
 
-  Install as:
-    ~/Library/LaunchAgents/io.inferd.daemon.plist
+  DO NOT edit USERNAME_HERE or TMPDIR_HERE by hand — use the install
+  script instead:
 
-  Load via:
-    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.inferd.daemon.plist
-    launchctl enable gui/$UID/io.inferd.daemon
+    packaging/launchd/install-launchagent.sh [/path/to/inferd-daemon]
+
+  The script substitutes the current user's HOME and TMPDIR, installs
+  the plist, and bootstraps the agent.
+
+  Manual install (for reference only):
+    sed -e "s|__HOME__|$HOME|g" \
+        -e "s|__TMPDIR__|$(getconf DARWIN_USER_TEMP_DIR)|g" \
+        -e "s|__BIN__|/usr/local/bin/inferd-daemon|g" \
+      packaging/launchd/io.inferd.daemon.plist \
+      > ~/Library/LaunchAgents/io.inferd.daemon.plist
+    launchctl bootstrap gui/$(id -u) \
+      ~/Library/LaunchAgents/io.inferd.daemon.plist
+    launchctl enable gui/$(id -u)/io.inferd.daemon
+
+  WHY __TMPDIR__ for sockets and lock:
+    launchd does NOT expand $TMPDIR, ${HOME}, or ~ in ProgramArguments,
+    EnvironmentVariables values, StandardOutPath, or StandardErrorPath.
+    The sockets and lock live under TMPDIR because macOS rotates per-user
+    temp dirs per login — the same path the daemon's default_admin_addr()
+    uses — so the plist, daemon default, and Go client default all agree.
 
   THREAT_MODEL F-16: launchd has a smaller hardening surface than
-  systemd. The two posture controls relevant here are:
+  systemd. Controls applied here:
     - Per-user LaunchAgent (no LaunchDaemon, no root).
     - Sandboxed via the existing macOS app-sandbox framework when
       the user installs the signed bundle from a release tarball.
@@ -24,12 +42,13 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/inferd-daemon</string>
-        <string>--backend</string><string>mock</string>
+        <string>__BIN__</string>
         <string>--lock</string>
-        <string>/Users/USERNAME_HERE/Library/Application Support/inferd/inferd.lock</string>
+        <string>__TMPDIR__inferd/inferd.lock</string>
         <string>--uds</string>
-        <string>/Users/USERNAME_HERE/Library/Application Support/inferd/infer.sock</string>
+        <string>__TMPDIR__inferd/infer.sock</string>
+        <string>--admin-addr</string>
+        <string>__TMPDIR__inferd/admin.sock</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -37,7 +56,7 @@
         <key>INFERD_LOG</key>
         <string>info</string>
         <key>INFERD_LOG_DIR</key>
-        <string>/Users/USERNAME_HERE/Library/Logs/inferd</string>
+        <string>__HOME__/Library/Logs/inferd</string>
     </dict>
 
     <key>RunAtLoad</key>
@@ -48,13 +67,19 @@
         <false/>
     </dict>
 
+    <!--
+      ThrottleInterval + StartCalendarInterval are absent: launchd's
+      own crash-loop containment (5 starts in 10 s) covers the
+      equivalent of systemd's StartLimitBurst. ThrottleInterval=2
+      adds a 2-second floor per restart.
+    -->
     <key>ThrottleInterval</key>
     <integer>2</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/USERNAME_HERE/Library/Logs/inferd/stdout.log</string>
+    <string>__HOME__/Library/Logs/inferd/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/USERNAME_HERE/Library/Logs/inferd/stderr.log</string>
+    <string>__HOME__/Library/Logs/inferd/stderr.log</string>
 
     <!--
       ProcessType=Adaptive lets macOS apply timer-coalescing /

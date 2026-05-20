@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS LaunchAgent plist** (`packaging/launchd/io.inferd.daemon.plist`):
+  four bugs from the initial Windows-authored drop are now corrected:
+  (1) `USERNAME_HERE` hardcoded paths replaced with `__HOME__`/`__TMPDIR__`
+  install-time placeholders (launchd does not expand `$HOME`, `${HOME}`, `~`,
+  or `$TMPDIR` in plist values — empirically verified);
+  (2) `--admin-addr` argument added so the daemon binds the admin socket at
+  `$TMPDIR/inferd/admin.sock`, matching `default_admin_addr()` and the Go
+  client default;
+  (3) `--backend mock` removed from the shipped plist (it was a copy-paste
+  from CI; the real unit should use the configured backend);
+  (4) wrong socket/lock dir (`Application Support`) replaced with `$TMPDIR`
+  paths — sockets must be in a directory the daemon user owns and that
+  survives the session but not cross-user.
+- **Daemon runtime dir auto-create** (`crates/inferd-daemon/src/main.rs`):
+  the daemon now calls `fs::create_dir_all` on the lock file's parent
+  directory before acquiring the lock. On macOS, `$TMPDIR/inferd/` is not
+  pre-created by launchd (unlike Linux where `RuntimeDirectory=` in the
+  systemd unit handles this); without the mkdir the daemon would fail with
+  "lock acquire failed: No such file or directory" on a clean login.
+
+### Added
+
+- `packaging/launchd/install-launchagent.sh` — one-shot install script that
+  substitutes `__HOME__`, `__TMPDIR__`, and `__BIN__` placeholders with
+  runtime values (`getconf DARWIN_USER_TEMP_DIR` for TMPDIR), creates the
+  log directory, bootstraps the LaunchAgent, and enables it. Accepts an
+  optional binary path argument (default `/usr/local/bin/inferd-daemon`).
+- `packaging/launchd/uninstall-launchagent.sh` — symmetric teardown: stops,
+  boots out, disables, and removes the installed plist.
+- `packaging/README.md` updated to point at the install scripts instead of
+  the now-removed "edit `USERNAME_HERE` by hand" instruction.
+
 ### Documentation
 
 - **ADR 0013**: inferd is the gateway, not the pipe. Locks the

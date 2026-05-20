@@ -9,10 +9,11 @@ manifests themselves rather than duplicated here.
 
 - `systemd/inferd.service` — Linux per-user systemd unit. Install at
   `~/.config/systemd/user/inferd.service`.
-- `launchd/io.inferd.daemon.plist` — macOS LaunchAgent. Install at
-  `~/Library/LaunchAgents/io.inferd.daemon.plist`. Edit the
-  `USERNAME_HERE` placeholders before installing — launchd doesn't
-  expand `$HOME` in plist paths.
+- `launchd/io.inferd.daemon.plist` — macOS LaunchAgent template.
+  Use `packaging/launchd/install-launchagent.sh [/path/to/binary]`
+  to install — the script substitutes per-user paths (HOME and TMPDIR)
+  that launchd does not expand in plist values, then bootstraps the
+  agent. `packaging/launchd/uninstall-launchagent.sh` reverses it.
 - `windows/install.ps1` — Windows service installer. Run elevated.
 
 The release workflow (`.github/workflows/release.yml`) bundles each
