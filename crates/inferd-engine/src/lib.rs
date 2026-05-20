@@ -21,6 +21,8 @@ pub(crate) mod ffi;
 #[cfg(feature = "llamacpp")]
 pub mod llamacpp;
 pub mod mock;
+#[cfg(feature = "llamacpp")]
+pub(crate) mod mtmd_ffi;
 
 pub use backend::{
     Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
