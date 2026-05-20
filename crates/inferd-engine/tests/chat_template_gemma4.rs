@@ -263,6 +263,188 @@ fn tool_result_renders_inside_a_user_turn_pair() {
 }
 
 #[test]
+fn tool_result_pairs_via_tool_call_id_when_multiple_tools_in_scope() {
+    // Phase 4B: ToolResult must resolve its tool name from the
+    // tool_call_id of the matching ToolUse, even when tools[] has
+    // more than one entry (so the single-tool fallback can't help).
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![
+            MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "Weather and time?".into(),
+                }],
+            },
+            MessageV2 {
+                role: RoleV2::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        tool_call_id: ToolCallId::from("tc-w"),
+                        name: "get_weather".into(),
+                        input: json!({"location": "Tokyo"}),
+                    },
+                    ContentBlock::ToolUse {
+                        tool_call_id: ToolCallId::from("tc-t"),
+                        name: "get_time".into(),
+                        input: json!({"tz": "Asia/Tokyo"}),
+                    },
+                ],
+            },
+            MessageV2 {
+                role: RoleV2::User,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        tool_call_id: ToolCallId::from("tc-t"),
+                        content: vec![ContentBlock::Text {
+                            text: "{\"hh\":15}".into(),
+                        }],
+                    },
+                    ContentBlock::ToolResult {
+                        tool_call_id: ToolCallId::from("tc-w"),
+                        content: vec![ContentBlock::Text {
+                            text: "{\"temp\":20}".into(),
+                        }],
+                    },
+                ],
+            },
+        ],
+        tools: vec![
+            Tool {
+                name: "get_weather".into(),
+                description: "Weather.".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+            Tool {
+                name: "get_time".into(),
+                description: "Time.".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+        ],
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    // Each result must pair to its own tool name via tool_call_id —
+    // not be misrouted by ordering.
+    assert!(
+        out.contains("<|tool_response>response:get_time{hh:15}<tool_response|>"),
+        "get_time response missing or misrouted; got:\n{out}"
+    );
+    assert!(
+        out.contains("<|tool_response>response:get_weather{temp:20}<tool_response|>"),
+        "get_weather response missing or misrouted; got:\n{out}"
+    );
+}
+
+#[test]
+fn tool_result_in_user_turn_round_trip_after_assistant_tool_use() {
+    // Phase 4B end-to-end shape: model emits a tool_call in an
+    // assistant turn → consumer constructs a follow-up request that
+    // appends a user-role message containing the matching ToolResult.
+    // The renderer must produce a valid prompt where the original
+    // tool_call survives in the assistant turn AND the response is
+    // emitted (in whichever turn the consumer placed it) using the
+    // correct tool name resolved from tool_call_id.
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![
+            MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "Weather in Tokyo?".into(),
+                }],
+            },
+            MessageV2 {
+                role: RoleV2::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    tool_call_id: ToolCallId::from("tc-1"),
+                    name: "get_weather".into(),
+                    input: json!({"location": "Tokyo"}),
+                }],
+            },
+            MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_call_id: ToolCallId::from("tc-1"),
+                    content: vec![ContentBlock::Text {
+                        text: "{\"temp\":20}".into(),
+                    }],
+                }],
+            },
+        ],
+        tools: vec![
+            Tool {
+                name: "get_weather".into(),
+                description: "Weather.".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+            Tool {
+                name: "unrelated".into(),
+                description: "Other.".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+        ],
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    // Original tool_call survives in the assistant turn.
+    assert!(
+        out.contains(
+            "<|turn>model\n<|tool_call>call:get_weather{location:<|\"|>Tokyo<|\"|>}<tool_call|><turn|>"
+        ),
+        "tool_call missing in assistant turn; got:\n{out}"
+    );
+    // Response paired to tool_call_id, not the wrong sibling tool.
+    assert!(
+        out.contains("<|tool_response>response:get_weather{temp:20}<tool_response|>"),
+        "tool_response paired to wrong tool name or missing; got:\n{out}"
+    );
+}
+
+#[test]
+fn tool_result_with_unknown_tool_call_id_falls_through_to_raw_content() {
+    // If a ToolResult arrives without a matching ToolUse and tools[]
+    // is ambiguous, the renderer falls back to raw content rather
+    // than guessing.
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_call_id: ToolCallId::from("does-not-exist"),
+                content: vec![ContentBlock::Text {
+                    text: "freeform output".into(),
+                }],
+            }],
+        }],
+        tools: vec![
+            Tool {
+                name: "a".into(),
+                description: ".".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+            Tool {
+                name: "b".into(),
+                description: ".".into(),
+                input_schema: json!({"type": "OBJECT"}),
+            },
+        ],
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    // No `response:NAME{...}` wrapper — just raw content between the
+    // sentinels.
+    assert!(
+        out.contains("<|tool_response>freeform output<tool_response|>"),
+        "raw fallback missing; got:\n{out}"
+    );
+    assert!(
+        !out.contains("response:"),
+        "should not invent a tool name; got:\n{out}"
+    );
+}
+
+#[test]
 fn image_attachment_emits_media_marker_and_records_attachment() {
     let req = RequestV2 {
         id: "x".into(),

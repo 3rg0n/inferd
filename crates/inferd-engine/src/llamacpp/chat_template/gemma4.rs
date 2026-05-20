@@ -47,7 +47,7 @@
 //! the markers and splices the per-modality fence tokens
 //! (`<start_of_image>...<end_of_image>`, etc.) in.
 
-use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool};
+use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool, ToolCallId};
 use serde_json::Value;
 
 /// The mtmd default media marker. The engine adapter sees this
@@ -127,6 +127,24 @@ impl Gemma4Renderer {
         let by_id: std::collections::HashMap<&str, &Attachment> =
             resolved.attachments.iter().map(|a| (a.id(), a)).collect();
 
+        // Lookup table for tool_call_id -> tool name. Walk all messages
+        // and harvest every ToolUse so a later ToolResult can pair via
+        // tool_call_id (per ADR 0015 §"v2 ContentBlock variants"). The
+        // last write wins on duplicates, but ResolvedV2 doesn't enforce
+        // tool_call_id uniqueness — duplicates are pathological caller
+        // error and the second one effectively shadows the first.
+        let tool_name_by_call_id: std::collections::HashMap<&ToolCallId, &str> = resolved
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_call_id, name, ..
+                } => Some((tool_call_id, name.as_str())),
+                _ => None,
+            })
+            .collect();
+
         // <bos> opens the prompt. Gemma's tokenizer maps this to the
         // BOS token at tokenize time; we emit the literal string.
         prompt.push_str("<bos>");
@@ -154,6 +172,7 @@ impl Gemma4Renderer {
                 &by_id,
                 &mut attachments,
                 &resolved.tools,
+                &tool_name_by_call_id,
             )?;
         }
 
@@ -177,6 +196,7 @@ fn render_message<'a>(
     by_id: &std::collections::HashMap<&str, &'a Attachment>,
     attachments: &mut Vec<&'a Attachment>,
     tools: &[Tool],
+    tool_name_by_call_id: &std::collections::HashMap<&'a ToolCallId, &'a str>,
 ) -> Result<(), Gemma4RenderError> {
     out.push_str(role_open_tag(msg.role));
     out.push('\n');
@@ -224,7 +244,7 @@ fn render_message<'a>(
                 out.push_str("}<tool_call|>");
             }
             ContentBlock::ToolResult {
-                tool_call_id: _,
+                tool_call_id,
                 content,
             } => {
                 // Per the upstream docs the tool response is rendered
@@ -238,16 +258,21 @@ fn render_message<'a>(
                 // the response *inline* inside whatever turn this
                 // ToolResult sits in.
                 out.push_str("<|tool_response>");
-                if let Some(tool_name) = guess_tool_name(content, tools) {
+                let tool_name = tool_name_by_call_id
+                    .get(tool_call_id)
+                    .copied()
+                    .or_else(|| guess_tool_name_from_tools(tools));
+                if let Some(name) = tool_name {
                     out.push_str("response:");
-                    out.push_str(tool_name);
+                    out.push_str(name);
                     out.push('{');
                     render_text_only_response(out, content);
                     out.push('}');
                 } else {
-                    // Couldn't infer a tool name — emit raw content.
-                    // Gemma will treat this as freeform tool output;
-                    // worse than a perfect render but doesn't crash.
+                    // Couldn't pair to any ToolUse and tools[] is
+                    // ambiguous — emit raw content. Gemma will treat
+                    // this as freeform tool output; worse than a
+                    // perfect render but doesn't crash.
                     render_text_only_response(out, content);
                 }
                 out.push_str("<tool_response|>");
@@ -357,12 +382,12 @@ fn render_args_inline(out: &mut String, value: &Value) {
     }
 }
 
-/// Try to infer the tool name from ToolResult context. The v2 wire
-/// shape names the tool via tool_call_id; Gemma's wire shape needs
-/// the literal name. If the request's tools[] has exactly one entry,
-/// we use it; otherwise we return None and the caller emits raw
-/// content.
-fn guess_tool_name<'a>(_content: &[ContentBlock], tools: &'a [Tool]) -> Option<&'a str> {
+/// Last-ditch fallback when a `ToolResult` cannot be paired to any
+/// `ToolUse` via `tool_call_id`. If `tools[]` has exactly one entry
+/// we assume it's that one; otherwise return None and the caller
+/// emits raw content. Real consumers always send the matching
+/// `tool_call_id` so this branch should be dead in practice.
+fn guess_tool_name_from_tools(tools: &[Tool]) -> Option<&str> {
     if tools.len() == 1 {
         Some(tools[0].name.as_str())
     } else {
