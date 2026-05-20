@@ -1,36 +1,37 @@
-//! v2 connection lifecycle — Phase 1B stub.
+//! v2 connection lifecycle — Phase 2A wired.
 //!
 //! Per ADR 0015, v2 lives on a *separate* socket from v1. This module
 //! mirrors `lifecycle.rs` but for the v2 wire types
 //! (`inferd_proto::v2::RequestV2` / `ResponseV2`).
 //!
-//! Phase 1B scope: bind v2 listeners, accept connections, parse and
-//! validate `RequestV2` frames, and respond with one of:
-//!
-//! - `ResponseV2::Error{InvalidRequest, ...}` for malformed JSON or
-//!   any structural validation failure (e.g. dangling attachment id,
-//!   duplicate tool name) — same behaviour as v1.
-//! - `ResponseV2::Error{Internal, "v2 generation not implemented"}`
-//!   for a successfully-validated request. The Backend trait does
-//!   not yet expose a `generate_v2` method (Phase 2A); until it
-//!   does, we tell callers we received their request shape but
-//!   have no engine path to satisfy it.
-//!
-//! This lets middleware authors integrate against the v2 socket
-//! today: connect, send a typed-content-block request, get a clean
-//! protocol error — and update only their generation handler when
-//! Phase 2A lands.
+//! Per request:
+//!   1. Read one NDJSON frame, parse as `RequestV2`.
+//!   2. `RequestV2::resolve()` — structural validation.
+//!   3. Admission gate (same Admission shared with v1; one slot
+//!      is one slot regardless of wire version).
+//!   4. Dispatch through the router; check the chosen backend's
+//!      `capabilities().v2` flag — backends that don't support v2
+//!      yield `Error{Internal, "v2 not supported by this backend"}`.
+//!   5. `backend.generate_v2(resolved)` — pre-stream errors map to
+//!      v2 error codes; mid-stream backend failure (no Done) maps to
+//!      `BackendUnavailable`.
+//!   6. Stream `TokenEventV2`s, translating each to the
+//!      corresponding `ResponseV2::Frame` / `Done`.
 
 use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
+use crate::queue::SubmitError;
+use crate::router::{Router, RouterError};
+use inferd_engine::{GenerateError, TokenEventV2};
 use inferd_proto::ProtoError;
-use inferd_proto::v2::{ErrorCodeV2, RequestV2, ResponseV2};
+use inferd_proto::v2::{ErrorCodeV2, RequestV2, ResponseBlock, ResponseV2};
 use inferd_proto::write_frame;
 use std::io;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
+use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 /// Per-accept context for v2 connections. v2 reuses v1's
@@ -40,16 +41,9 @@ use tracing::{debug, info, warn};
 pub use crate::lifecycle::AcceptContext;
 
 /// Handle one accepted v2 client connection.
-///
-/// Per request:
-/// 1. Read one NDJSON frame, parse as `RequestV2`.
-/// 2. `RequestV2::resolve()` — structural validation.
-/// 3. Until Phase 2A: emit `Error{Internal, "v2 generation not
-///    implemented"}` and continue to the next request on the same
-///    connection. Once Phase 2A lands, dispatch the resolved
-///    request through the router's `generate_v2` path.
 pub async fn handle_v2_connection<C: Connection + 'static>(
     mut conn: C,
+    router: Arc<Router>,
     peer: PeerIdentity,
     ctx: AcceptContext,
 ) -> Result<(), io::Error> {
@@ -119,23 +113,162 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
             }
         };
 
-        // Phase 2A will replace this with router.dispatch_v2() +
-        // backend.generate_v2(resolved). Until then: clean error
-        // back to the caller.
-        info!(
-            target: "inferd_daemon::activity",
-            req_id = %resolved.id,
-            n_messages = resolved.messages.len(),
-            n_attachments = resolved.attachments.len(),
-            n_tools = resolved.tools.len(),
-            "v2_request_received_not_implemented"
-        );
-        let resp = ResponseV2::Error {
-            id: resolved.id,
-            code: ErrorCodeV2::Internal,
-            message: "v2 generation not implemented (Phase 2A pending)".into(),
+        // Admission gate. v1 and v2 share one Admission instance; a
+        // v2 in-flight request occupies the same slot a v1 one would.
+        let _admit_permit = match ctx.admission.as_ref().map(|a| a.try_admit()) {
+            None => None,
+            Some(Ok(p)) => Some(p),
+            Some(Err(SubmitError::QueueFull)) => {
+                let resp = ResponseV2::Error {
+                    id: resolved.id.clone(),
+                    code: ErrorCodeV2::QueueFull,
+                    message: "queue full".into(),
+                };
+                write_response_v2(&writer, &resp).await?;
+                continue;
+            }
+            Some(Err(SubmitError::Closed)) => {
+                let resp = ResponseV2::Error {
+                    id: resolved.id.clone(),
+                    code: ErrorCodeV2::BackendUnavailable,
+                    message: "admission closed".into(),
+                };
+                write_response_v2(&writer, &resp).await?;
+                return Ok(());
+            }
         };
-        write_response_v2(&writer, &resp).await?;
+
+        // Dispatch through the router.
+        let backend = match router.dispatch() {
+            Ok(b) => b,
+            Err(RouterError::NoBackends) | Err(RouterError::NoneAvailable) => {
+                let resp = ResponseV2::Error {
+                    id: resolved.id.clone(),
+                    code: ErrorCodeV2::BackendUnavailable,
+                    message: "no backend available".into(),
+                };
+                write_response_v2(&writer, &resp).await?;
+                continue;
+            }
+        };
+
+        // Backends that don't advertise v2 capability are not given a
+        // generate_v2 call — the trait's default impl would also
+        // refuse, but checking up front lets us emit a clearer error
+        // and avoids paying for a method-dispatch round-trip just to
+        // surface "not supported".
+        if !backend.capabilities().v2 {
+            let resp = ResponseV2::Error {
+                id: resolved.id.clone(),
+                code: ErrorCodeV2::Internal,
+                message: format!(
+                    "backend {:?} does not advertise v2 capability",
+                    backend.name()
+                ),
+            };
+            write_response_v2(&writer, &resp).await?;
+            continue;
+        }
+
+        let backend_name = backend.name().to_string();
+        let req_id = resolved.id.clone();
+        let n_attachments = resolved.attachments.len();
+        let n_tools = resolved.tools.len();
+
+        let mut stream = match backend.generate_v2(resolved).await {
+            Ok(s) => s,
+            Err(e) => {
+                let (code, message) = match e {
+                    GenerateError::InvalidRequest(m) => (ErrorCodeV2::InvalidRequest, m),
+                    GenerateError::NotReady => {
+                        (ErrorCodeV2::BackendUnavailable, "backend not ready".into())
+                    }
+                    GenerateError::Unavailable(m) => (ErrorCodeV2::BackendUnavailable, m),
+                    GenerateError::Internal(m) => (ErrorCodeV2::Internal, m),
+                };
+                let resp = ResponseV2::Error {
+                    id: req_id,
+                    code,
+                    message,
+                };
+                write_response_v2(&writer, &resp).await?;
+                continue;
+            }
+        };
+
+        let mut terminal_emitted = false;
+        while let Some(ev) = stream.next().await {
+            match ev {
+                TokenEventV2::Text(delta) => {
+                    let frame = ResponseV2::Frame {
+                        id: req_id.clone(),
+                        block: ResponseBlock::Text { delta },
+                    };
+                    write_response_v2(&writer, &frame).await?;
+                }
+                TokenEventV2::Thinking(delta) => {
+                    let frame = ResponseV2::Frame {
+                        id: req_id.clone(),
+                        block: ResponseBlock::Thinking { delta },
+                    };
+                    write_response_v2(&writer, &frame).await?;
+                }
+                TokenEventV2::ToolUse {
+                    tool_call_id,
+                    name,
+                    input,
+                } => {
+                    let frame = ResponseV2::Frame {
+                        id: req_id.clone(),
+                        block: ResponseBlock::ToolUse {
+                            tool_call_id,
+                            name,
+                            input,
+                        },
+                    };
+                    write_response_v2(&writer, &frame).await?;
+                }
+                TokenEventV2::Done { stop_reason, usage } => {
+                    let frame = ResponseV2::Done {
+                        id: req_id.clone(),
+                        usage,
+                        stop_reason,
+                        backend: backend_name.clone(),
+                    };
+                    write_response_v2(&writer, &frame).await?;
+                    info!(
+                        target: "inferd_daemon::activity",
+                        req_id = %req_id,
+                        backend = %backend_name,
+                        wire_version = "v2",
+                        stop_reason = ?stop_reason,
+                        input_tokens = usage.input_tokens,
+                        output_tokens = usage.output_tokens,
+                        n_attachments = n_attachments,
+                        n_tools = n_tools,
+                        "v2_request_done"
+                    );
+                    terminal_emitted = true;
+                    break;
+                }
+            }
+        }
+
+        if !terminal_emitted {
+            warn!(
+                target: "inferd_daemon::activity",
+                req_id = %req_id,
+                backend = %backend_name,
+                wire_version = "v2",
+                "v2_request_error_mid_stream"
+            );
+            let frame = ResponseV2::Error {
+                id: req_id,
+                code: ErrorCodeV2::BackendUnavailable,
+                message: "backend ended stream without terminal frame".into(),
+            };
+            write_response_v2(&writer, &frame).await?;
+        }
     }
 }
 
@@ -224,6 +357,7 @@ async fn write_response_v2<W: AsyncWrite + Unpin>(
 /// Serve a v2 TCP listener.
 pub async fn serve_tcp_v2(
     listener: tokio::net::TcpListener,
+    router: Arc<Router>,
     ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
@@ -237,10 +371,11 @@ pub async fn serve_tcp_v2(
             accept = listener.accept() => {
                 let (stream, peer_addr) = accept?;
                 let peer = PeerIdentity::from_tcp(peer_addr);
+                let r = Arc::clone(&router);
                 let ctx = ctx.clone();
                 debug!(?peer_addr, "v2 tcp accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(stream, peer, ctx).await {
+                    if let Err(e) = handle_v2_connection(stream, r, peer, ctx).await {
                         warn!(error = ?e, "v2 connection terminated with error");
                     }
                 });
@@ -253,6 +388,7 @@ pub async fn serve_tcp_v2(
 #[cfg(unix)]
 pub async fn serve_uds_v2(
     listener: tokio::net::UnixListener,
+    router: Arc<Router>,
     ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
@@ -265,6 +401,7 @@ pub async fn serve_uds_v2(
             }
             accept = listener.accept() => {
                 let (stream, _) = accept?;
+                let r = Arc::clone(&router);
                 let peer = crate::peercred::unix::from_stream(&stream)
                     .unwrap_or_else(|e| {
                         warn!(error = %e, "v2 SO_PEERCRED failed; recording empty unix identity");
@@ -277,7 +414,7 @@ pub async fn serve_uds_v2(
                 let ctx = ctx.clone();
                 debug!(?peer, "v2 uds accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(stream, peer, ctx).await {
+                    if let Err(e) = handle_v2_connection(stream, r, peer, ctx).await {
                         warn!(error = ?e, "v2 connection terminated with error");
                     }
                 });
@@ -291,6 +428,7 @@ pub async fn serve_uds_v2(
 pub async fn serve_named_pipe_v2(
     path: &str,
     first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
+    router: Arc<Router>,
     ctx: AcceptContext,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
@@ -318,10 +456,11 @@ pub async fn serve_named_pipe_v2(
                             transport: "pipe",
                         }
                     });
+                let r = Arc::clone(&router);
                 let ctx = ctx.clone();
                 debug!(?peer, "v2 named pipe accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(connected, peer, ctx).await {
+                    if let Err(e) = handle_v2_connection(connected, r, peer, ctx).await {
                         warn!(error = ?e, "v2 connection terminated with error");
                     }
                 });

@@ -34,19 +34,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   When `--v2` is set the daemon binds the v2 endpoint alongside
   v1 on its own socket / pipe path: `infer.v2.sock` on Unix,
   `\\.\pipe\inferd-infer-v2` on Windows. `default_v2_addr()`
-  resolves the platform default. Until Phase 2A wires
-  `Backend::generate_v2`, the v2 listener responds to validated
-  requests with `ResponseV2::Error{code:internal,
-  message:"v2 generation not implemented (Phase 2A pending)"}`,
-  letting middleware authors integration-test the v2 envelope
-  end-to-end today. Structurally invalid requests still return
-  `InvalidRequest` with the same validation surface as
-  `RequestV2::resolve()`. F-8 first-frame TCP auth is reused
-  identically to v1; admin socket stays shared. Six integration
-  tests in `crates/inferd-daemon/tests/v2_stub.rs` pin valid /
-  invalid / multimodal / multi-request / malformed-JSON
-  behaviour. Shutdown signal is now fan-out: the same
-  Ctrl-C/SIGTERM closes both v1 and v2 listeners.
+  resolves the platform default. F-8 first-frame TCP auth is
+  reused identically to v1; admin socket stays shared. Shutdown
+  signal is now fan-out: the same Ctrl-C/SIGTERM closes both v1
+  and v2 listeners.
+- **inferd-engine: `Backend` trait grows v2 surface** (Phase 2A
+  per ADR 0015). New types `TokenEventV2` (with `Text` /
+  `Thinking` / `ToolUse` / `Done` variants) and `TokenStreamV2`.
+  New trait methods `generate_v2(ResolvedV2) -> Result<TokenStreamV2>`
+  with default impl returning `Internal("v2 not supported")` and
+  `capabilities() -> BackendCapabilities` (default-zero, advertises
+  text-only v1 — existing `mock` and `llamacpp` impls compile
+  unchanged). `BackendCapabilities` exposes `v2`, `vision`,
+  `audio`, `video`, `tools`, `thinking` flags. `mock` adapter
+  opts in to v2 + thinking and gains a `generate_v2` impl that
+  reuses the existing token tape, mid-stream-drop, and
+  pre-stream-error knobs but yields v2 frames. `llamacpp`
+  adapter stays at trait default for now — Phase 3+ wires
+  chat templating + mtmd before its v2 path can do anything
+  useful.
+- **inferd-daemon: v2 dispatch wired** (Phase 2A). The v2 socket
+  now dispatches validated requests through the shared `Router`
+  (one warm model serves both wire versions). Backends that
+  don't advertise `BackendCapabilities::v2 == true` see their
+  v2 requests rejected with `Error{Internal, "backend ... does
+  not advertise v2 capability"}`. Pre-stream errors map
+  `GenerateError` variants to the right `ErrorCodeV2`
+  (`InvalidRequest` / `BackendUnavailable` / `Internal`).
+  Mid-stream backend failure (no `Done` event) emits a synthetic
+  terminal `Error{BackendUnavailable, ...}` so clients never
+  hang on a half-stream. Admission gate is shared with v1 — a
+  v2 in-flight request occupies the same slot a v1 one would.
+  Eight integration tests in `crates/inferd-daemon/tests/v2_stub.rs`
+  pin: streaming text+done, multimodal dispatch, dangling
+  attachment, empty messages, malformed JSON, multi-request
+  pipelining, pre-stream `Unavailable`, and mid-stream drop.
 
 ## [0.1.12] - 2026-05-20
 

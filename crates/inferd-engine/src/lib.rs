@@ -22,4 +22,7 @@ pub(crate) mod ffi;
 pub mod llamacpp;
 pub mod mock;
 
-pub use backend::{Backend, GenerateError, TokenEvent, TokenStream};
+pub use backend::{
+    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
+    TokenStreamV2,
+};

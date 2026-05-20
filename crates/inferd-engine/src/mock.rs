@@ -9,8 +9,12 @@
 //! - `mid_stream_drop_after` truncates the stream after N tokens (no
 //!   `Done` event) to exercise the mid-stream failure path.
 
-use crate::backend::{Backend, GenerateError, TokenEvent, TokenStream};
+use crate::backend::{
+    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
+    TokenStreamV2,
+};
 use async_trait::async_trait;
+use inferd_proto::v2::{ResolvedV2, StopReasonV2, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,6 +110,19 @@ impl Backend for Mock {
         self.ready.load(Ordering::SeqCst)
     }
 
+    /// Mock advertises v2 + thinking so daemon-side v2 dispatch can
+    /// be exercised end-to-end without a real engine. Multimodal /
+    /// tool flags stay `false` — Mock doesn't pretend to ingest
+    /// images or parse tool calls. Tests that need richer v2 surface
+    /// configure the mock with explicit token tape.
+    fn capabilities(&self) -> BackendCapabilities {
+        BackendCapabilities {
+            v2: true,
+            thinking: true,
+            ..BackendCapabilities::default()
+        }
+    }
+
     async fn generate(&self, _req: Resolved) -> Result<TokenStream, GenerateError> {
         if let Some(err) = self.config.pre_stream_error {
             return Err(err.into());
@@ -147,6 +164,56 @@ impl Backend for Mock {
                     usage: Usage {
                         prompt_tokens: 0,
                         completion_tokens,
+                    },
+                })
+                .await;
+        });
+
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    /// v2 generation. Same token tape + delays as `generate` but
+    /// emits `TokenEventV2::Text(...)` and a v2 `Done` frame with
+    /// `StopReasonV2::EndTurn` and `UsageV2` field names. Mid-stream
+    /// drop and pre-stream error knobs apply identically.
+    async fn generate_v2(&self, _req: ResolvedV2) -> Result<TokenStreamV2, GenerateError> {
+        if let Some(err) = self.config.pre_stream_error {
+            return Err(err.into());
+        }
+        if !self.ready() {
+            return Err(GenerateError::NotReady);
+        }
+
+        let tokens = self.config.tokens.clone();
+        let drop_after = self.config.mid_stream_drop_after;
+        let token_delay = self
+            .config
+            .token_delay_ms
+            .map(std::time::Duration::from_millis);
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+
+        tokio::spawn(async move {
+            let mut output_tokens: u32 = 0;
+            for (emitted, tok) in tokens.into_iter().enumerate() {
+                if let Some(n) = drop_after
+                    && emitted >= n
+                {
+                    return;
+                }
+                if let Some(d) = token_delay {
+                    tokio::time::sleep(d).await;
+                }
+                if tx.send(TokenEventV2::Text(tok)).await.is_err() {
+                    return;
+                }
+                output_tokens = output_tokens.saturating_add(1);
+            }
+            let _ = tx
+                .send(TokenEventV2::Done {
+                    stop_reason: StopReasonV2::EndTurn,
+                    usage: UsageV2 {
+                        input_tokens: 0,
+                        output_tokens,
                     },
                 })
                 .await;
