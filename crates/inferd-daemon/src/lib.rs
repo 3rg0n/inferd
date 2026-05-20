@@ -19,6 +19,7 @@ pub mod config_file;
 pub mod endpoint;
 pub mod fetch;
 pub mod lifecycle;
+pub mod lifecycle_v2;
 pub mod lock;
 pub mod logx;
 pub mod peercred;
