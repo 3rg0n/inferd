@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-client"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-daemon"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-engine"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "bindgen",
@@ -659,12 +659,28 @@ dependencies = [
 
 [[package]]
 name = "inferd-proto"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bytes",
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "inferdctl"
+version = "0.1.9"
+dependencies = [
+ "anyhow",
+ "clap",
+ "inferd-client",
+ "inferd-daemon",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

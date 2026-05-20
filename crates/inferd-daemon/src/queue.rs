@@ -1,80 +1,95 @@
-//! Bounded admission queue.
+//! Bounded admission gate.
 //!
-//! Per `docs/protocol-v1.md` §"Admission semantics": 1 active generation,
-//! N queued (default 10), non-blocking submit. Queue full returns
-//! `SubmitError::QueueFull` immediately so the caller can emit
-//! `Response::Error{code: queue_full}`.
+//! Per `docs/protocol-v1.md` §"Admission semantics": at most
+//! `active_permits + queue_depth` outstanding requests across the
+//! whole daemon at any time. The (active_permits + 1)th request is
+//! still admitted (it just queues behind the active one); the
+//! (active_permits + queue_depth + 1)th is rejected immediately
+//! with `Response::Error{code: queue_full}`.
 //!
-//! The queue is transport-agnostic. It does not know about NDJSON or
-//! sockets — it accepts opaque jobs and hands them to a worker one at a
-//! time. The lifecycle wires this up to the inference backend.
+//! Implementation: a single `tokio::sync::Semaphore` whose total
+//! permit count is `active_permits + queue_depth`. Per-request
+//! flow:
+//! 1. `try_acquire_owned` — non-blocking. If no permit available,
+//!    return `QueueFull`. The wire layer translates that into a
+//!    terminal `Response::Error` frame.
+//! 2. Hold the permit for the duration of the generation (the
+//!    `OwnedSemaphorePermit` guard goes onto the request future's
+//!    stack).
+//! 3. Drop on completion / cancellation. Permit returns to the
+//!    pool, freeing slot for the next admit.
+//!
+//! For v0.1 the daemon's only backend (`llamacpp`) is single-
+//! threaded internally — concurrent generates serialise on its
+//! inner mutex. Setting `active_permits=1` matches that reality
+//! without bottlenecking the wire layer (which is happy to read
+//! and queue many requests). v0.2's continuous-batching backends
+//! will raise `active_permits` above 1.
 
 use std::sync::Arc;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
-/// Errors returned by `Queue::submit`.
+/// Errors returned by `Admission::try_admit`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SubmitError {
-    /// Queue is full at the configured depth. Caller should not retry
-    /// without backoff.
+    /// Admission gate is at capacity (active + queued). The wire
+    /// layer must respond with `Response::Error{code: queue_full}`
+    /// and close the request stream.
     #[error("queue full")]
     QueueFull,
-    /// Queue has been shut down. Submits after shutdown are rejected.
+    /// Admission gate has been shut down (semaphore closed).
+    /// Submits during shutdown are rejected.
     #[error("queue closed")]
     Closed,
 }
 
-/// A bounded FIFO admission queue.
-///
-/// The queue bounds two things separately:
-/// - **active generations**: at most `active_permits` simultaneously
-///   (default 1, the v0.1 invariant).
-/// - **queued jobs**: at most `queue_depth` waiting for a permit.
-///
-/// `submit()` is non-blocking: if no permit is immediately available **and**
-/// the queue is at depth, it returns `QueueFull`. The caller never blocks.
-pub struct Queue<T: Send + 'static> {
-    tx: mpsc::Sender<T>,
-    permits: Arc<Semaphore>,
+/// Shared admission gate handed to every per-connection task via
+/// `lifecycle::AcceptContext`. Cheap to clone (just an `Arc` bump).
+#[derive(Clone)]
+pub struct Admission {
+    inner: Arc<Semaphore>,
+    /// Cached for `capacity()` reporting; the semaphore itself
+    /// doesn't expose its initial size.
+    capacity: usize,
 }
 
-impl<T: Send + 'static> Queue<T> {
-    /// Build a queue with the given active-permit count and waiting depth.
-    ///
-    /// Returns the queue plus the receiving end of the channel; the worker
-    /// loop in `lifecycle::dispatch_loop` consumes from `rx` and calls
-    /// `permits.acquire()` before each job.
-    pub fn new(active_permits: usize, queue_depth: usize) -> (Self, mpsc::Receiver<T>) {
-        // mpsc capacity is the *waiting* queue depth, not active+queued.
-        // Active jobs are tracked separately via the semaphore.
-        let (tx, rx) = mpsc::channel(queue_depth.max(1));
-        let permits = Arc::new(Semaphore::new(active_permits.max(1)));
-        (Queue { tx, permits }, rx)
-    }
-
-    /// Submit a job non-blocking.
-    pub fn submit(&self, job: T) -> Result<(), SubmitError> {
-        match self.tx.try_send(job) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(SubmitError::QueueFull),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(SubmitError::Closed),
+impl Admission {
+    /// Build an admission gate sized for `active_permits +
+    /// queue_depth` simultaneous outstanding requests across the
+    /// daemon.
+    pub fn new(active_permits: usize, queue_depth: usize) -> Self {
+        // Saturate at 1 below; the v0.1 invariant is active=1, but
+        // operators can pass 0 by accident (env var unset → "0"
+        // parse on some setups). Treat as "at least one slot."
+        let total = active_permits.max(1) + queue_depth;
+        Self {
+            inner: Arc::new(Semaphore::new(total)),
+            capacity: total,
         }
     }
 
-    /// Acquire a permit for the worker loop. Held for the duration of one
-    /// active generation; dropped (returned to the pool) when the generation
-    /// finishes or is cancelled.
-    pub fn acquire_permit(&self) -> Arc<Semaphore> {
-        Arc::clone(&self.permits)
-    }
-}
-
-impl<T: Send + 'static> Clone for Queue<T> {
-    fn clone(&self) -> Self {
-        Queue {
-            tx: self.tx.clone(),
-            permits: Arc::clone(&self.permits),
+    /// Attempt to admit one request. Non-blocking. The returned
+    /// `OwnedSemaphorePermit` must be held for the duration of the
+    /// generation; dropping it returns the slot to the pool.
+    pub fn try_admit(&self) -> Result<OwnedSemaphorePermit, SubmitError> {
+        match Arc::clone(&self.inner).try_acquire_owned() {
+            Ok(permit) => Ok(permit),
+            Err(TryAcquireError::NoPermits) => Err(SubmitError::QueueFull),
+            Err(TryAcquireError::Closed) => Err(SubmitError::Closed),
         }
+    }
+
+    /// Total slots configured (active_permits + queue_depth).
+    /// Diagnostic only; the wire layer doesn't surface this.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Approximate count of slots currently free. Diagnostic;
+    /// racy by definition (a concurrent admit can change the
+    /// answer between the call and the use).
+    pub fn available_permits(&self) -> usize {
+        self.inner.available_permits()
     }
 }
 
@@ -82,52 +97,64 @@ impl<T: Send + 'static> Clone for Queue<T> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn submit_and_drain_in_order() {
-        let (q, mut rx) = Queue::<u32>::new(1, 4);
-        q.submit(1).unwrap();
-        q.submit(2).unwrap();
-        q.submit(3).unwrap();
-        assert_eq!(rx.recv().await, Some(1));
-        assert_eq!(rx.recv().await, Some(2));
-        assert_eq!(rx.recv().await, Some(3));
+    #[test]
+    fn admit_succeeds_until_capacity() {
+        let a = Admission::new(1, 2);
+        assert_eq!(a.capacity(), 3);
+        let _p1 = a.try_admit().unwrap();
+        let _p2 = a.try_admit().unwrap();
+        let _p3 = a.try_admit().unwrap();
+        // Fourth admit fails — over capacity.
+        assert_eq!(a.try_admit().unwrap_err(), SubmitError::QueueFull);
+    }
+
+    #[test]
+    fn dropping_permit_frees_slot() {
+        let a = Admission::new(1, 1);
+        let p1 = a.try_admit().unwrap();
+        let _p2 = a.try_admit().unwrap();
+        assert!(a.try_admit().is_err());
+        drop(p1);
+        // Slot now available.
+        let _p3 = a.try_admit().unwrap();
+    }
+
+    #[test]
+    fn zero_active_permits_treated_as_one() {
+        // Operator misconfigured to 0; we still admit at least one
+        // slot (queue_depth=0 + 1 active = 1 total). Otherwise the
+        // daemon would refuse every request which is worse than a
+        // silent floor.
+        let a = Admission::new(0, 0);
+        assert_eq!(a.capacity(), 1);
+        let _p = a.try_admit().unwrap();
+        assert!(a.try_admit().is_err());
+    }
+
+    #[test]
+    fn available_permits_reflects_holds() {
+        let a = Admission::new(1, 2);
+        assert_eq!(a.available_permits(), 3);
+        let _p1 = a.try_admit().unwrap();
+        assert_eq!(a.available_permits(), 2);
+        let _p2 = a.try_admit().unwrap();
+        assert_eq!(a.available_permits(), 1);
     }
 
     #[tokio::test]
-    async fn submit_returns_full_when_at_depth() {
-        let (q, _rx) = Queue::<u32>::new(1, 2);
-        q.submit(1).unwrap();
-        q.submit(2).unwrap();
-        assert_eq!(q.submit(3), Err(SubmitError::QueueFull));
-    }
-
-    #[tokio::test]
-    async fn submit_rejects_after_close() {
-        let (q, rx) = Queue::<u32>::new(1, 2);
-        drop(rx);
-        assert_eq!(q.submit(1), Err(SubmitError::Closed));
-    }
-
-    #[tokio::test]
-    async fn permit_blocks_concurrent_jobs() {
-        let (q, _rx) = Queue::<u32>::new(1, 4);
-        let p = q.acquire_permit();
-        let _held = p.try_acquire().unwrap();
-        // Second acquire from the same semaphore must fail because the
-        // permit count is 1.
-        assert!(p.try_acquire().is_err());
-    }
-
-    #[tokio::test]
-    async fn multiple_active_permits_allow_concurrency() {
-        let (q, _rx) = Queue::<u32>::new(3, 4);
-        let p = q.acquire_permit();
-        let h1 = p.try_acquire().unwrap();
-        let h2 = p.try_acquire().unwrap();
-        let h3 = p.try_acquire().unwrap();
-        assert!(p.try_acquire().is_err());
-        drop(h1);
-        let _h4 = p.try_acquire().unwrap();
-        drop((h2, h3));
+    async fn admission_is_clone_safe_across_tasks() {
+        let a = Admission::new(1, 2);
+        let a2 = a.clone();
+        let h = tokio::spawn(async move {
+            let _p = a2.try_admit().unwrap();
+            // Permit drops on task exit.
+        });
+        h.await.unwrap();
+        // After the spawned task drops its permit, full capacity
+        // is back.
+        let p1 = a.try_admit().unwrap();
+        let p2 = a.try_admit().unwrap();
+        let p3 = a.try_admit().unwrap();
+        drop((p1, p2, p3));
     }
 }

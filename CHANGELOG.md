@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-20
+
+Closes the last protocol-promise gap and adds the operator CLI
+that's been on the punch list since the start of v0.1.
+
+### Added
+
+- **Admission queue wired into the lifecycle.** The wire spec has
+  promised `Response::Error{code: queue_full}` frames since
+  alpha.0; the daemon never emitted them. Today's daemon now
+  enforces a global capacity of `active_permits + queue_depth`
+  outstanding requests across all connections via a shared
+  `tokio::Semaphore`. The (capacity+1)th request gets a clean
+  `queue_full` frame and the connection moves on. Two new
+  integration tests in `tests/queue_full.rs` pin the behaviour;
+  the existing concurrency stress tests in `tests/stress.rs`
+  still pass with admission disabled.
+  Closes the architectural-promise gap that's been tracked since
+  the v0.1.0-alpha.0 design notes flagged "queue module exists
+  but isn't wired."
+- **`inferdctl` operator CLI** at `crates/inferdctl/`. Four
+  subcommands:
+  - `inferdctl status` — one-shot admin snapshot as JSON; exits
+    0 on `ready`, non-zero otherwise. For shell scripts.
+  - `inferdctl watch` — stream admin events forever. For
+    operators watching first-boot model download.
+  - `inferdctl pull` — read `~/.inferd/config.json`, fetch the
+    configured model into the CAS store
+    (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify
+    SHA-256 with constant-time compare, write the manifest.
+    Bypasses the daemon. Idempotent.
+  - `inferdctl doctor` — diagnose connectivity. Checks config,
+    blob, manifest, admin socket. Prints a punch list with
+    `[ ok ]` / `[FAIL]` markers.
+
+  Bundled in every release tarball alongside `inferd-daemon`.
+
+### Changed
+
+- `lifecycle::AcceptContext` gained an optional `admission` field.
+  Tests pass `None` to keep the old "every request admitted"
+  semantics; production wires a real `Admission` from the
+  daemon's `--active-permits` / `--queue-depth` CLI flags
+  (defaults: 1 active, 10 queued).
+- `crates/inferd-daemon/src/queue.rs` rewritten. The previous
+  `Queue<T>` type was a generic mpsc + semaphore that anticipated
+  a worker-loop pattern that never materialised. Replaced with
+  a much simpler `Admission` type: one shared semaphore sized at
+  `active + queued` total slots, `try_admit()` returns an
+  `OwnedSemaphorePermit` the connection task holds for the
+  generation's duration. Drops on completion / cancel / EOF.
+
 ## [0.1.8] - 2026-05-19
 
 The "actually shippable" release. **First non-alpha publish to
