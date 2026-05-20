@@ -13,6 +13,7 @@ pub mod backend;
 pub mod chat_template;
 pub mod loader;
 pub mod mtmd;
+pub mod tool_parser;
 
 pub use backend::{LlamaCpp, LlamaCppConfig, LlamaCppError};
 pub use chat_template::{Gemma4RenderError, Gemma4Rendered, Gemma4Renderer};

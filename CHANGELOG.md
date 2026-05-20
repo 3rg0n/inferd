@@ -98,6 +98,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings and reuses shared types from `crate::ffi` via bindgen's
   `blocklist_type` + `raw_line` directives so `llama_model` and
   friends aren't redeclared.
+- **inferd-engine: streaming tool-use parser** (Phase 4A). New
+  `crates/inferd-engine/src/llamacpp/tool_parser.rs` is a pure-Rust
+  state machine that wraps the v2 generate token stream and
+  detects:
+    - `<|tool_call>call:NAME{KEY:<|"|>VALUE<|"|>,...}<tool_call|>`
+      sequences → `Output::ToolUse{tool_call_id, name, input}`.
+      Generated tool_call_ids are `tc-{N}` per generation; the
+      counter ensures uniqueness across multiple calls in the
+      same stream.
+    - `<|think|>...<|/think|>` sequences (per
+      `docs/thinking.mode.in.gemma.md`) →
+      `Output::Thinking(delta)`. Daemon forwards as
+      `ResponseBlock::Thinking { delta }`.
+    - Everything else → `Output::Text(delta)`.
+    - Malformed payloads (opener but body doesn't parse) →
+      `Output::Malformed(reason)`. The adapter terminates the
+      stream; the daemon's lifecycle_v2 will surface that as a
+      terminal error frame.
+  The parser handles split-across-token-boundary sentinels by
+  holding any pending bytes that match a strict prefix of an
+  opener or closer, so a tokenizer that emits `<|tool_` then
+  `call>` is parsed correctly. 11 unit tests pin every state
+  transition (synthetic streams; no real model needed).
+  `LlamaCpp::generate_v2`'s sampler loop now feeds each piece
+  through the parser and emits `TokenEventV2::Text` /
+  `Thinking` / `ToolUse` per its decisions. When any `ToolUse`
+  was emitted, the terminal Done has
+  `stop_reason: StopReasonV2::ToolUse` (per ADR 0015).
 - **inferd-engine: Tier 3 v2 multimodal smoke** (Phase 3B). New
   `crates/inferd-engine/tests/llamacpp_multimodal.rs` exercises the
   v2 generate_v2 path against a real Gemma 4 GGUF + mmproj. Two
