@@ -1,0 +1,50 @@
+crates/inferd-engine/src/llamacpp/mtmd.rs
+  s_126aec4081f728::t_54d7066cbcfe5a 182-230
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_8a9de8beae3d03 195-200,202,205,224,229,235
+crates/inferd-engine/src/llamacpp/chat_template/gemma4.rs
+  s_126aec4081f728::t_84efb8700b16fd 1-402
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_126aec4081f728::t_1f587bdd40a00a 18
+  s_126aec4081f728::t_a0d1e3d27d897e 13
+CHANGELOG.md
+  s_126aec4081f728::t_3ffb004a332023 101-144
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_48e9494ac92b23 45-48
+  s_126aec4081f728::t_a2cf6dfa02ba05 41-44
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_01adce916d10dc 153-167,173
+  s_126aec4081f728::t_dfd784fe5010c3 63-75
+  s_126aec4081f728::t_481495382e6fb3 168-172
+  s_126aec4081f728::t_f40abf58e8c0f3 22-25,27,29,31-32
+  s_126aec4081f728::t_5012b7acb9916d 254-260,262-314
+  s_126aec4081f728::t_1f587bdd40a00a 212,261,826-827,831
+  s_126aec4081f728::t_1bd8d5cb8ab906 701-747,749-751,756-825,828-830,832-893
+  s_126aec4081f728::t_ea699219b1a06b 201-211,213-222,227-232
+  s_126aec4081f728::t_57e51eca428666 97-104,115-116
+  s_126aec4081f728::t_879817d435d46e 748,752-755
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_531f7dd3e27f40 31-36
+crates/inferd-engine/src/llamacpp/chat_template/mod.rs
+  s_126aec4081f728::t_84efb8700b16fd 1-24
+crates/inferd-engine/tests/chat_template_gemma4.rs
+  s_126aec4081f728::t_e92d095f04968c 11-12
+crates/inferd-engine/src/llamacpp/loader.rs
+  s_126aec4081f728::t_4afd57f62fa872 134-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "db4c022830148d2cca72da28913fe4a08c778dfa",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
