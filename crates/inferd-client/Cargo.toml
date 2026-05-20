@@ -21,7 +21,7 @@ categories  = ["api-bindings", "asynchronous"]
 # development, falls back to the registry version when consumed as
 # an external crate from crates.io. Both sides must move in lockstep
 # at publish time.
-inferd-proto = { path = "../inferd-proto", version = "=0.1.11" }
+inferd-proto = { path = "../inferd-proto", version = "=0.1.12" }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
 async-stream = "0.3"
