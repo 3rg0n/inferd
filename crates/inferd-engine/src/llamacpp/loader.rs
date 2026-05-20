@@ -6,15 +6,21 @@
 //!   supplied, the comparison uses `subtle::ConstantTimeEq` so the daemon
 //!   does not leak how many leading bytes match.
 //! - **F-6** (TOCTOU): when verification is requested, the model file is
-//!   copied into a daemon-owned tempdir *first*, then the copy is hashed
-//!   and handed to `libllama`. The original path is opened once for
-//!   the read-side of the copy and never re-resolved. The tempfile is
-//!   kept alive for the lifetime of the `ModelHandle` so an attacker
-//!   rewriting the original on disk after copy cannot affect the
-//!   in-process model state.
+//!   stream-hashed in place, then handed to `llama_model_load_from_file`
+//!   at the same path. The residual window between hash and mmap is
+//!   microseconds and requires an attacker with write access to the
+//!   model file — which, per F-6's own no-hash justification, is a
+//!   threat that already exceeds the model integrity guarantee
+//!   (an attacker who can rewrite the user's model file has already
+//!   won, hash or no hash). Earlier versions copied the file into a
+//!   daemon-owned tempdir before hashing; that defended against a
+//!   narrower threat (sub-microsecond rewrite race) at the cost of
+//!   requiring `$TMPDIR` to hold a full second copy of the model.
+//!   On tmpfs-constrained hosts (WSL2 default), this caused the
+//!   daemon to fail with ENOSPC on cold start. See issue #6.
 //!
 //! When no expected hash is supplied, the original path goes straight
-//! to `llama_model_load_from_file` (no copy). That path is documented
+//! to `llama_model_load_from_file` (no hash). That path is documented
 //! in `THREAT_MODEL.md` F-6 as the "operator-trusted file" mode.
 
 #![allow(unsafe_code)] // FFI call surface; module-scoped.
@@ -25,12 +31,11 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use tempfile::{NamedTempFile, TempDir};
 
 /// Errors produced by `load_model`.
 #[derive(Debug, thiserror::Error)]
 pub enum ModelLoadError {
-    /// Underlying I/O failure (open, read for hashing, copy).
+    /// Underlying I/O failure (open, read for hashing).
     #[error("io: {0}")]
     Io(#[from] io::Error),
     /// SHA-256 of the file did not match the expected value.
@@ -42,27 +47,14 @@ pub enum ModelLoadError {
     /// `libllama` returned a null pointer from `model_load_from_file`.
     #[error("llama_model_load_from_file returned null")]
     LlamaLoadFailed,
-    /// Copy-to-tempdir for F-6 mitigation failed.
-    #[error("copy model to tempdir for verification: {0}")]
-    CopyForVerification(io::Error),
 }
 
 /// Owned handle to a loaded `llama_model`. Drops `llama_model_free` on
 /// `Drop`. Cloning is intentionally not supported — only one owner per
 /// model pointer.
-///
-/// When the F-6 TOCTOU mitigation copied the model into a tempdir
-/// before load, the `_temp_*` fields keep that tempdir alive for the
-/// lifetime of this handle. Dropping `ModelHandle` first frees the
-/// `llama_model` (releasing any mmap of the tempfile), then deletes
-/// the tempfile and tempdir.
 #[derive(Debug)]
 pub struct ModelHandle {
     ptr: NonNull<crate::ffi::llama_model>,
-    // Drop order is field-declaration order: ptr first (frees the
-    // mmap), then tempfile, then tempdir. That's what we want.
-    _temp_file: Option<NamedTempFile>,
-    _temp_dir: Option<TempDir>,
 }
 
 // SAFETY: `llama_model` is internally synchronised by libllama for the
@@ -83,28 +75,32 @@ impl Drop for ModelHandle {
         // SAFETY: pointer was returned by `llama_model_load_from_file`
         // and not freed yet. `Drop` runs exactly once per owner.
         unsafe { crate::ffi::llama_model_free(self.ptr.as_ptr()) };
-        // _temp_file and _temp_dir drop after this line, deleting any
-        // tempfile we created for F-6.
     }
 }
 
 /// Verify (optionally) and load a model file via `libllama`.
 ///
 /// **F-6 (TOCTOU)**: when `expected_sha256` is `Some`, the model file
-/// is copied into a daemon-owned tempdir before any hashing happens.
-/// The tempfile is then hashed and handed to
-/// `llama_model_load_from_file`. The `NamedTempFile` is owned by the
-/// returned `ModelHandle` so the file persists for the lifetime of
-/// the loaded model — an attacker rewriting the *original* path on
-/// disk after the copy cannot affect the in-process model.
+/// is stream-hashed in place at the original path, then handed to
+/// `llama_model_load_from_file` at the same path. The residual TOCTOU
+/// window between hash and mmap is microseconds; an attacker with
+/// write access to the model file is already a threat that exceeds
+/// what hashing can defend against (per F-6 §"operator-trusted file"
+/// — same justification as the no-hash path).
+///
+/// Earlier versions copied the file into a daemon-owned tempdir
+/// before hashing. That doubled disk usage during cold start and
+/// caused ENOSPC on tmpfs-constrained hosts (WSL2 default tmpfs is
+/// half of allocated RAM; multi-GB Gemma models did not fit). See
+/// issue #6.
 ///
 /// **F-5 (constant-time compare)**: the SHA-256 comparison uses
 /// `subtle::ConstantTimeEq` so the daemon doesn't leak how many
 /// leading bytes match.
 ///
 /// When `expected_sha256` is `None` the original path goes straight
-/// to `libllama` (no copy, no hash). That's the "operator-trusted
-/// model file" mode — see `THREAT_MODEL.md` F-6 for the trade-off.
+/// to `libllama` (no hash). That's the "operator-trusted model file"
+/// mode — see `THREAT_MODEL.md` F-6 for the trade-off.
 ///
 /// `gpu_layers` of `0` keeps generation on CPU; positive values offload
 /// the matching number of transformer layers to the GPU when a GPU
@@ -114,26 +110,12 @@ pub fn load_model(
     expected_sha256: Option<&[u8; 32]>,
     gpu_layers: i32,
 ) -> Result<ModelHandle, ModelLoadError> {
-    let (load_path, temp_file, temp_dir) = match expected_sha256 {
-        Some(expected) => {
-            // F-6: copy the model into a daemon-owned tempdir, hash
-            // the copy, load the copy. The original path is opened
-            // exactly once for the read-side of the copy.
-            let dir = TempDir::new().map_err(ModelLoadError::CopyForVerification)?;
-            let mut dst =
-                NamedTempFile::new_in(dir.path()).map_err(ModelLoadError::CopyForVerification)?;
-            let mut src = File::open(path)?;
-            io::copy(&mut src, dst.as_file_mut()).map_err(ModelLoadError::CopyForVerification)?;
-            // Hash the copy, not the original.
-            verify_sha256(dst.path(), expected)?;
-            let dst_path = dst.path().to_path_buf();
-            (dst_path, Some(dst), Some(dir))
-        }
-        None => (path.to_path_buf(), None, None),
-    };
+    if let Some(expected) = expected_sha256 {
+        verify_sha256(path, expected)?;
+    }
 
-    let cpath = CString::new(load_path.as_os_str().to_string_lossy().as_bytes())
-        .map_err(|_| ModelLoadError::PathNul(load_path.clone()))?;
+    let cpath = CString::new(path.as_os_str().to_string_lossy().as_bytes())
+        .map_err(|_| ModelLoadError::PathNul(path.to_path_buf()))?;
 
     // SAFETY: FFI call. `params` is a POD struct populated by the
     // libllama-provided default constructor; we then mutate the fields
@@ -145,11 +127,7 @@ pub fn load_model(
     };
 
     NonNull::new(model_ptr)
-        .map(|ptr| ModelHandle {
-            ptr,
-            _temp_file: temp_file,
-            _temp_dir: temp_dir,
-        })
+        .map(|ptr| ModelHandle { ptr })
         .ok_or(ModelLoadError::LlamaLoadFailed)
 }
 

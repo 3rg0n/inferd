@@ -70,6 +70,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attachment, empty messages, malformed JSON, multi-request
   pipelining, pre-stream `Unavailable`, and mid-stream drop.
 
+### Changed (cherry-picked from v0.1.13 on main, 2026-05-20)
+
+- **`crates/inferd-engine/src/llamacpp/loader.rs`**: when an
+  `expected_sha256` is supplied, stream-hash the model file
+  in place at its original path and hand that same path to
+  `llama_model_load_from_file`. No more daemon-owned tempdir
+  copy. Closes issue #6 — WSL2 / tmpfs-constrained hosts could
+  not load multi-GB GGUFs on cold start because the defensive
+  temp-copy doubled disk usage. F-6 status flipped from
+  "mitigated" to "accepted" with the rationale that an attacker
+  with write access to the user's model file in the
+  microseconds between hash and mmap has a strictly larger
+  threat than hashing can defend against — same justification
+  F-6 already applied to the no-hash path.
+- **`THREAT_MODEL.md` F-6** updated to reflect the new posture.
+- **`crates/inferd-engine/Cargo.toml`** drops runtime `tempfile`
+  dependency.
+
 ## [0.1.12] - 2026-05-20
 
 Hotfix: v0.1.11 macOS tarball was missing
