@@ -10,10 +10,12 @@
 //! - [`backend`] — the `Backend` impl: context, generation, cancellation.
 
 pub mod backend;
+pub mod chat_template;
 pub mod loader;
 pub mod mtmd;
 
 pub use backend::{LlamaCpp, LlamaCppConfig, LlamaCppError};
+pub use chat_template::{Gemma4RenderError, Gemma4Rendered, Gemma4Renderer};
 pub use loader::{ModelHandle, ModelLoadError, load_model};
 pub use mtmd::{
     Bitmap, InputChunk, InputChunkKind, InputChunks, MmprojCaps, Mtmd, MtmdConfig, MtmdError,

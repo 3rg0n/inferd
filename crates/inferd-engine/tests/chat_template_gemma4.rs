@@ -8,7 +8,9 @@
 //! new tokens, new structural rules), these tests fail loudly and
 //! the renderer is updated in lockstep.
 
-use inferd_daemon::chat_template::Gemma4Renderer;
+#![cfg(feature = "llamacpp")]
+
+use inferd_engine::llamacpp::Gemma4Renderer;
 use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, RequestV2, RoleV2, Tool, ToolCallId};
 use serde_json::json;
 

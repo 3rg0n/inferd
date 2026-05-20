@@ -19,10 +19,17 @@
 
 #![allow(unsafe_code)] // FFI surface; module-scoped.
 
-use crate::backend::{Backend, GenerateError, TokenEvent, TokenStream};
+use crate::backend::{
+    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
+    TokenStreamV2,
+};
 use crate::ffi;
+use crate::llamacpp::chat_template::Gemma4Renderer;
 use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
+use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
 use async_trait::async_trait;
+use base64::Engine as _;
+use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::ffi::CString;
 use std::ptr::{self, NonNull};
@@ -53,6 +60,19 @@ pub enum LlamaCppError {
     /// `llama_decode` returned a non-zero error code.
     #[error("llama_decode failed: {0}")]
     Decode(i32),
+    /// libmtmd initialisation or eval-chunk error.
+    #[error("mtmd: {0}")]
+    Mtmd(#[from] MtmdError),
+    /// v2 request used an attachment-like content block but the
+    /// adapter was constructed without an mmproj.
+    #[error("v2 request requires mmproj but none was configured")]
+    NoMmproj,
+    /// Chat-template renderer failed (e.g. unknown content-block).
+    #[error("chat template: {0}")]
+    Render(String),
+    /// base64-decoding an attachment's `bytes` field failed.
+    #[error("attachment base64 decode failed for {0:?}")]
+    Base64(String),
 }
 
 impl From<LlamaCppError> for GenerateError {
@@ -74,6 +94,14 @@ pub struct LlamaCppConfig {
     pub n_gpu_layers: i32,
     /// Sampler RNG seed.
     pub seed: u32,
+    /// Optional mmproj (multimodal projector) file path. When set,
+    /// the adapter constructs a `Mtmd` context against this file +
+    /// the loaded text model, advertises matching capabilities, and
+    /// can serve v2 requests with image / audio attachments.
+    pub mmproj_path: Option<std::path::PathBuf>,
+    /// Optional expected SHA-256 of the mmproj file. Same shape as
+    /// `model_sha256`; verified before mtmd_init_from_file.
+    pub mmproj_sha256: Option<[u8; 32]>,
 }
 
 impl Default for LlamaCppConfig {
@@ -84,6 +112,8 @@ impl Default for LlamaCppConfig {
             n_ctx: 8192,
             n_gpu_layers: 0,
             seed: 0xDEADBEEF,
+            mmproj_path: None,
+            mmproj_sha256: None,
         }
     }
 }
@@ -120,6 +150,27 @@ pub struct LlamaCpp {
 struct State {
     model: ModelHandle,
     ctx: ContextHandle,
+    /// Multimodal context. `Some` when the adapter was constructed
+    /// with an `mmproj_path`. `Mtmd` borrows the model pointer; the
+    /// drop order in `State` (mtmd → ctx → model) ensures it's freed
+    /// before the model it depends on.
+    mtmd: Option<Mtmd>,
+    /// Cached capabilities derived from the `Mtmd` probe. None when
+    /// no mmproj was configured (text-only).
+    caps_v2: Option<BackendCapabilitiesV2>,
+}
+
+/// Internal capability snapshot used by `Backend::capabilities()`.
+#[derive(Debug, Clone, Copy)]
+struct BackendCapabilitiesV2 {
+    vision: bool,
+    audio: bool,
+    /// Audio sample rate the mmproj's encoder expects, in Hz.
+    /// Reported on the admin status surface in a future commit so
+    /// middleware can resample before sending. Currently
+    /// informational only.
+    #[allow(dead_code)]
+    audio_sample_rate: Option<u32>,
 }
 
 impl LlamaCpp {
@@ -147,11 +198,38 @@ impl LlamaCpp {
             .map(|ptr| ContextHandle { ptr })
             .ok_or(LlamaCppError::ContextInit)?;
 
+        // Optional mtmd context for multimodal v2 support.
+        let (mtmd, caps_v2) = match config.mmproj_path.as_deref() {
+            Some(mmproj) => {
+                // Verify mmproj SHA-256 if supplied. Reuses the same
+                // F-5 constant-time path as the text model.
+                if let Some(expected) = config.mmproj_sha256.as_ref() {
+                    crate::llamacpp::loader::verify_mmproj_sha256(mmproj, expected)?;
+                }
+                // SAFETY: caller (this fn) holds `model` for the
+                // entirety of `State`'s lifetime; `Mtmd` lives inside
+                // the same `State` struct so its borrow is satisfied.
+                let mtmd_ctx = unsafe { Mtmd::new(mmproj, model.as_ptr(), MtmdConfig::default())? };
+                let caps = BackendCapabilitiesV2 {
+                    vision: mtmd_ctx.supports_vision(),
+                    audio: mtmd_ctx.supports_audio(),
+                    audio_sample_rate: mtmd_ctx.audio_sample_rate(),
+                };
+                (Some(mtmd_ctx), Some(caps))
+            }
+            None => (None, None),
+        };
+
         Ok(Self {
             name: "llamacpp",
             ready: AtomicBool::new(true),
             seed: config.seed,
-            state: Arc::new(Mutex::new(State { model, ctx })),
+            state: Arc::new(Mutex::new(State {
+                model,
+                ctx,
+                mtmd,
+                caps_v2,
+            })),
         })
     }
 }
@@ -171,6 +249,67 @@ impl Backend for LlamaCpp {
 
     fn ready(&self) -> bool {
         self.ready.load(Ordering::SeqCst)
+    }
+
+    fn capabilities(&self) -> BackendCapabilities {
+        // Read the cached caps probed at construction. v2 is true
+        // only when an mmproj was configured AND the mtmd context
+        // initialised successfully — without an mmproj we'd reject
+        // image / audio attachments anyway, so v2-without-mmproj is
+        // not a useful state to advertise.
+        let snap = {
+            let guard = self.state.lock().expect("poisoned llamacpp state mutex");
+            guard.caps_v2
+        };
+        match snap {
+            Some(caps) => BackendCapabilities {
+                v2: true,
+                vision: caps.vision,
+                audio: caps.audio,
+                video: false,
+                tools: true,
+                thinking: true,
+            },
+            None => BackendCapabilities::default(),
+        }
+    }
+
+    async fn generate_v2(&self, req: ResolvedV2) -> Result<TokenStreamV2, GenerateError> {
+        if !self.ready() {
+            return Err(GenerateError::NotReady);
+        }
+
+        // Render the prompt + attachment-order on the calling task.
+        let renderer = Gemma4Renderer::new();
+        let rendered = renderer
+            .render(&req)
+            .map_err(|e| GenerateError::InvalidRequest(format!("render: {e}")))?;
+
+        // Decode each referenced attachment's bytes into Bitmaps.
+        let bitmaps: Vec<Bitmap> = rendered
+            .attachments
+            .iter()
+            .map(|att| build_bitmap(att))
+            .collect::<Result<_, _>>()
+            .map_err(|e| GenerateError::InvalidRequest(format!("attachment: {e}")))?;
+
+        let prompt = rendered.prompt;
+        let max_new = req.max_tokens.unwrap_or(crate::DEFAULT_V2_MAX_TOKENS);
+
+        let (tx, rx) = mpsc::channel(8);
+        let state = Arc::clone(&self.state);
+        let seed = self.seed;
+        let req_clone = req;
+
+        tokio::task::spawn_blocking(move || {
+            let outcome =
+                run_generation_v2(&state, &prompt, &bitmaps, &req_clone, max_new, seed, &tx);
+            if let Err(e) = outcome {
+                warn!(error = %e, "v2 generation aborted mid-stream");
+            }
+        });
+
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
     async fn generate(&self, req: Resolved) -> Result<TokenStream, GenerateError> {
@@ -557,6 +696,199 @@ fn token_to_piece(
     }
     let n = (n as usize).min(buf.len());
     &buf[..n]
+}
+
+/// Decode an `Attachment` from the wire shape (raw RGB or f32 PCM,
+/// base64-wrapped) into an mtmd `Bitmap`. Per ADR 0016 the daemon
+/// does not link image/audio codecs; these payloads are pre-decoded
+/// by the consumer.
+fn build_bitmap(att: &Attachment) -> Result<Bitmap, LlamaCppError> {
+    use base64::engine::general_purpose::STANDARD;
+    match att {
+        Attachment::Image {
+            id,
+            width,
+            height,
+            bytes,
+        } => {
+            let raw = STANDARD
+                .decode(bytes)
+                .map_err(|_| LlamaCppError::Base64(id.clone()))?;
+            let bm = Bitmap::from_image_rgb(*width, *height, &raw)?;
+            Ok(bm)
+        }
+        Attachment::Audio { id, bytes, .. } => {
+            let raw = STANDARD
+                .decode(bytes)
+                .map_err(|_| LlamaCppError::Base64(id.clone()))?;
+            // Reinterpret as f32 LE samples.
+            if raw.len() % 4 != 0 {
+                return Err(LlamaCppError::Render(format!(
+                    "audio attachment {id:?}: byte length not a multiple of 4"
+                )));
+            }
+            let n_samples = raw.len() / 4;
+            let mut samples = Vec::with_capacity(n_samples);
+            for chunk in raw.chunks_exact(4) {
+                let arr: [u8; 4] = chunk.try_into().expect("chunks_exact 4 yields 4");
+                samples.push(f32::from_le_bytes(arr));
+            }
+            Ok(Bitmap::from_audio_f32(&samples)?)
+        }
+        Attachment::Video { id, .. } => Err(LlamaCppError::Render(format!(
+            "video attachment {id:?} not supported by the llamacpp adapter"
+        ))),
+        Attachment::Unknown => Err(LlamaCppError::Render(
+            "unknown attachment kind in resolved request".into(),
+        )),
+    }
+}
+
+fn build_sampler_chain_v2(
+    _vocab: *const ffi::llama_vocab,
+    req: &ResolvedV2,
+    seed: u32,
+) -> Result<*mut ffi::llama_sampler, LlamaCppError> {
+    // _vocab is unused today (v2 has no GBNF grammar — the model
+    // self-constrains tool calls structurally). Kept in the signature
+    // to mirror build_sampler_chain's shape so a future grammar
+    // extension doesn't require a signature break.
+    let temperature = req.temperature.unwrap_or(1.0) as f32;
+    let top_p = req.top_p.unwrap_or(0.95) as f32;
+    let top_k = req.top_k.unwrap_or(64) as i32;
+
+    // SAFETY: FFI sequence.
+    let chain = unsafe {
+        let params = ffi::llama_sampler_chain_default_params();
+        ffi::llama_sampler_chain_init(params)
+    };
+    if chain.is_null() {
+        return Err(LlamaCppError::Sampler);
+    }
+
+    unsafe {
+        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_top_k(top_k));
+        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_top_p(top_p, 1));
+        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_temp(temperature));
+        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_dist(seed));
+    }
+    Ok(chain)
+}
+
+/// v2 generation: tokenise the rendered prompt + bitmaps via mtmd,
+/// run the helper-driven encode-and-decode loop to fill the KV cache
+/// from the prompt + projected attachments, then sample tokens until
+/// EOS or `max_tokens`. Streams `TokenEventV2::Text` for each
+/// generated piece; emits one `Done` on clean exit.
+///
+/// Drop-on-cancel: when the receiver disconnects, the next
+/// `tx.blocking_send` errors and the loop exits silently. The daemon
+/// translates the missing terminal frame into an `error` (mid-stream
+/// failure mapping per ADR 0007).
+fn run_generation_v2(
+    state: &Arc<Mutex<State>>,
+    prompt: &str,
+    bitmaps: &[Bitmap],
+    req: &ResolvedV2,
+    max_new: u32,
+    seed: u32,
+    tx: &mpsc::Sender<TokenEventV2>,
+) -> Result<(), LlamaCppError> {
+    let guard = state.lock().expect("poisoned llamacpp state mutex");
+    let model = guard.model.as_ptr();
+    let ctx = guard.ctx.ptr.as_ptr();
+    let mtmd = guard.mtmd.as_ref().ok_or(LlamaCppError::NoMmproj)?;
+
+    // SAFETY: FFI; pointers valid for the lock's lifetime.
+    let vocab = unsafe { ffi::llama_model_get_vocab(model) };
+
+    // Reset KV cache so each generation starts clean.
+    // SAFETY: FFI; ctx valid.
+    unsafe {
+        let mem = ffi::llama_get_memory(ctx);
+        if !mem.is_null() {
+            ffi::llama_memory_clear(mem, true);
+        }
+    }
+
+    // Tokenise prompt + bitmaps via mtmd.
+    let bitmap_refs: Vec<&Bitmap> = bitmaps.iter().collect();
+    let chunks = mtmd
+        .tokenize(prompt, &bitmap_refs)
+        .map_err(LlamaCppError::Mtmd)?;
+
+    // Run upstream's helper-driven eval loop (text chunks ->
+    // llama_decode; image/audio chunks -> mtmd_encode then decode
+    // via the precomputed embeddings). Returns the new n_past so we
+    // can resume sampling from the right position.
+    // SAFETY: ctx and chunks are wired together — chunks was just
+    // produced from `mtmd` against this ctx's parent model.
+    let n_past =
+        unsafe { mtmd.eval_chunks(ctx, &chunks, 0, 0, 512, true) }.map_err(LlamaCppError::Mtmd)?;
+
+    // Use mtmd's helper to count prompt-side tokens (including
+    // projected media tokens) for the usage report.
+    let prompt_tokens = unsafe { crate::mtmd_ffi::mtmd_helper_get_n_tokens(chunks.raw()) } as u32;
+    drop(chunks);
+
+    // Sampler chain. v2 sampling fields default if absent (see
+    // build_sampler_chain_v2).
+    let sampler = build_sampler_chain_v2(vocab, req, seed)?;
+    let _sampler_guard = SamplerGuard { ptr: sampler };
+
+    let mut completion_tokens: u32 = 0;
+    let mut buf = [0u8; 256];
+    let mut n_past = n_past;
+
+    for _ in 0..max_new {
+        // Sample.
+        // SAFETY: FFI; sampler + ctx valid in scope.
+        let next: ffi::llama_token = unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) };
+
+        // SAFETY: FFI; vocab valid.
+        let is_eog = unsafe { ffi::llama_vocab_is_eog(vocab, next) };
+        if is_eog {
+            let _ = tx.blocking_send(TokenEventV2::Done {
+                stop_reason: StopReasonV2::EndTurn,
+                usage: UsageV2 {
+                    input_tokens: prompt_tokens,
+                    output_tokens: completion_tokens,
+                },
+            });
+            return Ok(());
+        }
+
+        // SAFETY: FFI; sampler valid.
+        unsafe { ffi::llama_sampler_accept(sampler, next) };
+
+        let piece = token_to_piece(vocab, next, &mut buf);
+        let text = String::from_utf8_lossy(piece).into_owned();
+        if tx.blocking_send(TokenEventV2::Text(text)).is_err() {
+            debug!("v2 generation cancelled (receiver dropped)");
+            return Ok(());
+        }
+        completion_tokens = completion_tokens.saturating_add(1);
+
+        // Feed the new token back. n_past advances by 1 per token.
+        let mut next_arr = [next];
+        // SAFETY: FFI; next_arr lives for the call.
+        let batch = unsafe { ffi::llama_batch_get_one(next_arr.as_mut_ptr(), 1) };
+        let rc = unsafe { ffi::llama_decode(ctx, batch) };
+        if rc != 0 {
+            return Err(LlamaCppError::Decode(rc));
+        }
+        n_past = n_past.saturating_add(1);
+    }
+
+    // max_tokens reached.
+    let _ = tx.blocking_send(TokenEventV2::Done {
+        stop_reason: StopReasonV2::MaxTokens,
+        usage: UsageV2 {
+            input_tokens: prompt_tokens,
+            output_tokens: completion_tokens,
+        },
+    });
+    Ok(())
 }
 
 #[cfg(test)]

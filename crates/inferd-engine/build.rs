@@ -192,12 +192,17 @@ fn build_llamacpp() {
     println!("cargo:rerun-if-changed={}", llama_header.display());
 
     // bindgen for libmtmd's public C API. mtmd.h includes ggml.h and
-    // llama.h transitively, so add both include dirs. We only allow-
-    // list mtmd_* (the rest is already exposed via the llama
-    // bindings).
+    // llama.h transitively, so add both include dirs. We allowlist
+    // mtmd_* (the rest is already exposed via the llama bindings).
+    // The same binding generation also picks up mtmd_helper_* by
+    // including mtmd-helper.h alongside mtmd.h — both headers share
+    // type definitions, and producing one combined output keeps the
+    // module simple.
     let mtmd_header = llama_src.join("tools").join("mtmd").join("mtmd.h");
+    let mtmd_helper_header = llama_src.join("tools").join("mtmd").join("mtmd-helper.h");
     let mtmd_bindings = bindgen::Builder::default()
         .header(mtmd_header.to_string_lossy())
+        .header(mtmd_helper_header.to_string_lossy())
         .clang_arg(format!(
             "-I{}",
             llama_src.join("tools").join("mtmd").display()
@@ -216,17 +221,18 @@ fn build_llamacpp() {
         .blocklist_type("ggml_.*")
         .blocklist_function("llama_.*")
         .blocklist_function("ggml_.*")
-        .raw_line("use crate::ffi::{llama_model, llama_pos, llama_token, llama_flash_attn_type, ggml_log_callback, ggml_backend_sched_eval_callback};")
+        .raw_line("use crate::ffi::{llama_context, llama_model, llama_pos, llama_seq_id, llama_token, llama_flash_attn_type, ggml_log_callback, ggml_backend_sched_eval_callback};")
         .prepend_enum_name(false)
         .derive_default(true)
         .layout_tests(false)
         .generate()
-        .expect("bindgen generate mtmd.h");
+        .expect("bindgen generate mtmd.h + mtmd-helper.h");
 
     mtmd_bindings
         .write_to_file(out_dir.join("mtmd_bindings.rs"))
         .expect("write mtmd bindgen output");
     println!("cargo:rerun-if-changed={}", mtmd_header.display());
+    println!("cargo:rerun-if-changed={}", mtmd_helper_header.display());
 }
 
 #[cfg(not(feature = "llamacpp"))]
