@@ -20,8 +20,8 @@
 #![allow(unsafe_code)] // FFI surface; module-scoped.
 
 use crate::backend::{
-    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
-    TokenStreamV2,
+    AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, GenerateError, TokenEvent,
+    TokenEventV2, TokenStream, TokenStreamV2,
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::Gemma4Renderer;
@@ -141,11 +141,32 @@ pub struct LlamaCpp {
     name: &'static str,
     ready: AtomicBool,
     seed: u32,
+    /// Hardware-acceleration snapshot (compile-time GGML backend +
+    /// configured `n_gpu_layers`). Cached on the adapter so
+    /// `capabilities()` can return it without locking the state mutex.
+    accelerator: AcceleratorInfo,
     /// Shared so the spawn_blocking generation task can reach the model
     /// and context. Locked for the duration of one generation; the
     /// daemon's queue serialises calls, so contention is structural
     /// (always 1 holder + 0 waiters in v0.1).
     state: Arc<Mutex<State>>,
+}
+
+/// Compile-time GGML backend the engine was built against. Reflects
+/// the cargo features active at build time (`cuda` / `metal` /
+/// `vulkan` / `rocm` — at most one is meaningful per build).
+const fn compile_time_accelerator_kind() -> AcceleratorKind {
+    if cfg!(feature = "cuda") {
+        AcceleratorKind::Cuda
+    } else if cfg!(feature = "metal") {
+        AcceleratorKind::Metal
+    } else if cfg!(feature = "vulkan") {
+        AcceleratorKind::Vulkan
+    } else if cfg!(feature = "rocm") {
+        AcceleratorKind::Rocm
+    } else {
+        AcceleratorKind::Cpu
+    }
 }
 
 struct State {
@@ -221,10 +242,16 @@ impl LlamaCpp {
             None => (None, None),
         };
 
+        let accelerator = AcceleratorInfo {
+            kind: compile_time_accelerator_kind(),
+            gpu_layers: config.n_gpu_layers.max(0) as u32,
+        };
+
         Ok(Self {
             name: "llamacpp",
             ready: AtomicBool::new(true),
             seed: config.seed,
+            accelerator,
             state: Arc::new(Mutex::new(State {
                 model,
                 ctx,
@@ -270,8 +297,12 @@ impl Backend for LlamaCpp {
                 video: false,
                 tools: true,
                 thinking: true,
+                accelerator: self.accelerator,
             },
-            None => BackendCapabilities::default(),
+            None => BackendCapabilities {
+                accelerator: self.accelerator,
+                ..BackendCapabilities::default()
+            },
         }
     }
 

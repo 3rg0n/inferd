@@ -37,6 +37,33 @@ pub enum StatusEvent {
         #[serde(flatten)]
         phase: LoadPhase,
     },
+    /// Backend capability snapshot — emitted once after the backend is
+    /// constructed and before `Ready`. Lets admin subscribers (e.g.
+    /// `inferd doctor`, IDE plugins) discover hardware-acceleration
+    /// posture, multimodal support, and tools / thinking support
+    /// without trial-and-error. Backwards-additive on the admin wire
+    /// (older subscribers ignore unknown `status` values).
+    Capabilities {
+        /// Backend identifier (`"llamacpp"`, `"mock"`, …).
+        backend: String,
+        /// `true` if the backend implements `generate_v2`.
+        v2: bool,
+        /// `true` if the backend can ingest image attachments.
+        vision: bool,
+        /// `true` if the backend can ingest audio attachments.
+        audio: bool,
+        /// `true` if the backend natively supports tool-use.
+        tools: bool,
+        /// `true` if the backend separates `<|think|>` reasoning
+        /// trace from user-visible output.
+        thinking: bool,
+        /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
+        /// / `"vulkan"` / `"rocm"`.
+        accelerator: String,
+        /// Layers offloaded to the accelerator at runtime. 0 means
+        /// CPU-only regardless of `accelerator`.
+        gpu_layers: u32,
+    },
     /// Inference socket is bound and accepting connections.
     Ready,
     /// Previously-`ready` daemon is reloading. Inference socket has
