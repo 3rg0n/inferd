@@ -1,0 +1,29 @@
+crates/inferd-engine/tests/chat_template_gemma4.rs
+  s_126aec4081f728::t_325d0e3c586834 266-446
+CHANGELOG.md
+  s_126aec4081f728::t_394d7b0ee4ce4d 101-117
+crates/inferd-engine/src/llamacpp/chat_template/gemma4.rs
+  s_126aec4081f728::t_f418cd720bf6ab 385-390
+  s_126aec4081f728::t_7b1e4568ce564b 50
+  s_126aec4081f728::t_93d845b57aeede 175
+  s_126aec4081f728::t_b9b62d64e77a50 247,261-265,267,272-275
+  s_126aec4081f728::t_04d692501e3a9b 130-141,143-147
+  s_126aec4081f728::t_ea979a1df6d86b 142
+  s_126aec4081f728::t_94180207c91ca3 199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "40c6d53f7330c24daa46bdb05b029979d6151d22",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
