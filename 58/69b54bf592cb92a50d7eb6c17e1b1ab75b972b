@@ -1,0 +1,41 @@
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_34badeda899f4f 25-28
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_f9f85e6fd167de 218-221,224,235-237,248-249,266-273,281
+  s_126aec4081f728::t_7a1726e2672509 147-149,151
+crates/inferd-engine/src/backend.rs
+  s_126aec4081f728::t_0c93b38ef25c20 37-106
+  s_126aec4081f728::t_7436c74686ccee 4
+  s_126aec4081f728::t_a58848baed6bfe 147-155,163-173
+crates/inferd-daemon/src/lifecycle_v2.rs
+  s_126aec4081f728::t_677bec976ba4ec 360,374,378,391,404,417,431,459,463
+  s_126aec4081f728::t_ef3ec469e960e8 1,7-19,24-26,28,34
+  s_126aec4081f728::t_d714fd689a164c 46,116-152,154-271
+crates/inferd-engine/src/mock.rs
+  s_126aec4081f728::t_a63f1e28afafd2 174-223
+  s_126aec4081f728::t_b9f6f5b6207a3e 12-15,17
+  s_126aec4081f728::t_b355309bf6a9e6 113-125
+crates/inferd-daemon/tests/v2_stub.rs
+  s_126aec4081f728::t_0f6fb67811bccb 1,8-10,12-14,18-19,21-22,25,30-32,37,46,51-60
+  s_126aec4081f728::t_24e4f8eb11ab6f 315-322,343-348,353,355-430,432
+  s_126aec4081f728::t_25c77d06803908 82-114
+  s_126aec4081f728::t_931110282b7f78 116-121,134-159,161-163,165,173-184,208-212
+CHANGELOG.md
+  s_126aec4081f728::t_404b30e7641c61 37-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "5869b54bf592cb92a50d7eb6c17e1b1ab75b972b",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
