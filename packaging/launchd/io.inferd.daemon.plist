@@ -3,23 +3,29 @@
 <!--
   inferd-daemon LaunchAgent (per-user, runs in login session).
 
-  DO NOT edit USERNAME_HERE or TMPDIR_HERE by hand — use the install
-  script instead:
+  DO NOT edit placeholders by hand — use the install script instead:
 
-    packaging/launchd/install-launchagent.sh [/path/to/inferd-daemon]
+    packaging/launchd/install-launchagent.sh \
+      [/path/to/inferd-daemon] \
+      [/path/to/model.gguf]
 
   The script substitutes the current user's HOME and TMPDIR, installs
-  the plist, and bootstraps the agent.
+  the plist, and bootstraps the agent. When a model path is supplied
+  (or auto-detected from ~/.inferd/config.json) it also writes
+  __BACKEND__ and __MODEL_PATH__ so the daemon starts with real
+  inference instead of the mock backend.
 
   Manual install (for reference only):
     sed -e "s|__HOME__|$HOME|g" \
         -e "s|__TMPDIR__|$(getconf DARWIN_USER_TEMP_DIR)|g" \
         -e "s|__BIN__|/usr/local/bin/inferd-daemon|g" \
+        -e "s|__BACKEND__|llamacpp|g" \
+        -e "s|__MODEL_PATH__|/path/to/model.gguf|g" \
       packaging/launchd/io.inferd.daemon.plist \
       > ~/Library/LaunchAgents/io.inferd.daemon.plist
+    launchctl enable gui/$(id -u)/io.inferd.daemon
     launchctl bootstrap gui/$(id -u) \
       ~/Library/LaunchAgents/io.inferd.daemon.plist
-    launchctl enable gui/$(id -u)/io.inferd.daemon
 
   WHY __TMPDIR__ for sockets and lock:
     launchd does NOT expand $TMPDIR, ${HOME}, or ~ in ProgramArguments,
@@ -49,6 +55,10 @@
         <string>__TMPDIR__inferd/infer.sock</string>
         <string>--admin-addr</string>
         <string>__TMPDIR__inferd/admin.sock</string>
+        <string>--backend</string>
+        <string>__BACKEND__</string>
+        <string>--model-path</string>
+        <string>__MODEL_PATH__</string>
     </array>
 
     <key>EnvironmentVariables</key>
