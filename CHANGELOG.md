@@ -26,6 +26,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-compat parsing of unknown content-block types. v2 lives
   on a separate socket; this commit ships *types only*, no daemon
   binding yet (Phase 1B).
+- **inferd-daemon: v2 socket binding** (Phase 1B per ADR 0015).
+  New `lifecycle_v2` module with `serve_tcp_v2` / `serve_uds_v2`
+  / `serve_named_pipe_v2` mirroring v1's accept-loop shape but
+  parsing `RequestV2` / writing `ResponseV2`. New `--v2` /
+  `--v2-addr` / `--v2-tcp` CLI flags (and `INFERD_V2*` env vars).
+  When `--v2` is set the daemon binds the v2 endpoint alongside
+  v1 on its own socket / pipe path: `infer.v2.sock` on Unix,
+  `\\.\pipe\inferd-infer-v2` on Windows. `default_v2_addr()`
+  resolves the platform default. Until Phase 2A wires
+  `Backend::generate_v2`, the v2 listener responds to validated
+  requests with `ResponseV2::Error{code:internal,
+  message:"v2 generation not implemented (Phase 2A pending)"}`,
+  letting middleware authors integration-test the v2 envelope
+  end-to-end today. Structurally invalid requests still return
+  `InvalidRequest` with the same validation surface as
+  `RequestV2::resolve()`. F-8 first-frame TCP auth is reused
+  identically to v1; admin socket stays shared. Six integration
+  tests in `crates/inferd-daemon/tests/v2_stub.rs` pin valid /
+  invalid / multimodal / multi-request / malformed-JSON
+  behaviour. Shutdown signal is now fan-out: the same
+  Ctrl-C/SIGTERM closes both v1 and v2 listeners.
 
 ## [0.1.12] - 2026-05-20
 

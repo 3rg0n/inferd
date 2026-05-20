@@ -111,8 +111,16 @@ async fn main() -> anyhow::Result<()> {
     // connect — guaranteed ordering on the wire.
     broadcaster.publish(StatusEvent::Ready);
 
-    // Inference shutdown channel.
-    let inference_shutdown_tx = install_shutdown_signal()?;
+    // Inference shutdown channels — one per listener (v1 always, v2
+    // when enabled).
+    let fanout = if cli.v2 { 2 } else { 1 };
+    let mut shutdown_rxs = install_shutdown_signal(fanout)?;
+    let inference_shutdown_tx = shutdown_rxs.remove(0);
+    let v2_shutdown_tx = if cli.v2 {
+        Some(shutdown_rxs.remove(0))
+    } else {
+        None
+    };
 
     let admission = inferd_daemon::queue::Admission::new(cli.active_permits, cli.queue_depth);
     info!(
@@ -134,6 +142,14 @@ async fn main() -> anyhow::Result<()> {
              can connect (THREAT_MODEL F-8)"
         );
     }
+
+    // Spawn the v2 listener if enabled. It runs in parallel with the
+    // v1 main accept loop and shuts down on the same signal.
+    let v2_handle = if let Some(rx) = v2_shutdown_tx {
+        Some(spawn_v2_listener(&cli, accept_ctx.clone(), rx).await?)
+    } else {
+        None
+    };
 
     let serve_result = if let Some(addr) = cli.tcp.as_deref() {
         let listener = bind_tcp(addr).await?;
@@ -184,9 +200,76 @@ async fn main() -> anyhow::Result<()> {
     let _ = admin_shutdown_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(2), admin_handle).await;
 
+    // Wait for the v2 listener to finish draining if it was running.
+    if let Some(handle) = v2_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
     serve_result?;
     info!("shutdown complete");
     Ok(())
+}
+
+/// Bind the v2 inference listener and spawn its accept loop. Returns
+/// the JoinHandle so main can await graceful drain. v2 is per ADR
+/// 0015: separate socket from v1; reuses the same admission gate +
+/// API key. Phase 1B: backend dispatch is not wired — connected
+/// clients receive `Error{code:internal, message:"v2 generation not
+/// implemented"}` after a successful frame parse.
+async fn spawn_v2_listener(
+    cli: &Cli,
+    accept_ctx: AcceptContext,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    use inferd_daemon::endpoint::default_v2_addr;
+    use inferd_daemon::lifecycle_v2;
+
+    if let Some(addr) = cli.v2_tcp.as_deref() {
+        let listener = bind_tcp(addr).await?;
+        info!(addr = %listener.local_addr()?, "v2 tcp listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) = lifecycle_v2::serve_tcp_v2(listener, accept_ctx, shutdown_rx).await {
+                error!(error = ?e, "v2 tcp listener error");
+            }
+        }))
+    } else {
+        let path = cli.v2_addr.clone().unwrap_or_else(default_v2_addr);
+        #[cfg(unix)]
+        {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
+            info!(path = %path.display(), "v2 uds listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) = lifecycle_v2::serve_uds_v2(listener, accept_ctx, shutdown_rx).await
+                {
+                    error!(error = ?e, "v2 uds listener error");
+                }
+            }))
+        }
+        #[cfg(windows)]
+        {
+            let path_str = path
+                .to_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("v2 pipe path is not valid utf-8: {}", path.display())
+                })?
+                .to_string();
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
+            info!(path = %path_str, "v2 named pipe listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) =
+                    lifecycle_v2::serve_named_pipe_v2(&path_str, first, accept_ctx, shutdown_rx)
+                        .await
+                {
+                    error!(error = ?e, "v2 named pipe listener error");
+                }
+            }))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            drop((path, accept_ctx, shutdown_rx));
+            anyhow::bail!("v2 endpoint requires unix or windows; use --v2-tcp instead")
+        }
+    }
 }
 
 /// Bind the admin socket and spawn the accept loop. Returns the
@@ -473,10 +556,15 @@ fn install_tracing() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Wire Ctrl-C (SIGINT on Unix) to a oneshot channel so the accept loop
-/// exits cleanly. On Unix we additionally listen for SIGTERM.
-fn install_shutdown_signal() -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
+/// Wire Ctrl-C (SIGINT on Unix) to N oneshot channels so multiple
+/// accept loops exit cleanly on the same signal. On Unix we
+/// additionally listen for SIGTERM. Returns one receiver per
+/// requested fan-out — e.g. 2 when both v1 and v2 listeners are
+/// running.
+fn install_shutdown_signal(
+    fanout: usize,
+) -> anyhow::Result<Vec<tokio::sync::oneshot::Receiver<()>>> {
+    let (txs, rxs): (Vec<_>, Vec<_>) = (0..fanout).map(|_| tokio::sync::oneshot::channel()).unzip();
 
     tokio::spawn(async move {
         #[cfg(unix)]
@@ -495,11 +583,13 @@ fn install_shutdown_signal() -> anyhow::Result<tokio::sync::oneshot::Receiver<()
         let result: Result<(), std::io::Error> = tokio::signal::ctrl_c().await;
 
         if let Err(e) = result {
-            error!(error = ?e, "signal handler failed; shutdown channel will not fire");
+            error!(error = ?e, "signal handler failed; shutdown channels will not fire");
             return;
         }
-        let _ = tx.send(());
+        for tx in txs {
+            let _ = tx.send(());
+        }
     });
 
-    Ok(rx)
+    Ok(rxs)
 }
