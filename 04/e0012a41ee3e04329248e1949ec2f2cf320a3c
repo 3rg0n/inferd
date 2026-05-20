@@ -1,0 +1,34 @@
+crates/inferd-daemon/src/config.rs
+  s_126aec4081f728::t_e6d2db385b1f21 115-141
+  s_126aec4081f728::t_7c981a858795bf 238-283
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_5906d8dbb4966e 262-267,269-270
+  s_126aec4081f728::t_37b375044fb7a6 63-90
+CHANGELOG.md
+  s_126aec4081f728::t_0653a6a7390231 29-49
+crates/inferd-daemon/tests/v2_stub.rs
+  s_126aec4081f728::t_fb2a9c21f8cabe 18,54-57,259-262
+  s_126aec4081f728::t_71a3ba5be783eb 1-17,19-53,58-258,263-276
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_fb2a9c21f8cabe 114-123,146-153,203-207,213-274,559-567,586,589-591,594
+crates/inferd-daemon/src/lifecycle_v2.rs
+  s_126aec4081f728::t_9bdce71add0f6d 1-331
+crates/inferd-daemon/src/lib.rs
+  s_126aec4081f728::t_e6caad54ae1e21 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "04e0012a41ee3e04329248e1949ec2f2cf320a3c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
