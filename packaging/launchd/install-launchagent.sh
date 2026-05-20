@@ -53,8 +53,11 @@ if launchctl list "$LABEL" &>/dev/null; then
     launchctl bootout "gui/$UID_VAL" "$DEST" 2>/dev/null || true
 fi
 
-launchctl bootstrap "gui/$UID_VAL" "$DEST"
+# enable must come before bootstrap: if the agent was previously
+# bootout-ed, launchd marks it disabled and bootstrap returns EX_IO (5)
+# unless enable has been called first to clear the disabled flag.
 launchctl enable "gui/$UID_VAL/$LABEL"
+launchctl bootstrap "gui/$UID_VAL" "$DEST"
 
 echo "Agent bootstrapped and enabled."
 echo
