@@ -60,11 +60,11 @@ async fn main() -> anyhow::Result<()> {
     // RuntimeDirectory= in the systemd unit handles this. We create it here
     // so the daemon self-heals on both platforms regardless of how it was
     // started.
-    if let Some(parent) = cli.lock.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow::anyhow!("create runtime dir {:?}: {e}", parent))?;
-        }
+    if let Some(parent) = cli.lock.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("create runtime dir {:?}: {e}", parent))?;
     }
 
     // Lock first — single-instance invariant (THREAT_MODEL F-2).
