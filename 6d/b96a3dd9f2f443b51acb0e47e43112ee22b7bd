@@ -1,0 +1,36 @@
+crates/inferd-engine/src/mtmd_ffi.rs
+  s_126aec4081f728::t_6081827786601e 1-23
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_a0764eca6c25ad 77,220-223
+  s_126aec4081f728::t_442b23c0f2ddfd 3,5-7,9-18
+  s_126aec4081f728::t_456c0bd939319b 40,43-45,54-60,62-65,74-76,79-80,84-85,88-91,97,140-142,169-172,178,186-219,224,226-229
+crates/inferd-engine/src/llamacpp/mtmd.rs
+  s_126aec4081f728::t_848b56087a4969 1-184,186-191,193-199,204-208,210-384,388-418
+  s_126aec4081f728::t_127e05d4aa66ea 385-387
+  s_126aec4081f728::t_95f0358f01e937 192,200-203,209
+  s_126aec4081f728::t_3308d5b5f1917c 185
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_20b419431f6224 24-25
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_126aec4081f728::t_b7579dd3ed8782 14,18-21
+CHANGELOG.md
+  s_126aec4081f728::t_698962e8d9b905 88-118
+crates/inferd-engine/cpp/CMakeLists.txt
+  s_126aec4081f728::t_8d3164c2d0f24f 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "6db96a3dd9f2f443b51acb0e47e43112ee22b7bd",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
