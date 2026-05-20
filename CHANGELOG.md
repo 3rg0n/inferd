@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **inferd-proto: v2 type surface** under the new `v2::` module
+  (per ADR 0015). `RequestV2`, `MessageV2`, `ContentBlock` (with
+  `Text` / `Image` / `Audio` / `Video` / `ToolUse` / `ToolResult`
+  / forward-compat `Unknown` variants), `Attachment` /
+  `AttachmentKind`, `Tool` / `ToolCallId` / `ToolUseInput`,
+  `ResponseV2` / `ResponseBlock` / `StopReasonV2` / `ErrorCodeV2`
+  / `UsageV2`. `RequestV2::resolve()` validates structural
+  constraints (non-empty messages, non-empty content arrays,
+  unique attachment ids, unique tool names, all `attachment_id`
+  references resolve — including those nested inside
+  `ToolResult::content`). Sampling defaults are *not* applied at
+  the proto layer in v2 — they're backend-specific (ADR 0015).
+  19 tests cover round-trip serialisation of every variant, the
+  ADR 0015 JSON examples verbatim, validation negative cases, and
+  forward-compat parsing of unknown content-block types. v2 lives
+  on a separate socket; this commit ships *types only*, no daemon
+  binding yet (Phase 1B).
+
 ## [0.1.12] - 2026-05-20
 
 Hotfix: v0.1.11 macOS tarball was missing
