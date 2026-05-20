@@ -18,8 +18,8 @@ use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
 use inferd_proto::v2::{
-    Attachment, AttachmentKind, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock,
-    ResponseV2, RoleV2, StopReasonV2,
+    Attachment, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
+    StopReasonV2,
 };
 use inferd_proto::write_frame;
 use std::sync::Arc;
@@ -196,10 +196,10 @@ async fn valid_multimodal_v2_request_dispatches_to_backend() {
                 },
             ],
         }],
-        attachments: vec![Attachment {
+        attachments: vec![Attachment::Image {
             id: "img-1".into(),
-            kind: AttachmentKind::Image,
-            mime: "image/jpeg".into(),
+            width: 64,
+            height: 64,
             bytes: "base64data".into(),
         }],
         ..Default::default()

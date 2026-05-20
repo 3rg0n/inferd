@@ -16,7 +16,7 @@ mod request;
 mod response;
 mod tool;
 
-pub use attachment::{Attachment, AttachmentKind};
+pub use attachment::Attachment;
 pub use request::{ContentBlock, MessageV2, RequestV2, ResolvedV2, RoleV2};
 pub use response::{ErrorCodeV2, ResponseBlock, ResponseV2, StopReasonV2, UsageV2};
 pub use tool::{Tool, ToolCallId, ToolUseInput};

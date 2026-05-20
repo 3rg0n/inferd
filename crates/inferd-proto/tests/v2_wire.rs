@@ -2,8 +2,8 @@
 //! and forward-compatibility of unknown content-block types.
 
 use inferd_proto::v2::{
-    Attachment, AttachmentKind, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock,
-    ResponseV2, RoleV2, StopReasonV2, Tool, ToolCallId, UsageV2,
+    Attachment, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
+    StopReasonV2, Tool, ToolCallId, UsageV2,
 };
 use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_frame, write_frame};
 use serde_json::json;
@@ -44,10 +44,10 @@ fn multimodal_request() -> RequestV2 {
                 ],
             },
         ],
-        attachments: vec![Attachment {
+        attachments: vec![Attachment::Image {
             id: "img-1".into(),
-            kind: AttachmentKind::Image,
-            mime: "image/jpeg".into(),
+            width: 256,
+            height: 256,
             bytes: "<base64>".into(),
         }],
         tools: vec![Tool {
@@ -143,10 +143,10 @@ fn resolve_accepts_attachment_referenced_in_tool_result() {
                 }],
             }],
         }],
-        attachments: vec![Attachment {
+        attachments: vec![Attachment::Image {
             id: "img-1".into(),
-            kind: AttachmentKind::Image,
-            mime: "image/png".into(),
+            width: 64,
+            height: 64,
             bytes: "<base64>".into(),
         }],
         ..Default::default()
@@ -163,16 +163,15 @@ fn resolve_rejects_duplicate_attachment_ids() {
             content: vec![ContentBlock::Text { text: "hi".into() }],
         }],
         attachments: vec![
-            Attachment {
+            Attachment::Image {
                 id: "dup".into(),
-                kind: AttachmentKind::Image,
-                mime: "image/jpeg".into(),
+                width: 8,
+                height: 8,
                 bytes: "a".into(),
             },
-            Attachment {
+            Attachment::Audio {
                 id: "dup".into(),
-                kind: AttachmentKind::Audio,
-                mime: "audio/wav".into(),
+                sample_rate: 16000,
                 bytes: "b".into(),
             },
         ],
@@ -400,9 +399,10 @@ fn adr_0015_request_example_parses() {
   ],
   "attachments": [
     {
-      "id": "img-1",
       "kind": "image",
-      "mime": "image/jpeg",
+      "id": "img-1",
+      "width": 256,
+      "height": 256,
       "bytes": "<base64>"
     }
   ],

@@ -70,6 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attachment, empty messages, malformed JSON, multi-request
   pipelining, pre-stream `Unavailable`, and mid-stream drop.
 
+- **ADR 0016**: consumer decodes media before sending. Amends ADR
+  0015 §"v2 Attachment" — the daemon does not link image / audio
+  codec libraries (would have violated ADR 0006/0013). The wire
+  carries already-decoded forms: raw RGB octets + `width` /
+  `height` for images, float32 PCM samples + `sample_rate` for
+  audio. `Attachment` becomes a serde-tagged enum with one variant
+  per modality (Image / Audio / Video / Unknown for forward-
+  compat). `AttachmentKind` is removed (the discriminant is
+  implicit in the serde tag); `mime` field is removed (information
+  it carried is now in the variant). `RequestV2::resolve()`
+  tightens to verify *kind correspondence* — a `ContentBlock::Image`
+  must reference an `Attachment::Image`. Affected files: rewritten
+  `crates/inferd-proto/src/v2/attachment.rs`, request validation
+  in `crates/inferd-proto/src/v2/request.rs`, and downstream
+  consumers (chat-template renderer, integration tests).
 - **inferd-daemon: chat-template renderer** (Phase 2B per ADR
   0013/0015). New `chat_template` module with a `Gemma4Renderer`
   that translates a `ResolvedV2` into the byte-exact Gemma 4

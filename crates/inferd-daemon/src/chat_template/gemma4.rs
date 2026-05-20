@@ -47,9 +47,7 @@
 //! the markers and splices the per-modality fence tokens
 //! (`<start_of_image>...<end_of_image>`, etc.) in.
 
-use inferd_proto::v2::{
-    Attachment, AttachmentKind, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool,
-};
+use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool};
 use serde_json::Value;
 
 /// The mtmd default media marker. The engine adapter sees this
@@ -126,11 +124,8 @@ impl Gemma4Renderer {
 
         // Lookup table for attachment_id -> Attachment. Built once;
         // resolve() guarantees uniqueness.
-        let by_id: std::collections::HashMap<&str, &Attachment> = resolved
-            .attachments
-            .iter()
-            .map(|a| (a.id.as_str(), a))
-            .collect();
+        let by_id: std::collections::HashMap<&str, &Attachment> =
+            resolved.attachments.iter().map(|a| (a.id(), a)).collect();
 
         // <bos> opens the prompt. Gemma's tokenizer maps this to the
         // BOS token at tokenize time; we emit the literal string.
@@ -206,12 +201,9 @@ fn render_message<'a>(
                 })?;
                 out.push_str(MEDIA_MARKER);
                 attachments.push(*att);
-                // Mtmd validates kind matches content-block variant
-                // when it tokenises; we don't need to. (Belt: if
-                // they ever disagree, mtmd_tokenize errors loudly,
-                // and the lifecycle layer translates that to
-                // ErrorCodeV2::AttachmentUnsupported.)
-                let _ = AttachmentKind::Image; // keep the use in scope
+                // resolve() already verified the attachment kind
+                // matches the content-block variant (e.g. an Image
+                // block resolves to an Attachment::Image).
             }
             ContentBlock::ToolUse {
                 tool_call_id: _,

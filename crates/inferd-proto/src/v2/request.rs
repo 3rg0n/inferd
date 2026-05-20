@@ -9,7 +9,7 @@ use crate::error::ProtoError;
 use crate::v2::attachment::Attachment;
 use crate::v2::tool::{Tool, ToolCallId, ToolUseInput};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Conversation role on a v2 message.
 ///
@@ -193,12 +193,22 @@ impl RequestV2 {
             ));
         }
 
-        let mut attachment_ids: HashSet<&str> = HashSet::new();
+        let mut attachments_by_id: HashMap<&str, &Attachment> = HashMap::new();
         for att in &self.attachments {
-            if !attachment_ids.insert(att.id.as_str()) {
+            if matches!(att, Attachment::Unknown) {
+                return Err(ProtoError::InvalidRequest(
+                    "attachments contain an unknown kind".into(),
+                ));
+            }
+            let id = att.id();
+            if id.is_empty() {
+                return Err(ProtoError::InvalidRequest(
+                    "attachments must have non-empty id".into(),
+                ));
+            }
+            if attachments_by_id.insert(id, att).is_some() {
                 return Err(ProtoError::InvalidRequest(format!(
-                    "duplicate attachment id: {}",
-                    att.id
+                    "duplicate attachment id: {id}"
                 )));
             }
         }
@@ -219,7 +229,7 @@ impl RequestV2 {
                     "messages[{mi}].content must not be empty"
                 )));
             }
-            validate_content_blocks(&msg.content, mi, &attachment_ids, &tool_names)?;
+            validate_content_blocks(&msg.content, mi, &attachments_by_id, &tool_names)?;
         }
 
         Ok(ResolvedV2 {
@@ -239,21 +249,36 @@ impl RequestV2 {
 fn validate_content_blocks(
     blocks: &[ContentBlock],
     msg_index: usize,
-    attachment_ids: &HashSet<&str>,
+    attachments_by_id: &HashMap<&str, &Attachment>,
     tool_names: &HashSet<&str>,
 ) -> Result<(), ProtoError> {
     for (bi, block) in blocks.iter().enumerate() {
         match block {
             ContentBlock::Text { .. } => {}
-            ContentBlock::Image { attachment_id }
-            | ContentBlock::Audio { attachment_id }
-            | ContentBlock::Video { attachment_id } => {
-                if !attachment_ids.contains(attachment_id.as_str()) {
-                    return Err(ProtoError::InvalidRequest(format!(
-                        "messages[{msg_index}].content[{bi}] references unknown attachment_id {attachment_id:?}"
-                    )));
-                }
-            }
+            ContentBlock::Image { attachment_id } => check_kind(
+                msg_index,
+                bi,
+                attachment_id,
+                attachments_by_id,
+                Attachment::is_image,
+                "image",
+            )?,
+            ContentBlock::Audio { attachment_id } => check_kind(
+                msg_index,
+                bi,
+                attachment_id,
+                attachments_by_id,
+                Attachment::is_audio,
+                "audio",
+            )?,
+            ContentBlock::Video { attachment_id } => check_kind(
+                msg_index,
+                bi,
+                attachment_id,
+                attachments_by_id,
+                Attachment::is_video,
+                "video",
+            )?,
             ContentBlock::ToolUse { name, .. } => {
                 // tool_names may be empty if the request replays an
                 // assistant message that references a tool the model
@@ -263,7 +288,7 @@ fn validate_content_blocks(
             }
             ContentBlock::ToolResult { content, .. } => {
                 // Recurse — tool_result wraps further content blocks.
-                validate_content_blocks(content, msg_index, attachment_ids, tool_names)?;
+                validate_content_blocks(content, msg_index, attachments_by_id, tool_names)?;
             }
             ContentBlock::Unknown => {
                 return Err(ProtoError::InvalidRequest(format!(
@@ -271,6 +296,27 @@ fn validate_content_blocks(
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn check_kind(
+    msg_index: usize,
+    block_index: usize,
+    attachment_id: &str,
+    attachments_by_id: &HashMap<&str, &Attachment>,
+    pred: fn(&Attachment) -> bool,
+    expected: &str,
+) -> Result<(), ProtoError> {
+    let att = attachments_by_id.get(attachment_id).ok_or_else(|| {
+        ProtoError::InvalidRequest(format!(
+            "messages[{msg_index}].content[{block_index}] references unknown attachment_id {attachment_id:?}"
+        ))
+    })?;
+    if !pred(att) {
+        return Err(ProtoError::InvalidRequest(format!(
+            "messages[{msg_index}].content[{block_index}] block expects {expected} attachment but {attachment_id:?} is a different kind"
+        )));
     }
     Ok(())
 }
