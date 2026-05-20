@@ -98,6 +98,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings and reuses shared types from `crate::ffi` via bindgen's
   `blocklist_type` + `raw_line` directives so `llama_model` and
   friends aren't redeclared.
+- **inferd-engine: tool-result rendering pairs by `tool_call_id`**
+  (Phase 4B). The Gemma 4 chat-template renderer now walks the
+  full `messages[]` once at the top of `render` to build a
+  `tool_call_id -> tool_name` map across every prior `ToolUse`.
+  When a `ToolResult` block renders, it pairs to its originating
+  call via `tool_call_id` and emits
+  `<|tool_response>response:NAME{KEY:VALUE,...}<tool_response|>`
+  with the correct tool name even when `tools[]` has multiple
+  entries. The single-tool fallback is now a last-ditch heuristic
+  used only if `tool_call_id` is unknown *and* `tools.len() == 1`;
+  otherwise the renderer falls through to raw content (Gemma
+  treats it as freeform tool output) instead of guessing. 3 new
+  byte-exact tests in `chat_template_gemma4.rs`: pairing across
+  multiple tools (out-of-order results), full round-trip after
+  an assistant `ToolUse` (asserts both the original call and the
+  paired response survive in their respective turns), and the
+  unknown-tool_call_id fallback path.
 - **inferd-engine: streaming tool-use parser** (Phase 4A). New
   `crates/inferd-engine/src/llamacpp/tool_parser.rs` is a pure-Rust
   state machine that wraps the v2 generate token stream and
