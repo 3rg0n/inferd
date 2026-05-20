@@ -59,6 +59,36 @@ pub struct AdminEvent {
     /// Configured context window in tokens (kv_cache phase).
     #[serde(default)]
     pub n_ctx: Option<u32>,
+
+    // --- capabilities-specific fields (status="capabilities", #77) ---
+    /// Backend identifier (capabilities phase).
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// `true` if the backend implements v2 (capabilities phase).
+    #[serde(default)]
+    pub v2: Option<bool>,
+    /// `true` if the backend can ingest images (capabilities phase).
+    #[serde(default)]
+    pub vision: Option<bool>,
+    /// `true` if the backend can ingest audio (capabilities phase).
+    #[serde(default)]
+    pub audio: Option<bool>,
+    /// `true` if the backend natively supports tool-use
+    /// (capabilities phase).
+    #[serde(default)]
+    pub tools: Option<bool>,
+    /// `true` if the backend separates `<|think|>` reasoning from
+    /// user-visible output (capabilities phase).
+    #[serde(default)]
+    pub thinking: Option<bool>,
+    /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
+    /// / `"vulkan"` / `"rocm"` (capabilities phase).
+    #[serde(default)]
+    pub accelerator: Option<String>,
+    /// Layers offloaded to the accelerator at runtime (capabilities
+    /// phase). 0 means CPU-only at runtime regardless of `accelerator`.
+    #[serde(default)]
+    pub gpu_layers: Option<u32>,
 }
 
 /// Errors produced by the admin client.

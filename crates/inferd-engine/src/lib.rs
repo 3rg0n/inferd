@@ -25,8 +25,8 @@ pub mod mock;
 pub(crate) mod mtmd_ffi;
 
 pub use backend::{
-    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
-    TokenStreamV2,
+    AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, GenerateError, TokenEvent,
+    TokenEventV2, TokenStream, TokenStreamV2,
 };
 
 /// Default `max_tokens` for v2 requests when the consumer didn't

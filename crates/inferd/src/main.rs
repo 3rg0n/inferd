@@ -297,30 +297,66 @@ async fn cmd_doctor(
     // 4. Admin socket reachable?
     match tokio::time::timeout(Duration::from_secs(1), dial_admin(admin_addr)).await {
         Ok(Ok(mut admin)) => {
-            // Read one frame so we know the daemon's actual state.
-            match tokio::time::timeout(Duration::from_secs(1), admin.recv()).await {
-                Ok(Ok(event)) => report_problem(
-                    "admin",
-                    true,
-                    &format!(
-                        "connected at {}; daemon status={} phase={}",
-                        admin_addr.display(),
-                        event.status,
-                        if event.phase.is_empty() {
-                            "-"
-                        } else {
-                            &event.phase
-                        }
-                    ),
-                ),
-                _ => report_problem(
+            // Read up to two frames: the daemon emits a capabilities
+            // frame before the lifecycle snapshot when it's been
+            // through backend construction. If we only see one frame,
+            // it's the snapshot (daemon may not have hit Capabilities
+            // yet — e.g. still in LoadingModel).
+            let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
+            for _ in 0..2 {
+                match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
+                    Ok(Ok(event)) => frames.push(event),
+                    _ => break,
+                }
+            }
+            if frames.is_empty() {
+                report_problem(
                     "admin",
                     false,
                     &format!(
                         "connected at {} but no frame within 1s",
                         admin_addr.display()
                     ),
-                ),
+                );
+            } else {
+                let caps = frames.iter().find(|e| e.status == "capabilities");
+                let snapshot = frames
+                    .iter()
+                    .find(|e| e.status != "capabilities")
+                    .unwrap_or(&frames[0]);
+                report_problem(
+                    "admin",
+                    true,
+                    &format!(
+                        "connected at {}; daemon status={} phase={}",
+                        admin_addr.display(),
+                        snapshot.status,
+                        if snapshot.phase.is_empty() {
+                            "-"
+                        } else {
+                            &snapshot.phase
+                        }
+                    ),
+                );
+                if let Some(c) = caps {
+                    let backend = c.backend.as_deref().unwrap_or("?");
+                    let accel = c.accelerator.as_deref().unwrap_or("?");
+                    let gpu_layers = c.gpu_layers.unwrap_or(0);
+                    let v2 = c.v2.unwrap_or(false);
+                    let vision = c.vision.unwrap_or(false);
+                    let audio = c.audio.unwrap_or(false);
+                    let tools = c.tools.unwrap_or(false);
+                    let thinking = c.thinking.unwrap_or(false);
+                    report_problem(
+                        "backend",
+                        true,
+                        &format!(
+                            "{backend} accelerator={accel} gpu_layers={gpu_layers} \
+                             v2={v2} vision={vision} audio={audio} tools={tools} \
+                             thinking={thinking}"
+                        ),
+                    );
+                }
             }
         }
         Ok(Err(e)) => report_problem(
@@ -385,6 +421,31 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(n) = event.n_ctx {
         obj.insert("n_ctx".into(), json!(n));
+    }
+    // capabilities frame (#77) — pass through every set field.
+    if let Some(s) = &event.backend {
+        obj.insert("backend".into(), Value::String(s.clone()));
+    }
+    if let Some(b) = event.v2 {
+        obj.insert("v2".into(), json!(b));
+    }
+    if let Some(b) = event.vision {
+        obj.insert("vision".into(), json!(b));
+    }
+    if let Some(b) = event.audio {
+        obj.insert("audio".into(), json!(b));
+    }
+    if let Some(b) = event.tools {
+        obj.insert("tools".into(), json!(b));
+    }
+    if let Some(b) = event.thinking {
+        obj.insert("thinking".into(), json!(b));
+    }
+    if let Some(s) = &event.accelerator {
+        obj.insert("accelerator".into(), Value::String(s.clone()));
+    }
+    if let Some(n) = event.gpu_layers {
+        obj.insert("gpu_layers".into(), json!(n));
     }
     serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
 }

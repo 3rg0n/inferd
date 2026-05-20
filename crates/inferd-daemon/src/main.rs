@@ -96,6 +96,22 @@ async fn main() -> anyhow::Result<()> {
         };
     info!(name = backend.name(), "backend constructed");
 
+    // Publish capability snapshot so admin subscribers can introspect
+    // multimodal / tools / accelerator posture before Ready (#77).
+    {
+        let caps = backend.capabilities();
+        broadcaster.publish(StatusEvent::Capabilities {
+            backend: backend.name().to_string(),
+            v2: caps.v2,
+            vision: caps.vision,
+            audio: caps.audio,
+            tools: caps.tools,
+            thinking: caps.thinking,
+            accelerator: caps.accelerator.kind.as_str().to_string(),
+            gpu_layers: caps.accelerator.gpu_layers,
+        });
+    }
+
     // Build router (no-op v0.1: one backend).
     let router = Arc::new(Router::new(vec![Arc::clone(&backend)]));
 

@@ -70,6 +70,63 @@ pub enum TokenEventV2 {
 /// generation. Dropping the stream cancels the in-flight generation.
 pub type TokenStreamV2 = Pin<Box<dyn Stream<Item = TokenEventV2> + Send>>;
 
+/// Hardware-acceleration backend the engine adapter is built and
+/// running with. Reflects compile-time GGML feature flags. Pure CPU
+/// builds (no `cuda` / `metal` / `vulkan` / `rocm` features) report
+/// `Cpu`. A build *with* support but where `n_gpu_layers == 0` also
+/// effectively uses CPU at runtime — see [`AcceleratorInfo::gpu_layers`].
+///
+/// New variants may be added in future patch releases (NPU, etc.);
+/// older subscribers should treat unknown variants as `Cpu` (the
+/// fallback that's always safe).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AcceleratorKind {
+    /// Built without any GPU/accelerator support.
+    #[default]
+    Cpu,
+    /// Built with CUDA — NVIDIA GPU offload available.
+    Cuda,
+    /// Built with Metal — Apple GPU offload available.
+    Metal,
+    /// Built with Vulkan — cross-vendor GPU offload available.
+    Vulkan,
+    /// Built with HIP/ROCm — AMD GPU offload available.
+    Rocm,
+}
+
+impl AcceleratorKind {
+    /// Stable wire-form name: `"cpu"`, `"cuda"`, `"metal"`, `"vulkan"`,
+    /// `"rocm"`. Used in admin status frames and `inferd doctor`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AcceleratorKind::Cpu => "cpu",
+            AcceleratorKind::Cuda => "cuda",
+            AcceleratorKind::Metal => "metal",
+            AcceleratorKind::Vulkan => "vulkan",
+            AcceleratorKind::Rocm => "rocm",
+        }
+    }
+}
+
+/// Snapshot of the active hardware-acceleration configuration.
+///
+/// `kind` is the compile-time GGML backend this engine was built with;
+/// `gpu_layers` is the runtime configuration the adapter was
+/// constructed with. A backend that compiled with `cuda` but was
+/// configured with `n_gpu_layers = 0` reports `kind = Cuda,
+/// gpu_layers = 0` — i.e. CUDA-capable but currently CPU-bound. The
+/// distinction is useful: it tells consumers the daemon *could*
+/// accelerate if reconfigured, vs. it can never accelerate without a
+/// rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AcceleratorInfo {
+    /// Compile-time GGML backend.
+    pub kind: AcceleratorKind,
+    /// Layers offloaded to the accelerator at construction time. 0
+    /// means CPU-only at runtime regardless of `kind`.
+    pub gpu_layers: u32,
+}
+
 /// Per-backend capability advertisement. The daemon consults this on
 /// boot to decide whether v2 multimodal / tool-use requests can be
 /// dispatched, and reports the advertised set on the admin status
@@ -102,6 +159,12 @@ pub struct BackendCapabilities {
     /// `true` if the backend separates `<|think|>` reasoning trace
     /// from user-visible output.
     pub thinking: bool,
+    /// Hardware-acceleration snapshot. `Cpu / 0` for the default
+    /// trait impl; `mock` keeps the default; `llamacpp` reports the
+    /// compile-time GGML backend + the configured `n_gpu_layers`.
+    /// Reported on admin `status: capabilities` frames and in
+    /// `inferd doctor` (#77).
+    pub accelerator: AcceleratorInfo,
 }
 
 /// Errors returned by `Backend::generate()` *before* any tokens have streamed.

@@ -98,6 +98,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings and reuses shared types from `crate::ffi` via bindgen's
   `blocklist_type` + `raw_line` directives so `llama_model` and
   friends aren't redeclared.
+- **inferd-engine + inferd-daemon + inferd CLI: hardware-acceleration
+  detection and reporting** (#77). New `AcceleratorKind`
+  (`Cpu` / `Cuda` / `Metal` / `Vulkan` / `Rocm`) and `AcceleratorInfo`
+  (`{kind, gpu_layers}`) types on `inferd-engine`; added to
+  `BackendCapabilities`. The `llamacpp` adapter reports the
+  compile-time GGML backend (decided by the active cargo feature —
+  `cuda` / `metal` / `vulkan` / `rocm`, falling back to `cpu`)
+  plus the runtime `n_gpu_layers` it was constructed with. The
+  daemon publishes a new `Capabilities` admin status frame after
+  backend construction (`{"status":"capabilities","backend":"llamacpp",
+  "v2":...,"vision":...,"audio":...,"tools":...,"thinking":...,
+  "accelerator":"cuda","gpu_layers":99}`) so subscribers can
+  introspect posture without trial-and-error. `StatusBroadcaster`
+  caches the latest capability frame in its own slot so one-shot
+  subscribers (e.g. `inferd doctor`) receive it on connect even
+  after `Ready`. `inferd doctor` now reads up to two frames and
+  prints a `[ ok ] backend: ... accelerator=... gpu_layers=...`
+  line. `inferd-client::AdminEvent` grows seven backwards-additive
+  optional fields (`backend`, `v2`, `vision`, `audio`, `tools`,
+  `thinking`, `accelerator`, `gpu_layers`); older clients deserialise
+  unchanged. Detection is *compile-time only* in v0.2 — runtime
+  GPU enumeration (PCI / IOKit / SetupAPI) is out of scope; the
+  reported accelerator equals the cargo feature the binary was
+  built with. RTX 50-series Blackwell support requires CUDA
+  Toolkit 12.8+ at build time.
 - **inferd-engine: tool-result rendering pairs by `tool_call_id`**
   (Phase 4B). The Gemma 4 chat-template renderer now walks the
   full `messages[]` once at the top of `render` to build a
