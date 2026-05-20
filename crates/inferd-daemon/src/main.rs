@@ -144,9 +144,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Spawn the v2 listener if enabled. It runs in parallel with the
-    // v1 main accept loop and shuts down on the same signal.
+    // v1 main accept loop and shuts down on the same signal. v1 and
+    // v2 share the same Router instance — a single warm model serves
+    // both wire versions.
     let v2_handle = if let Some(rx) = v2_shutdown_tx {
-        Some(spawn_v2_listener(&cli, accept_ctx.clone(), rx).await?)
+        Some(spawn_v2_listener(&cli, Arc::clone(&router), accept_ctx.clone(), rx).await?)
     } else {
         None
     };
@@ -213,11 +215,13 @@ async fn main() -> anyhow::Result<()> {
 /// Bind the v2 inference listener and spawn its accept loop. Returns
 /// the JoinHandle so main can await graceful drain. v2 is per ADR
 /// 0015: separate socket from v1; reuses the same admission gate +
-/// API key. Phase 1B: backend dispatch is not wired — connected
-/// clients receive `Error{code:internal, message:"v2 generation not
-/// implemented"}` after a successful frame parse.
+/// API key + Router. Backends that don't advertise
+/// `BackendCapabilities::v2 == true` see their dispatched v2
+/// requests respond with `Error{Internal, "backend ... does not
+/// advertise v2 capability"}`.
 async fn spawn_v2_listener(
     cli: &Cli,
+    router: Arc<Router>,
     accept_ctx: AcceptContext,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
@@ -228,7 +232,9 @@ async fn spawn_v2_listener(
         let listener = bind_tcp(addr).await?;
         info!(addr = %listener.local_addr()?, "v2 tcp listener bound");
         Ok(tokio::spawn(async move {
-            if let Err(e) = lifecycle_v2::serve_tcp_v2(listener, accept_ctx, shutdown_rx).await {
+            if let Err(e) =
+                lifecycle_v2::serve_tcp_v2(listener, router, accept_ctx, shutdown_rx).await
+            {
                 error!(error = ?e, "v2 tcp listener error");
             }
         }))
@@ -239,7 +245,8 @@ async fn spawn_v2_listener(
             let listener = bind_uds(&path, cli.group.as_deref()).await?;
             info!(path = %path.display(), "v2 uds listener bound");
             Ok(tokio::spawn(async move {
-                if let Err(e) = lifecycle_v2::serve_uds_v2(listener, accept_ctx, shutdown_rx).await
+                if let Err(e) =
+                    lifecycle_v2::serve_uds_v2(listener, router, accept_ctx, shutdown_rx).await
                 {
                     error!(error = ?e, "v2 uds listener error");
                 }
@@ -256,9 +263,14 @@ async fn spawn_v2_listener(
             let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
             info!(path = %path_str, "v2 named pipe listener bound");
             Ok(tokio::spawn(async move {
-                if let Err(e) =
-                    lifecycle_v2::serve_named_pipe_v2(&path_str, first, accept_ctx, shutdown_rx)
-                        .await
+                if let Err(e) = lifecycle_v2::serve_named_pipe_v2(
+                    &path_str,
+                    first,
+                    router,
+                    accept_ctx,
+                    shutdown_rx,
+                )
+                .await
                 {
                     error!(error = ?e, "v2 named pipe listener error");
                 }
@@ -266,7 +278,7 @@ async fn spawn_v2_listener(
         }
         #[cfg(not(any(unix, windows)))]
         {
-            drop((path, accept_ctx, shutdown_rx));
+            drop((path, router, accept_ctx, shutdown_rx));
             anyhow::bail!("v2 endpoint requires unix or windows; use --v2-tcp instead")
         }
     }
