@@ -70,6 +70,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attachment, empty messages, malformed JSON, multi-request
   pipelining, pre-stream `Unavailable`, and mid-stream drop.
 
+- **inferd-daemon: chat-template renderer** (Phase 2B per ADR
+  0013/0015). New `chat_template` module with a `Gemma4Renderer`
+  that translates a `ResolvedV2` into the byte-exact Gemma 4
+  prompt format (`<|turn>system\n...<turn|>`,
+  `<|tool>declaration:...<tool|>`,
+  `<|tool_call>call:NAME{...}<tool_call|>`,
+  `<|tool_response>response:NAME{...}<tool_response|>`) plus an
+  ordered list of attachments referenced by `<__media__>` markers
+  in the rendered text — exactly the shape libmtmd's
+  `mtmd_tokenize` consumes. Phase 3A wires it into the
+  `LlamaCpp` adapter; until then, the renderer ships standalone
+  and is exercised by 9 byte-exact integration tests in
+  `crates/inferd-daemon/tests/chat_template_gemma4.rs` against
+  the canonical examples from
+  `docs/text.function.calling.with.gemma.4.md`. Tools without a
+  system message synthesise an empty system turn (matching
+  upstream); ToolResult content blocks render inside the model
+  turn (matching upstream's `<|tool_response>...<tool_response|>`
+  inline form, not as a separate turn). Schema and inline
+  argument rendering replaces JSON `"..."` quoting with Gemma's
+  `<|"|>...<|"|>` special-token form so the tokenizer routes
+  string literals correctly.
+
 ### Changed (cherry-picked from v0.1.13 on main, 2026-05-20)
 
 - **`crates/inferd-engine/src/llamacpp/loader.rs`**: when an
