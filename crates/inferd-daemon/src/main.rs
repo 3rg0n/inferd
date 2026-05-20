@@ -102,8 +102,17 @@ async fn main() -> anyhow::Result<()> {
     // Inference shutdown channel.
     let inference_shutdown_tx = install_shutdown_signal()?;
 
+    let admission = inferd_daemon::queue::Admission::new(cli.active_permits, cli.queue_depth);
+    info!(
+        active_permits = cli.active_permits,
+        queue_depth = cli.queue_depth,
+        capacity = admission.capacity(),
+        "admission gate configured"
+    );
+
     let accept_ctx = AcceptContext {
         expected_api_key: cli.api_key.clone(),
+        admission: Some(admission),
     };
     if cli.tcp.is_some() && accept_ctx.expected_api_key.is_some() {
         info!("tcp api-key auth enabled (F-8)");

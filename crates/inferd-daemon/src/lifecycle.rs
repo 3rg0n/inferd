@@ -18,6 +18,7 @@
 use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
+use crate::queue::{Admission, SubmitError};
 use crate::router::{Router, RouterError};
 use inferd_engine::{GenerateError, TokenEvent};
 use inferd_proto::{ErrorCode, ProtoError, Request, Response, write_frame};
@@ -56,16 +57,33 @@ pub struct ReadyTimeout(pub Duration);
 /// Per-accept context that the lifecycle hands to every spawned
 /// connection task.
 ///
-/// Today it carries the optional TCP API key (THREAT_MODEL F-8). New
-/// per-connection policy (rate limits, per-caller quotas) extends this
+/// Today it carries the optional TCP API key (THREAT_MODEL F-8) and
+/// the shared admission gate (queue_full enforcement). New per-
+/// connection policy (rate limits, per-caller quotas) extends this
 /// struct rather than each `serve_*` signature.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct AcceptContext {
     /// When `Some` and the connection is TCP, the daemon requires an
     /// auth frame as the first NDJSON line on the wire and constant-
     /// time-compares the key against this value. UDS / pipe ignore
     /// this field — F-7 covers them.
     pub expected_api_key: Option<String>,
+    /// Shared admission gate. `None` for tests / dev paths that
+    /// don't care about queue depth — those treat every request
+    /// as admitted. Production lifecycle always passes `Some`.
+    pub admission: Option<Admission>,
+}
+
+impl std::fmt::Debug for AcceptContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcceptContext")
+            .field("expected_api_key", &self.expected_api_key.is_some())
+            .field(
+                "admission_capacity",
+                &self.admission.as_ref().map(|a| a.capacity()),
+            )
+            .finish()
+    }
 }
 
 /// Handle one accepted client connection: read framed `Request`s and write
@@ -158,6 +176,37 @@ pub async fn handle_connection<C: Connection + 'static>(
                 };
                 write_response(&writer, &resp).await?;
                 continue;
+            }
+        };
+
+        // Admission gate (queue_full enforcement). Held for the full
+        // generation; dropping the permit (after the Done frame, on
+        // mid-stream error, or on connection drop) returns the slot
+        // to the pool. `None` admission = tests / dev paths that
+        // don't care about queue depth.
+        let _admit_permit = match ctx.admission.as_ref().map(|a| a.try_admit()) {
+            None => None,
+            Some(Ok(p)) => Some(p),
+            Some(Err(SubmitError::QueueFull)) => {
+                let resp = Response::Error {
+                    id: resolved.id.clone(),
+                    code: ErrorCode::QueueFull,
+                    message: "queue full".into(),
+                };
+                write_response(&writer, &resp).await?;
+                continue;
+            }
+            Some(Err(SubmitError::Closed)) => {
+                // Admission closed = daemon shutting down. Tell the
+                // caller, then drop the connection — there's no point
+                // reading another request that we'll also reject.
+                let resp = Response::Error {
+                    id: resolved.id.clone(),
+                    code: ErrorCode::BackendUnavailable,
+                    message: "admission closed".into(),
+                };
+                write_response(&writer, &resp).await?;
+                return Ok(());
             }
         };
 

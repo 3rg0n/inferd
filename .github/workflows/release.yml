@@ -87,7 +87,7 @@ jobs:
       # scratch — adds ~5 min per platform, eliminates the
       # silent-mock-tarball failure mode.
 
-      - name: Build (with llamacpp)
+      - name: Build daemon (with llamacpp)
         # Use `inferd-daemon/llamacpp` (the daemon's own feature) not
         # `inferd-engine/llamacpp`. The daemon's `llamacpp` feature
         # activates `inferd-engine/llamacpp` via dep-feature forwarding
@@ -97,6 +97,12 @@ jobs:
         # daemon arm gated out — resulting in a binary that rejects
         # `--backend llamacpp` at runtime.
         run: cargo build --release --bin inferd-daemon --features inferd-daemon/llamacpp --target ${{ matrix.target }}
+
+      - name: Build inferdctl
+        # Operator CLI (status, watch, pull, doctor). No llamacpp
+        # dependency — pulls in inferd-daemon as a library for shared
+        # types but doesn't enable the FFI feature.
+        run: cargo build --release --bin inferdctl --target ${{ matrix.target }}
 
       # Belt-and-braces: assert the produced binary's CLI actually
       # accepts `--backend llamacpp`. This is the *direct* test —
@@ -135,11 +141,13 @@ jobs:
           cp README.md LICENSE CHANGELOG.md "$stage/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/windows/install.ps1 "$stage/packaging/"
             cp packaging/README.md "$stage/packaging/"
           else
             cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferdctl" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/README.md "$stage/packaging/"
             case "${{ runner.os }}" in
