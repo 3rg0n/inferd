@@ -19,7 +19,8 @@ implementation choices aren't.
 | [0012](0012-one-warm-model-per-inferd-process.md) | One warm model per inferd process (no in-daemon multi-model pool) | Accepted |
 | [0013](0013-inferd-is-the-gateway-not-the-pipe.md) | inferd is the gateway, not the pipe (daemon owns model-specific shaping) | Accepted |
 | [0014](0014-inferd-cli-is-a-reference-middleware.md) | The inferd CLI is a reference middleware, not a privileged surface | Accepted |
-| [0015](0015-v2-wire-protocol-typed-content-blocks.md) | v2 wire protocol — typed content blocks, attachments, tools | Accepted |
+| [0015](0015-v2-wire-protocol-typed-content-blocks.md) | v2 wire protocol — typed content blocks, attachments, tools | Accepted (§"v2 Attachment" amended by 0016) |
+| [0016](0016-consumer-decodes-media-before-sending.md) | Consumer decodes media before sending — daemon stays codec-free | Accepted |
 
 ## Writing a new ADR
 

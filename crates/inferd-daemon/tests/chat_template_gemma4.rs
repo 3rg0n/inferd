@@ -9,9 +9,7 @@
 //! the renderer is updated in lockstep.
 
 use inferd_daemon::chat_template::Gemma4Renderer;
-use inferd_proto::v2::{
-    Attachment, AttachmentKind, ContentBlock, MessageV2, RequestV2, RoleV2, Tool, ToolCallId,
-};
+use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, RequestV2, RoleV2, Tool, ToolCallId};
 use serde_json::json;
 
 fn render(req: RequestV2) -> (String, usize) {
@@ -277,10 +275,10 @@ fn image_attachment_emits_media_marker_and_records_attachment() {
                 },
             ],
         }],
-        attachments: vec![Attachment {
+        attachments: vec![Attachment::Image {
             id: "img-1".into(),
-            kind: AttachmentKind::Image,
-            mime: "image/jpeg".into(),
+            width: 32,
+            height: 32,
             bytes: "Zm9v".into(),
         }],
         ..Default::default()
@@ -290,7 +288,7 @@ fn image_attachment_emits_media_marker_and_records_attachment() {
     let rendered = renderer.render(&resolved).unwrap();
 
     assert_eq!(rendered.attachments.len(), 1);
-    assert_eq!(rendered.attachments[0].id, "img-1");
+    assert_eq!(rendered.attachments[0].id(), "img-1");
 
     let expected = "<bos>\
 <|turn>user\n\
@@ -321,22 +319,21 @@ fn multiple_attachments_recorded_in_message_order() {
             ],
         }],
         attachments: vec![
-            Attachment {
+            Attachment::Image {
                 id: "a".into(),
-                kind: AttachmentKind::Image,
-                mime: "image/jpeg".into(),
+                width: 8,
+                height: 8,
                 bytes: "1".into(),
             },
-            Attachment {
+            Attachment::Audio {
                 id: "b".into(),
-                kind: AttachmentKind::Audio,
-                mime: "audio/wav".into(),
+                sample_rate: 16000,
                 bytes: "2".into(),
             },
-            Attachment {
+            Attachment::Image {
                 id: "c".into(),
-                kind: AttachmentKind::Image,
-                mime: "image/png".into(),
+                width: 8,
+                height: 8,
                 bytes: "3".into(),
             },
         ],
@@ -346,7 +343,7 @@ fn multiple_attachments_recorded_in_message_order() {
     let renderer = Gemma4Renderer::new();
     let rendered = renderer.render(&resolved).unwrap();
 
-    let ids: Vec<&str> = rendered.attachments.iter().map(|a| a.id.as_str()).collect();
+    let ids: Vec<&str> = rendered.attachments.iter().map(|a| a.id()).collect();
     assert_eq!(ids, vec!["a", "b", "c"]);
     let n_markers = rendered.prompt.matches("<__media__>").count();
     assert_eq!(n_markers, 3);
