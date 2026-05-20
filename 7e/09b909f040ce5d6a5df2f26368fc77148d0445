@@ -1,0 +1,30 @@
+docs/adr/0014-inferd-cli-is-a-reference-middleware.md
+  s_126aec4081f728::t_01e84db487b9c3 1-161
+INTEGRATING.md
+  s_126aec4081f728::t_8c5fb01cfc23a0 5-21,31
+  s_126aec4081f728::t_98dc987c35ddf4 258-300,304,306
+CHANGELOG.md
+  s_126aec4081f728::t_fc7a5af21bf3af 10-37
+docs/adr/README.md
+  s_126aec4081f728::t_0aa1314cb5f9bc 20-22
+docs/adr/0015-v2-wire-protocol-typed-content-blocks.md
+  s_126aec4081f728::t_7cfb0ce8b344ac 1-364
+docs/adr/0013-inferd-is-the-gateway-not-the-pipe.md
+  s_126aec4081f728::t_14d2b3dfa53cd5 1-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "7e09b909f040ce5d6a5df2f26368fc77148d0445",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
