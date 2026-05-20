@@ -14,6 +14,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod chat_template;
 pub mod config;
 pub mod config_file;
 pub mod endpoint;
