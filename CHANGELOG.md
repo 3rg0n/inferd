@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-05-20
+
+Hotfix for issue #8 — `install-launchagent.sh` substituted
+`__HOME__` / `__TMPDIR__` / `__BIN__` into the plist but never
+wrote `--backend` or `--model-path` into `ProgramArguments`. The
+daemon defaulted to the mock backend even after `inferd pull`;
+every macOS user got canned tokens with no warning.
+
+Tarball-only ship; no wire-surface change. Crates on crates.io
+stay at 0.1.9.
+
+### Fixed
+
+- **`packaging/launchd/io.inferd.daemon.plist`**: gains
+  `__BACKEND__` and `__MODEL_PATH__` placeholders in
+  `ProgramArguments` so the install script's substitution lands
+  in the running argv. Manual-install comment block now lists
+  the two extra `sed` substitutions and orders `launchctl
+  enable` before `launchctl bootstrap` to handle the disabled
+  state (matching what the script does).
+- **`packaging/launchd/install-launchagent.sh`**: accepts an
+  optional second argument for the model path; auto-detects the
+  CAS path from `~/.inferd/config.json` when omitted. Hardcodes
+  `BACKEND=llamacpp` — there is no path that writes a mock
+  plist by accident. Exits non-zero with a clear `run 'inferd
+  pull' first` message when no model can be found, instead of
+  registering a placeholder daemon that looks installed but
+  serves canned tokens. Echoes `Backend:` and `Model:` at the
+  end so the user sees exactly what was wired.
+
 ## [0.1.13] - 2026-05-20
 
 Hotfix for issue #6 — llamacpp loader's TOCTOU mitigation made
