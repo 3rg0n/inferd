@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **ADR 0013**: inferd is the gateway, not the pipe. Locks the
+  architectural posture: the daemon owns model-specific shaping
+  (chat templates, attachment routing, tool-call orchestration);
+  middleware sends semantic intent. Corrects an earlier framing
+  in the v0.1.x cycle that called inferd a "pipe" — the pipe
+  framing breaks against llama.cpp's mtmd interface and against
+  every other LLM gateway's expected shape.
+- **ADR 0014**: the inferd CLI is a reference middleware, not a
+  privileged surface. The `crates/inferd/` binary uses the same
+  public crates (`inferd-client`, `inferd-daemon` lib) any
+  external consumer would. No private daemon API, no internal
+  subcommands. Every CLI feature is implicitly a contract test
+  for the public library surface.
+- **ADR 0015**: v2 wire protocol shape — typed content blocks
+  (text / image / audio / video / tool_use / tool_result),
+  top-level `attachments[]` carrying raw bytes referenced by
+  blocks, top-level `tools[]` for function definitions.
+  Anthropic-API-shaped, lives on a separate socket per ADR 0008
+  so v1 stays untouched. **Design only — no code in this
+  release.** v2 ships as part of v0.2 work.
+- **`INTEGRATING.md`** rewritten opening + new "v0.2 preview"
+  section. Frames inferd as a gateway with the mental-model
+  diagram middleware authors recognise from Anthropic /
+  OpenAI / Bedrock APIs. Concrete example of the v2 wire
+  shape so consumers writing v0.1 code today can plan ahead.
+
 ## [0.1.10] - 2026-05-20
 
 ### Changed

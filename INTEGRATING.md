@@ -2,7 +2,23 @@
 
 This guide is for anyone building a tool that wants local LLM inference and decides to consume `inferd` instead of embedding their own engine. CLI tools, IDE assistants, agent runtimes, web apps, middleware — same pattern.
 
-inferd is plumbing. Your product wires up the daemon and talks to it. This doc tells you how.
+## What inferd is to your product
+
+**inferd is a local LLM gateway** — Anthropic-API-shaped, but over IPC instead of HTTPS. It owns the model-specific work (chat templating, tokenization decisions, attachment routing once v2 ships, tool-call lifecycle); your product owns the user experience (input capture, rendering, session memory, tool execution).
+
+Mental model:
+
+```
+[ your middleware ]              [ inferd daemon ]            [ llama.cpp + model ]
+  thin client                      smart gateway                math
+  - knows the user                 - knows the model            - tokens in
+  - knows the task                 - shapes intent → engine     - tokens out
+  - sends semantic intent          - manages lifecycle
+  - renders streamed tokens        - routes attachments
+  - executes tools                 - orchestrates tool calls
+```
+
+This is the same split Anthropic's `/v1/messages` API draws between Claude Code and Anthropic's models. It's exactly the split [ADR 0013](docs/adr/0013-inferd-is-the-gateway-not-the-pipe.md) commits inferd to. Your middleware doesn't write `<|turn>...<turn|>` chat-template tokens by hand and doesn't compute image embeddings — the daemon does. You send semantic `messages[]`, the daemon produces engine-shaped input.
 
 ## TL;DR
 
@@ -12,7 +28,7 @@ inferd is plumbing. Your product wires up the daemon and talks to it. This doc t
 4. Connect to its inference socket from your code, send NDJSON, stream tokens back.
 
 Daemon's contract:
-- Wire protocol v1 is frozen (see [`docs/protocol-v1.md`](docs/protocol-v1.md)).
+- Wire protocol v1 is frozen and text-only (see [`docs/protocol-v1.md`](docs/protocol-v1.md)). v2 (typed content blocks + attachments + tools) lives on a separate socket per [ADR 0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md) when it ships — see "[v0.2 preview](#v02-preview-typed-content-blocks-attachments-tools)" below.
 - One warm model per daemon process ([ADR 0012](docs/adr/0012-one-warm-model-per-inferd-process.md)). Need N models? Run N daemons on N socket paths.
 - The inference socket only exists when the daemon is `ready`. Connect-refused = not ready = your code's job to wait or passthrough.
 - Errors: callers own retry. Daemon never retries, never fails over, never rewrites.
@@ -239,12 +255,55 @@ The daemon never retries on its own. It never falls over to a different backend 
 - **PowerShell's default UTF-8 writes a BOM.** If you're poking the daemon from raw PowerShell, use `[System.Text.UTF8Encoding] $false`. The Rust + Go clients don't have this issue.
 - **The admin socket has mode `0600`** — only the daemon's own user can connect. The inference socket is `0660` and respects an `inferd-users` group when configured.
 
+## v0.2 preview — typed content blocks, attachments, tools
+
+v0.2 adds an Anthropic-shaped wire protocol on a separate socket alongside v1. v1 stays frozen forever (text-only `messages[].content` as a `String`); v2 carries multimodal + tool-calling without breaking anything you build today.
+
+The shape is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md). What it'll look like on the wire:
+
+```json
+{
+  "id": "req-001",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What's in this image?"},
+        {"type": "image", "attachment_id": "img-1"}
+      ]
+    }
+  ],
+  "attachments": [
+    {"id": "img-1", "kind": "image", "mime": "image/jpeg", "bytes": "<base64>"}
+  ],
+  "tools": [
+    {"name": "get_weather", "description": "...", "input_schema": {...}}
+  ],
+  "max_tokens": 1024
+}
+```
+
+Recognisable from Anthropic's `/v1/messages`. Borrowed deliberately so middleware authors who've written against Anthropic / OpenAI / Bedrock can write against inferd with the same mental model.
+
+**What this means for you writing v0.1 middleware today:**
+
+- Today's `Message { role, content: String }` → v2's `Message { role, content: Vec<ContentBlock> }`. The same semantic intent expressed as a typed array instead of a flat string.
+- Image / audio / video bytes go in `attachments[]` keyed by `id`; content blocks reference them by `attachment_id`. You don't compute embeddings or tokenize the image — you just send the raw bytes (base64'd because we're NDJSON, not multipart) and the daemon hands them to the engine's mtmd helpers.
+- Function calling is first-class: define `tools[]` with JSON Schema input descriptors, get `tool_use` blocks back in the response stream, send `tool_result` blocks in your follow-up request. The daemon parses the model's tool-call sequences (`<|tool_call>...<tool_call|>` for Gemma 4) into structured wire frames so you don't grep raw token streams.
+- v2 lives at `${endpoint}-v2` (separate socket / pipe / TCP port). You opt in by connecting to that endpoint instead of the v1 one. v1 keeps working forever for text-only consumers.
+
+**What you should do now, writing v0.1 code:**
+
+1. Keep using `inferd-client::Client` with `Request { messages: Vec<Message> }`. Don't try to anticipate v2's typed content blocks in your v1 code — that's two parallel codepaths for no benefit.
+2. When v0.2 ships, the migration is local: `Message` keeps its `role` field, gains a `content: Vec<ContentBlock>` instead of `content: String`. Everything around it (request id, sampling params, streaming response handling) is unchanged.
+3. If your middleware doesn't need multimodal or tools, you don't have to migrate. v1 stays valid.
+
 ## Versioning
 
 inferd follows semver. Within `0.1.x`:
-- The wire protocol is frozen and immutable.
+- The v1 wire protocol is frozen and immutable.
 - New optional fields may appear; older parsers ignore them.
-- Breaking changes go to v2 on a separate socket path.
+- Breaking changes go to v2 on a separate socket path (per [ADR 0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md)). v2's contract is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md); the implementation lands as part of v0.2.
 
 `cargo add inferd-client` resolves to whatever `0.1.x` is latest. Cargo's lockfile pins the version-pin contract: `inferd-client 0.1.x` always uses `inferd-proto 0.1.x`, and both work against `inferd-daemon 0.1.x`.
 
