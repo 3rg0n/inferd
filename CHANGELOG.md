@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-05-20
+
+Tarball-only release. Crates on crates.io stay at 0.1.9 (no
+wire-surface change). The point is to ship the macOS LaunchAgent
+fix to thlibo without waiting for the v0.2 cycle to land.
+
 ### Fixed
 
 - **macOS LaunchAgent plist** (`packaging/launchd/io.inferd.daemon.plist`):
