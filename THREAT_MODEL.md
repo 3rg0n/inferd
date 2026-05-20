@@ -103,24 +103,36 @@ performed at load. If an attacker can rewrite the file
 between verification and `mmap`, the engine loads
 attacker-controlled bytes.
 
-**Status.** mitigated.
+**Status.** accepted.
 `crates/inferd-engine/src/llamacpp/loader.rs::load_model`,
-when `expected_sha256` is `Some`, copies the model file into
-a daemon-owned `tempfile::TempDir`, then hashes the copy and
-hands the copy path to `llama_model_load_from_file`. The
-`NamedTempFile` is owned by the returned `ModelHandle` so the
-copy persists for the lifetime of the loaded model — an
-attacker rewriting the *original* path on disk after the copy
-cannot affect the in-process model state. The tempdir is
-deleted when the `ModelHandle` drops, after `llama_model_free`
-has released the mmap.
+when `expected_sha256` is `Some`, stream-hashes the file at
+its original path and then hands the same path to
+`llama_model_load_from_file`. The window between hash
+completion and mmap is microseconds; an attacker capable of
+rewriting the model file in that window has write access to
+the user's model file in general, which is already a threat
+that exceeds what hashing can defend against.
 
 When `expected_sha256` is `None`, the original path goes
-straight to `libllama` with no copy and no hash. Operators
-who do not configure a hash explicitly accept the
-"operator-trusted model file" mode — daemon runs per-user, the
-model file lives under the user's own control, an attacker
-who can rewrite the user's model file has already won.
+straight to `libllama` with no hash. Operators who do not
+configure a hash explicitly accept the "operator-trusted
+model file" mode — daemon runs per-user, the model file lives
+under the user's own control, an attacker who can rewrite the
+user's model file has already won.
+
+**Earlier mitigation removed (issue #6, 2026-05-20).** v0.1.11
+and earlier copied the model into a daemon-owned `TempDir`
+before hashing, defending against a sub-microsecond rewrite
+race at the cost of doubling disk usage during cold start.
+On tmpfs-constrained hosts (WSL2 default tmpfs is half of
+allocated RAM; multi-GB Gemma models did not fit), the daemon
+failed with `ENOSPC` on every cold start. The trade-off was
+re-evaluated: a sub-microsecond TOCTOU race within an
+already-compromised file-write threat is not a defensible
+gap to spend a full second copy of a multi-GB model on. The
+no-hash path's justification ("attacker who can rewrite the
+user's model file has already won") applies just as strongly
+to the with-hash case.
 
 Verified by `loader::tests::load_model_with_wrong_hash_fails_at_hash_check`
 and `load_model_with_no_hash_skips_copy_path`.
