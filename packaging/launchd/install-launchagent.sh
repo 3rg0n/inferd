@@ -6,8 +6,8 @@
 #
 # If the binary path is omitted, /usr/local/bin/inferd-daemon is used.
 # If the model path is omitted, the script reads ~/.inferd/config.json and
-# resolves the CAS path automatically. If no model is found the plist is
-# installed with --backend mock so the daemon still starts (with a warning).
+# resolves the CAS path automatically. If no model is found the script exits
+# non-zero — run `inferd pull` first.
 # Run from the repository root or any subdirectory — the script locates
 # the plist template relative to itself.
 
@@ -63,17 +63,16 @@ except Exception:
 fi
 
 if [[ -z "$MODEL_PATH" ]]; then
-    echo "warning: no model path found; daemon will start with --backend mock" >&2
-    echo "         Run 'inferd pull' then re-run this script to enable real inference." >&2
-    BACKEND="mock"
-    MODEL_PATH="none"
-else
-    if [[ ! -f "$MODEL_PATH" ]]; then
-        echo "error: model file not found at $MODEL_PATH" >&2
-        exit 1
-    fi
-    BACKEND="llamacpp"
+    echo "error: no model found; run 'inferd pull' first, then re-run $0" >&2
+    exit 1
 fi
+
+if [[ ! -f "$MODEL_PATH" ]]; then
+    echo "error: model file not found at $MODEL_PATH" >&2
+    exit 1
+fi
+
+BACKEND="llamacpp"
 
 mkdir -p "$AGENTS_DIR"
 mkdir -p "$LOG_DIR"
@@ -107,9 +106,7 @@ launchctl bootstrap "gui/$UID_VAL" "$DEST"
 echo "Agent bootstrapped and enabled."
 echo
 echo "Backend:  $BACKEND"
-if [[ "$BACKEND" == "llamacpp" ]]; then
-    echo "Model:    $MODEL_PATH"
-fi
+echo "Model:    $MODEL_PATH"
 echo "Sockets and lock live under: ${TMPDIR_REAL}inferd/"
 echo "Logs: $LOG_DIR/"
 echo
