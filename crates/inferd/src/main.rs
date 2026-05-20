@@ -1,23 +1,32 @@
-//! `inferdctl` — operator CLI for inferd.
+//! `inferd` — single CLI binary in the gh / kubectl shape.
 //!
-//! v0.1 surface (4 subcommands):
+//! Distinct from `inferd-daemon` (the long-running service). The
+//! `inferd` binary is what operators and consumers run from a
+//! shell.
 //!
-//! - `inferdctl status`  — one-shot admin snapshot (the current
+//! v0.1 subcommand surface:
+//!
+//! - `inferd status`  — one-shot admin snapshot (the current
 //!   lifecycle state) as JSON. Exits 0 on `ready`, non-zero
 //!   otherwise. Useful for shell scripts.
-//! - `inferdctl watch`   — stream admin events forever. Useful
+//! - `inferd watch`   — stream admin events forever. Useful
 //!   during the first-boot model download.
-//! - `inferdctl pull`    — read `~/.inferd/config.json`, fetch
+//! - `inferd pull`    — read `~/.inferd/config.json`, fetch
 //!   the configured model into the CAS store
 //!   (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-
 //!   256 with constant-time compare, write the manifest. Bypasses
 //!   the daemon — operates directly on the store.
-//! - `inferdctl doctor`  — diagnose connectivity. Prints a punch
+//! - `inferd doctor`  — diagnose connectivity. Prints a punch
 //!   list of "what's there / what's missing" so consumers can
 //!   debug install issues.
 //!
-//! Out of scope for v0.1: `gc`, `version`, TCP API-key handling,
-//! per-platform packaging concerns. Those land later.
+//! Planned but not in v0.1: `inferd -p "hello world"` — connect
+//! to the running daemon, send a one-shot prompt, stream tokens
+//! to stdout. Replaces the previously-scaffolded `inferd-stdio`
+//! crate (one binary, many shapes — gh / kubectl pattern).
+//!
+//! Out of scope for v0.1: `gc`, TCP API-key handling, per-
+//! platform packaging concerns.
 
 use clap::{Parser, Subcommand};
 use inferd_client::AdminClient;
@@ -32,8 +41,8 @@ use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "inferdctl",
-    about = "Operator CLI for inferd",
+    name = "inferd",
+    about = "Single CLI binary for inferd. Subcommands: status, watch, pull, doctor.",
     version,
     arg_required_else_help = true
 )]
@@ -103,14 +112,14 @@ async fn main() -> ExitCode {
 
 /// Plain stderr tracing; the CLI's stdout is for machine-readable
 /// output (status JSON, watch events). Anything chatty goes to
-/// stderr so `inferdctl status | jq` stays clean.
+/// stderr so `inferd status | jq` stays clean.
 fn install_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
     let filter =
-        EnvFilter::try_from_env("INFERDCTL_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+        EnvFilter::try_from_env("INFERD_CLI_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::registry()
         .with(filter)
         .with(
@@ -171,7 +180,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
 
     let spec: ModelSpec = (&cfg.model).into();
     eprintln!(
-        "inferdctl: pulling {} -> {}",
+        "inferd: pulling {} -> {}",
         spec.name,
         store.root().display()
     );
@@ -179,7 +188,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
     // The fetch_model function publishes progress through a
     // StatusBroadcaster; we don't have an admin socket here so we
     // just create a throwaway broadcaster. Status events are
-    // dropped on the floor — for `inferdctl pull` the daemon's
+    // dropped on the floor — for `inferd pull` the daemon's
     // stdout-style log lines from fetch.rs are enough.
     let broadcaster = StatusBroadcaster::new(StatusEvent::Starting);
     let bcast = std::sync::Arc::new(broadcaster);
@@ -196,7 +205,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
             .context("fetch task join")?
             .context("fetch failed")?;
 
-    eprintln!("inferdctl: blob ready at {}", blob_path.display());
+    eprintln!("inferd: blob ready at {}", blob_path.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -247,7 +256,7 @@ async fn cmd_doctor(
                     "model",
                     false,
                     &format!(
-                        "blob missing at {}; run `inferdctl pull` or set auto_pull=true",
+                        "blob missing at {}; run `inferd pull` or set auto_pull=true",
                         blob_path.display()
                     ),
                 );

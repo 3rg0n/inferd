@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-05-20
+
+### Changed
+
+- **`inferdctl` renamed to `inferd`.** Single CLI binary in the
+  gh / kubectl shape — same subcommands (`status`, `watch`,
+  `pull`, `doctor`), shorter command, room to grow. Pairs with
+  `inferd-daemon` exactly the way `kubectl` pairs with `kubelet`.
+  Crate moved from `crates/inferdctl/` → `crates/inferd/`. Bin
+  name in release tarballs is now `inferd` / `inferd.exe`.
+- **`inferd-stdio` crate retired.** The previously-scaffolded
+  stdio-shape variant (`-p "..."` prompt mode for one-shot
+  invocations) no longer ships as its own binary. When that
+  shape lands, it'll be the `inferd` CLI's default subcommand
+  — i.e. `inferd -p "hello"` rather than a separate
+  `inferd-stdio "hello"`. One binary, many shapes. The empty
+  Cargo.toml + README scaffold under `crates/inferd-stdio/`
+  was removed.
+
+### Migration
+
+- Operators / consumers using v0.1.9: rename `inferdctl` →
+  `inferd` in scripts. Subcommand surface unchanged.
+- The release tarball still ships `inferd-daemon` for the
+  long-running service; `inferd` is the new shorter name for
+  what was `inferdctl`.
+
 ## [0.1.9] - 2026-05-20
 
 Closes the last protocol-promise gap and adds the operator CLI

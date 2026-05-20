@@ -54,7 +54,7 @@ Single `cargo workspace` at repo root. Crates:
 | `inferd-daemon` | Binary — lifecycle, queue, single-instance lock, Unix socket / Windows named pipe / loopback TCP endpoints, admin socket, activity log, CAS model store, fetch. | shipping |
 | `inferd-engine` | `Backend` trait + adapters. v0.1 ships `llamacpp` (FFI to vendored `libllama`) + `mock` (tests). v0.2 adds Anthropic / OpenAI / Bedrock / LiteLLM behind the same trait. | shipping (llamacpp + mock) |
 | `inferd-client` | Rust client: NDJSON-over-IPC client + admin subscriber + connect-and-retry helpers. Published to crates.io. | shipping |
-| `inferd-stdio` | Same request handling as daemon, NDJSON over stdin/stdout, no listener. | later |
+| `inferd` | Single CLI binary in the gh / kubectl shape. v0.1 subcommands: `status`, `watch`, `pull`, `doctor`. Future: default `-p "..."` prompt mode (replaces the previously-scaffolded `inferd-stdio`). | shipping |
 
 Clients (`clients/go/`, future `clients/py/`, `clients/ts/`) are hand-written wrappers shipped alongside the daemon. The Go client is the canonical example for non-Rust consumers.
 

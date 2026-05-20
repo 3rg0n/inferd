@@ -5,9 +5,7 @@ members = [
     "crates/inferd-engine",
     "crates/inferd-daemon",
     "crates/inferd-client",
-    "crates/inferdctl",
-    # Activated as each crate's source files land in M1+:
-    # "crates/inferd-stdio",
+    "crates/inferd",
 ]
 # fuzz harnesses are intentionally NOT workspace members — they require
 # nightly Rust + libfuzzer-sys + their own resolver. See
@@ -15,7 +13,7 @@ members = [
 exclude = ["crates/inferd-proto/fuzz"]
 
 [workspace.package]
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 # Edition 2024 (stable since Rust 1.85) requires rust-version >= 1.85.
 # 1.89 is the floor we already need for std::fs::File::try_lock used
