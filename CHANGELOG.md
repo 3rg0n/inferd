@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-05-20
+
+Hotfix for issue #6 — llamacpp loader's TOCTOU mitigation made
+the daemon unusable on tmpfs-constrained hosts (WSL2 default
+tmpfs is half of allocated RAM; multi-GB Gemma models did not
+fit). The defensive temp-copy doubled disk usage during cold
+start; the gap it actually defended (sub-microsecond rewrite
+race within an already-compromised file-write threat) is not
+worth that cost.
+
+### Changed
+
+- **`crates/inferd-engine/src/llamacpp/loader.rs`**: when an
+  `expected_sha256` is supplied, stream-hash the model file
+  in place at its original path and hand that same path to
+  `llama_model_load_from_file`. No more daemon-owned tempdir
+  copy. The residual TOCTOU window between hash and mmap is
+  microseconds; an attacker who can rewrite the user's model
+  file in that window has write access to the model file in
+  general, which is already a threat that exceeds what
+  hashing can defend against — same justification F-6
+  already applied to the no-hash path.
+- **`THREAT_MODEL.md` F-6**: status changed from "mitigated"
+  to "accepted" with the rationale above. Earlier mitigation
+  documented in a "removed (issue #6, 2026-05-20)" subsection
+  so the intent stays discoverable in `git blame` and the
+  doc.
+- **`crates/inferd-engine/Cargo.toml`**: dropped runtime
+  `tempfile` dependency (no longer needed; only the
+  dev-dependencies entry for tests remains).
+
+### Fixed
+
+- WSL2 / tmpfs-constrained hosts can now load multi-GB GGUFs
+  on first boot without exceeding the temp-FS cap. Previously
+  failed with `os error 28: No space left on device` and
+  crash-looped to systemd's `StartLimitBurst`.
+
 ## [0.1.12] - 2026-05-20
 
 Hotfix: v0.1.11 macOS tarball was missing
