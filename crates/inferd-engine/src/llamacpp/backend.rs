@@ -27,6 +27,7 @@ use crate::ffi;
 use crate::llamacpp::chat_template::Gemma4Renderer;
 use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
 use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
+use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
 use async_trait::async_trait;
 use base64::Engine as _;
 use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
@@ -839,6 +840,8 @@ fn run_generation_v2(
     let mut completion_tokens: u32 = 0;
     let mut buf = [0u8; 256];
     let mut n_past = n_past;
+    let mut parser = ToolCallParser::new();
+    let mut emitted_tool_use = false;
 
     for _ in 0..max_new {
         // Sample.
@@ -848,8 +851,21 @@ fn run_generation_v2(
         // SAFETY: FFI; vocab valid.
         let is_eog = unsafe { ffi::llama_vocab_is_eog(vocab, next) };
         if is_eog {
+            // Flush any text the parser was holding before emitting Done.
+            for ev in parser.finish() {
+                if let Some(out_ev) = parser_output_to_event_v2(ev, &mut emitted_tool_use)
+                    && tx.blocking_send(out_ev).is_err()
+                {
+                    return Ok(());
+                }
+            }
+            let stop = if emitted_tool_use {
+                StopReasonV2::ToolUse
+            } else {
+                StopReasonV2::EndTurn
+            };
             let _ = tx.blocking_send(TokenEventV2::Done {
-                stop_reason: StopReasonV2::EndTurn,
+                stop_reason: stop,
                 usage: UsageV2 {
                     input_tokens: prompt_tokens,
                     output_tokens: completion_tokens,
@@ -863,9 +879,24 @@ fn run_generation_v2(
 
         let piece = token_to_piece(vocab, next, &mut buf);
         let text = String::from_utf8_lossy(piece).into_owned();
-        if tx.blocking_send(TokenEventV2::Text(text)).is_err() {
-            debug!("v2 generation cancelled (receiver dropped)");
-            return Ok(());
+        // Run through the tool/thinking parser. The parser may emit
+        // 0 or more events per piece (text deltas, thinking deltas,
+        // complete tool_use, or malformed).
+        for ev in parser.push(&text) {
+            if let TokenOutput::Malformed(reason) = &ev {
+                warn!(reason = %reason, "tool-call parse failed; aborting generation");
+                // Mid-stream malformed -> terminate stream silently;
+                // daemon translates to BackendUnavailable. (We could
+                // add a ToolCallMalformed code path through
+                // GenerateError but that's a larger refactor.)
+                return Err(LlamaCppError::Render(reason.clone()));
+            }
+            if let Some(out_ev) = parser_output_to_event_v2(ev, &mut emitted_tool_use)
+                && tx.blocking_send(out_ev).is_err()
+            {
+                debug!("v2 generation cancelled (receiver dropped)");
+                return Ok(());
+            }
         }
         completion_tokens = completion_tokens.saturating_add(1);
 
@@ -880,7 +911,14 @@ fn run_generation_v2(
         n_past = n_past.saturating_add(1);
     }
 
-    // max_tokens reached.
+    // max_tokens reached. Flush any remaining parser state.
+    for ev in parser.finish() {
+        if let Some(out_ev) = parser_output_to_event_v2(ev, &mut emitted_tool_use)
+            && tx.blocking_send(out_ev).is_err()
+        {
+            return Ok(());
+        }
+    }
     let _ = tx.blocking_send(TokenEventV2::Done {
         stop_reason: StopReasonV2::MaxTokens,
         usage: UsageV2 {
@@ -889,6 +927,43 @@ fn run_generation_v2(
         },
     });
     Ok(())
+}
+
+/// Map a `ToolCallParser::Output` to a `TokenEventV2`. Sets
+/// `emitted_tool_use` when a `ToolUse` is emitted so the terminal
+/// stop_reason can be set correctly. Returns `None` for the
+/// `Malformed` variant (the caller handles that path separately
+/// via an early return).
+fn parser_output_to_event_v2(ev: TokenOutput, emitted_tool_use: &mut bool) -> Option<TokenEventV2> {
+    match ev {
+        TokenOutput::Text(text) => {
+            if text.is_empty() {
+                None
+            } else {
+                Some(TokenEventV2::Text(text))
+            }
+        }
+        TokenOutput::Thinking(text) => {
+            if text.is_empty() {
+                None
+            } else {
+                Some(TokenEventV2::Thinking(text))
+            }
+        }
+        TokenOutput::ToolUse {
+            tool_call_id,
+            name,
+            input,
+        } => {
+            *emitted_tool_use = true;
+            Some(TokenEventV2::ToolUse {
+                tool_call_id,
+                name,
+                input,
+            })
+        }
+        TokenOutput::Malformed(_) => None,
+    }
 }
 
 #[cfg(test)]
