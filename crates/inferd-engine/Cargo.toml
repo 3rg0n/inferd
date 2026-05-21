@@ -25,6 +25,11 @@ cuda                 = ["llamacpp"]
 metal                = ["llamacpp"]
 vulkan               = ["llamacpp"]
 rocm                 = ["llamacpp"]
+# OpenAI-compat outbound HTTP backend (Phase 5A). Pulls in reqwest +
+# eventsource_stream. The daemon never *serves* HTTP — this is the
+# narrow outbound carve-out wrapped behind the Backend trait
+# (ADR 0006 §"cloud backends").
+openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util"]
 
 [dependencies]
 inferd-proto = { path = "../inferd-proto", version = "=0.1.13" }
@@ -47,6 +52,13 @@ base64       = "0.22"
 # in transitively via `inferd-proto`'s v2 ToolUseInput type alias.
 serde_json   = { workspace = true }
 
+# --- Optional: OpenAI-compat HTTP backend (Phase 5A). Pulled in only
+# when the `openai` feature is on. rustls-only to avoid OpenSSL on
+# Windows.
+reqwest             = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"], optional = true }
+eventsource-stream  = { version = "0.2", optional = true }
+futures-util        = { version = "0.3", optional = true }
+
 [build-dependencies]
 # Only invoked when the `llamacpp` feature is enabled; the build.rs
 # checks env::var("CARGO_FEATURE_LLAMACPP") and short-circuits otherwise.
@@ -62,3 +74,5 @@ tempfile = "3"
 # codec). image is dev-only.
 image    = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64   = "0.22"
+# Mock HTTP server for the openai-compat adapter unit tests.
+wiremock = "0.6"

@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **inferd-engine: OpenAI-compat HTTP backend adapter** (Phase 5A,
+  feature-gated behind `openai`). New `openai_compat` module
+  implementing `Backend` against any upstream that speaks the
+  OpenAI Chat Completions wire (OpenAI itself, vLLM, LM Studio,
+  LocalAI, llama.cpp's `server`, OpenRouter, …). The narrow
+  outbound-HTTPS carve-out lives behind the `Backend` trait per
+  ADR 0006 §"cloud backends" — the daemon never *serves* HTTP.
+  Public surface: `OpenAiCompat` (the adapter), `OpenAiCompatConfig`
+  (`base_url`, `api_key`, `model`, `timeout`), `OpenAiCompatError`.
+  Capabilities advertise `v2 + tools` only — multimodal stays off
+  in v0.2 (raw-bytes attachment shape from ADR 0016 doesn't map
+  cleanly to OpenAI's `image_url` data-URL form), and thinking
+  stays off (no public reasoning channel on Chat Completions).
+  v1 path is rejected with `Internal("openai-compat backend
+  supports v2 only")`. Wire shape:
+    - Request mapping (`mapper::request_from_resolved`): Text
+      blocks → `messages[].content`; assistant `ToolUse` blocks →
+      `messages[].tool_calls[]` (each `arguments` is `serde_json`-
+      stringified, as the wire requires); consumer `ToolResult`
+      blocks expand into separate `role: "tool"` messages
+      addressed by `tool_call_id`; `tools[]` → top-level
+      `tools[{type:"function", function:{name, description,
+      parameters}}]`. `stream: true` always; `stream_options.
+      include_usage: true` so the upstream emits a final usage
+      chunk.
+    - Response mapping (`mapper::ChunkAccumulator`): SSE chunks
+      parsed via `eventsource-stream`; text deltas pass through
+      as `TokenEventV2::Text`; tool-call deltas accumulate per
+      `index` slot until `finish_reason: tool_calls`, then emit
+      buffered call as `TokenEventV2::ToolUse`; trailing chunk's
+      `usage` populates the v2 `Done` frame. `finish_reason`
+      maps `stop` → `EndTurn`, `length` → `MaxTokens`,
+      `tool_calls` / `function_call` → `ToolUse`, missing →
+      `Error` (translated to `BackendUnavailable` daemon-side).
+    - Pre-stream errors (transport, non-2xx HTTP) surface as
+      `GenerateError::Unavailable` per ADR 0007; mid-stream
+      transport errors terminate the channel without `Done`
+      (lifecycle layer synthesises `error` frame). The reqwest
+      client is rustls-only (no OpenSSL on Windows). Default
+      timeout: 5 minutes.
+  Tests: 8 mapper unit tests (text round-trip, tool replay,
+  tool-result expansion, attachment rejection, accumulator
+  behaviour across single text deltas, tool calls split across
+  many chunks, missing-finish_reason error mapping). 5 wiremock-
+  based integration tests in `tests/openai_compat.rs` exercising
+  the full HTTP+SSE round-trip including the no-API-key path.
+  New optional deps: `reqwest 0.12` (rustls-tls + json + stream),
+  `eventsource-stream 0.2`, `futures-util 0.3`. Dev-dep:
+  `wiremock 0.6`. Wire selection between adapters lands in
+  Phase 5B (real router policy).
 - **inferd-proto: v2 type surface** under the new `v2::` module
   (per ADR 0015). `RequestV2`, `MessageV2`, `ContentBlock` (with
   `Text` / `Image` / `Audio` / `Video` / `ToolUse` / `ToolResult`
