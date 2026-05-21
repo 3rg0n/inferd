@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 7: config-file embed fields on `LlamacppEntry`.**
+  `LlamacppEntry` (multi-backend `backends:` shape) gains `embed:
+  bool` (default `false`), `embed_pooling: Option<i32>` (default
+  `None`, treated as `LLAMA_POOLING_TYPE_MEAN` by the adapter),
+  and `embed_n_ctx: u32` (default `2048` — EmbeddingGemma 300M's
+  window). The daemon's `build_llamacpp_from_entry` plumbs these
+  three fields straight through to `LlamaCppConfig`, so an
+  operator who declares `embed: true` on a backend gets a
+  capability-advertising backend without further wiring. Legacy
+  single-`model:` configs predate ADR 0017 and stay generation-
+  only — the legacy promotion path explicitly sets `embed: false`
+  with the embed-context defaults so the field shape stays
+  consistent. Three new tests cover (1) default-off behaviour
+  when the operator omits the fields, (2) round-trip when all
+  three are set, and (3) the legacy promotion path still flips
+  embed off. Workspace clippy + tests stay green; this closes
+  out Phase 6B-7 (#97), unblocking #87 (v0.2.0 tag) for explicit
+  human go-ahead.
+
 - **Phase 6B-7 part 6: INTEGRATING.md embed section.**
   Added an "Embeddings (v0.2)" section with the third-socket
   endpoint table, capability-discovery / `inferd doctor` snippet,

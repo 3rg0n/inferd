@@ -239,6 +239,31 @@ pub struct LlamacppEntry {
     /// Llama.cpp GPU layer offload count. 0 = CPU-only. Default: 0.
     #[serde(default)]
     pub n_gpu_layers: i32,
+
+    /// Opt this backend into serving embeddings per ADR 0017. When
+    /// `true`, the adapter allocates a *second* `llama_context`
+    /// configured with `embeddings = true` so embed requests don't
+    /// race the generation context. `capabilities().embed` flips
+    /// `true` accordingly. Default: `false`.
+    #[serde(default)]
+    pub embed: bool,
+
+    /// Pooling strategy for the embedding context, mapped 1:1 to
+    /// llama.cpp's `enum llama_pooling_type`. Most embedding models
+    /// expect `1` (`LLAMA_POOLING_TYPE_MEAN`), which is the default;
+    /// EmbeddingGemma 300M is in this group. Set explicitly only if
+    /// the model documents a different strategy (e.g. `2` =
+    /// `CLS`, `3` = `LAST`). Ignored when `embed = false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_pooling: Option<i32>,
+
+    /// Context window for the dedicated embedding `llama_context`,
+    /// in tokens. Embedding models typically have a smaller window
+    /// than generation models — 2048 is the EmbeddingGemma 300M
+    /// default and is what the adapter uses when this is unset.
+    /// Ignored when `embed = false`.
+    #[serde(default = "default_embed_n_ctx")]
+    pub embed_n_ctx: u32,
 }
 
 /// OpenAI-compat backend entry inside `backends:`.
@@ -352,6 +377,10 @@ fn default_auto_pull() -> bool {
 
 fn default_n_ctx() -> u32 {
     8192
+}
+
+fn default_embed_n_ctx() -> u32 {
+    2048
 }
 
 fn default_openai_timeout_secs() -> u64 {
@@ -593,6 +622,13 @@ impl ConfigFile {
             model: m,
             n_ctx: self.n_ctx,
             n_gpu_layers: self.n_gpu_layers,
+            // Legacy single-model configs predate ADR 0017's embed
+            // surface and stay generation-only. Operators wanting
+            // embeddings migrate to the multi-backend `backends:`
+            // shape.
+            embed: false,
+            embed_pooling: None,
+            embed_n_ctx: default_embed_n_ctx(),
         })]
     }
 }
@@ -1088,6 +1124,67 @@ mod tests {
         assert_eq!(listen.tcp.as_deref(), Some("127.0.0.1:9090"));
         assert_eq!(listen.tcp_v2.as_deref(), Some("127.0.0.1:9091"));
         assert_eq!(listen.api_key_env.as_deref(), Some("INFERD_TCP_API_KEY"));
+    }
+
+    #[test]
+    fn llamacpp_entry_embed_defaults_off() {
+        let f = write_config(&good_multi_backend_json());
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let list = cfg.backends.as_ref().unwrap();
+        match &list[0] {
+            BackendEntry::Llamacpp(e) => {
+                assert!(!e.embed);
+                assert!(e.embed_pooling.is_none());
+                assert_eq!(e.embed_n_ctx, 2048);
+            }
+            other => panic!("expected llamacpp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn llamacpp_entry_carries_embed_fields() {
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "llamacpp",
+                    "name": "embeddings",
+                    "embed": true,
+                    "embed_pooling": 1,
+                    "embed_n_ctx": 1024,
+                    "model": {
+                        "name": "embeddinggemma-300m",
+                        "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                        "source_url": "https://example.com/embed.gguf"
+                    }
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let list = cfg.backends.as_ref().unwrap();
+        match &list[0] {
+            BackendEntry::Llamacpp(e) => {
+                assert!(e.embed);
+                assert_eq!(e.embed_pooling, Some(1));
+                assert_eq!(e.embed_n_ctx, 1024);
+            }
+            other => panic!("expected llamacpp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_promotion_keeps_embed_off() {
+        let f = write_config(&good_json());
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let list = cfg.resolved_backends();
+        match &list[0] {
+            BackendEntry::Llamacpp(e) => {
+                assert!(!e.embed);
+                assert!(e.embed_pooling.is_none());
+                assert_eq!(e.embed_n_ctx, 2048);
+            }
+            other => panic!("expected llamacpp, got {other:?}"),
+        }
     }
 
     #[test]

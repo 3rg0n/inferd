@@ -973,6 +973,9 @@ async fn build_llamacpp_entry(
         model_sha256: Some(model_sha256_bytes),
         n_ctx,
         n_gpu_layers,
+        embed: entry.embed,
+        embed_pooling: entry.embed_pooling,
+        embed_n_ctx: entry.embed_n_ctx,
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed for {}: {e}", entry.name))?;
