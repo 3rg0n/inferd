@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 1: embed wire types in `inferd-proto`.** New
+  `embed` module (sibling to `v2`) ships `EmbedRequest` / `EmbedResolved`
+  / `EmbedTask` / `EmbedResponse` / `EmbedErrorCode` / `EmbedUsage`,
+  matching ADR 0017's locked envelope. Single-frame request: `id`
+  (correlation), `input` (non-empty array of non-empty strings),
+  optional `dimensions` (MRL truncation length, validated at the
+  backend layer), optional `task` (task-prefix hint with eight
+  EmbeddingGemma-shaped variants plus a forward-compatible `Other`
+  catchall that `resolve()` rejects). Single-frame response: either
+  `Embeddings { embeddings, dimensions, model, usage, backend }` or
+  `Error { code, message }` — no streaming, since an embedding is a
+  complete vector. Error taxonomy matches v1's plus `embed_unsupported`
+  for the belt-and-braces case where the embed socket somehow gets
+  bound on a generation-only daemon. Nine new tests cover empty-input
+  rejection, empty-inner-string rejection, full-JSON round-trip,
+  unknown-task forward-compat, and serializer field elision.
+
 - **ADR 0017: embeddings on a third socket.** Locks the v0.2.0 wire shape
   for embedding requests before code lands. Embeddings ship on a
   dedicated NDJSON-over-IPC socket (`infer.embed.sock` /
