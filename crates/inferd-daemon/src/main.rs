@@ -104,6 +104,12 @@ async fn main() -> anyhow::Result<()> {
             .and_then(|c| c.listen.as_ref())
             .and_then(|l| l.tcp_v2.clone())
     });
+    let resolved_embed_tcp: Option<String> = cli.embed_tcp.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.tcp_embed.clone())
+    });
     // API key resolution for TCP. CLI flag → config.listen.api_key_env
     // → INFERD_API_KEY (already wired through clap's env=). The CLI
     // value (which is the result of the clap layer) is used as the
@@ -145,9 +151,22 @@ async fn main() -> anyhow::Result<()> {
             audio: caps.audio,
             tools: caps.tools,
             thinking: caps.thinking,
+            embed: caps.embed,
             accelerator: caps.accelerator.kind.as_str().to_string(),
             gpu_layers: caps.accelerator.gpu_layers,
         });
+    }
+
+    // Decide whether to bind the embed socket: opt-in via `--embed`
+    // AND at least one registered backend advertises `embed`
+    // capability (ADR 0017 §"Capability-driven binding"). Without
+    // both, the embed socket simply isn't bound.
+    let embed_enabled = cli.embed && backends.iter().any(|b| b.capabilities().embed);
+    if cli.embed && !embed_enabled {
+        warn!(
+            "--embed requested but no registered backend advertises \
+             `capabilities().embed = true`; embed socket will not bind"
+        );
     }
 
     // Build router. Walks the ordered list per ADR 0007.
@@ -166,11 +185,16 @@ async fn main() -> anyhow::Result<()> {
     broadcaster.publish(StatusEvent::Ready);
 
     // Inference shutdown channels — one per listener (v1 always, v2
-    // when enabled).
-    let fanout = if cli.v2 { 2 } else { 1 };
+    // when enabled, embed when enabled + capability matches).
+    let fanout = 1 + usize::from(cli.v2) + usize::from(embed_enabled);
     let mut shutdown_rxs = install_shutdown_signal(fanout)?;
     let inference_shutdown_tx = shutdown_rxs.remove(0);
     let v2_shutdown_tx = if cli.v2 {
+        Some(shutdown_rxs.remove(0))
+    } else {
+        None
+    };
+    let embed_shutdown_tx = if embed_enabled {
         Some(shutdown_rxs.remove(0))
     } else {
         None
@@ -188,7 +212,9 @@ async fn main() -> anyhow::Result<()> {
         expected_api_key: effective_api_key.clone(),
         admission: Some(admission),
     };
-    let any_tcp = matches!(resolved_v1, ResolvedTransport::Tcp(_)) || resolved_v2_tcp.is_some();
+    let any_tcp = matches!(resolved_v1, ResolvedTransport::Tcp(_))
+        || resolved_v2_tcp.is_some()
+        || (embed_enabled && resolved_embed_tcp.is_some());
     if any_tcp && accept_ctx.expected_api_key.is_some() {
         info!("tcp api-key auth enabled (F-8)");
     } else if any_tcp {
@@ -208,6 +234,24 @@ async fn main() -> anyhow::Result<()> {
             spawn_v2_listener(
                 &cli,
                 resolved_v2_tcp.as_deref(),
+                Arc::clone(&router),
+                accept_ctx.clone(),
+                rx,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    // Spawn the embed listener if enabled and the active backend
+    // advertises embed capability (ADR 0017). Embed shares the same
+    // Router + admission gate as v1 / v2.
+    let embed_handle = if let Some(rx) = embed_shutdown_tx {
+        Some(
+            spawn_embed_listener(
+                &cli,
+                resolved_embed_tcp.as_deref(),
                 Arc::clone(&router),
                 accept_ctx.clone(),
                 rx,
@@ -267,6 +311,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Wait for the v2 listener to finish draining if it was running.
     if let Some(handle) = v2_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
+    // Same for embed.
+    if let Some(handle) = embed_handle {
         let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
     }
 
@@ -344,6 +393,78 @@ async fn spawn_v2_listener(
         {
             drop((path, router, accept_ctx, shutdown_rx));
             anyhow::bail!("v2 endpoint requires unix or windows; use --v2-tcp instead")
+        }
+    }
+}
+
+/// Bind the embed inference listener and spawn its accept loop.
+/// Returns the JoinHandle so main can await graceful drain. Embed is
+/// per ADR 0017: separate socket from v1/v2; reuses the same admission
+/// gate + API key + Router. Bound only when the active router has at
+/// least one backend with `BackendCapabilities::embed == true`.
+async fn spawn_embed_listener(
+    cli: &Cli,
+    resolved_embed_tcp: Option<&str>,
+    router: Arc<Router>,
+    accept_ctx: AcceptContext,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    use inferd_daemon::endpoint::default_embed_addr;
+    use inferd_daemon::lifecycle_embed;
+
+    if let Some(addr) = resolved_embed_tcp {
+        let listener = bind_tcp(addr).await?;
+        info!(addr = %listener.local_addr()?, "embed tcp listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) =
+                lifecycle_embed::serve_tcp_embed(listener, router, accept_ctx, shutdown_rx).await
+            {
+                error!(error = ?e, "embed tcp listener error");
+            }
+        }))
+    } else {
+        let path = cli.embed_addr.clone().unwrap_or_else(default_embed_addr);
+        #[cfg(unix)]
+        {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
+            info!(path = %path.display(), "embed uds listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) =
+                    lifecycle_embed::serve_uds_embed(listener, router, accept_ctx, shutdown_rx)
+                        .await
+                {
+                    error!(error = ?e, "embed uds listener error");
+                }
+            }))
+        }
+        #[cfg(windows)]
+        {
+            let path_str = path
+                .to_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("embed pipe path is not valid utf-8: {}", path.display())
+                })?
+                .to_string();
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
+            info!(path = %path_str, "embed named pipe listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) = lifecycle_embed::serve_named_pipe_embed(
+                    &path_str,
+                    first,
+                    router,
+                    accept_ctx,
+                    shutdown_rx,
+                )
+                .await
+                {
+                    error!(error = ?e, "embed named pipe listener error");
+                }
+            }))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            drop((path, router, accept_ctx, shutdown_rx));
+            anyhow::bail!("embed endpoint requires unix or windows; use --embed-tcp instead")
         }
     }
 }

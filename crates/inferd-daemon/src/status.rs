@@ -57,6 +57,10 @@ pub enum StatusEvent {
         /// `true` if the backend separates `<|think|>` reasoning
         /// trace from user-visible output.
         thinking: bool,
+        /// `true` if the backend implements `embed` (per ADR 0017).
+        /// Subscribers use this to decide whether to expose embedding
+        /// surfaces in their UIs.
+        embed: bool,
         /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
         /// / `"vulkan"` / `"rocm"`.
         accelerator: String,

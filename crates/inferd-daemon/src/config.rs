@@ -224,6 +224,27 @@ pub struct Cli {
     /// unless `--v2` is also set.
     #[arg(long, env = "INFERD_V2_TCP", conflicts_with = "v2_addr")]
     pub v2_tcp: Option<String>,
+
+    /// Enable the embed inference endpoint per ADR 0017. The embed
+    /// endpoint binds on a *separate* socket from v1/v2:
+    /// `infer.embed.sock` on Unix / `\\.\pipe\inferd-infer-embed`
+    /// on Windows. Has no effect unless the active backend's
+    /// `capabilities().embed` is true (capability-driven binding).
+    #[arg(long, env = "INFERD_EMBED")]
+    pub embed: bool,
+
+    /// Override the default embed inference endpoint path.
+    /// Mirrors `--uds` / `--pipe` for embed; on Linux/macOS this is
+    /// a UDS path, on Windows a named-pipe path. Has no effect
+    /// unless `--embed` is also set.
+    #[arg(long, env = "INFERD_EMBED_ADDR")]
+    pub embed_addr: Option<PathBuf>,
+
+    /// Loopback TCP bind address for the embed endpoint. Mutually
+    /// exclusive with `--embed-addr`. Has no effect unless `--embed`
+    /// is also set.
+    #[arg(long, env = "INFERD_EMBED_TCP", conflicts_with = "embed_addr")]
+    pub embed_tcp: Option<String>,
 }
 
 impl Cli {
@@ -365,6 +386,52 @@ mod tests {
             "127.0.0.1:0",
         ]);
         assert!(!cli.v2);
+    }
+
+    #[test]
+    fn cli_accepts_embed_flag() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--embed",
+            "--embed-tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(cli.embed);
+        assert!(cli.embed_tcp.is_some());
+        assert!(cli.embed_addr.is_none());
+    }
+
+    #[test]
+    fn cli_rejects_embed_addr_with_embed_tcp() {
+        let result = Cli::try_parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--embed",
+            "--embed-tcp",
+            "127.0.0.1:0",
+            "--embed-addr",
+            "/tmp/inferd-embed.sock",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_embed_disabled_by_default() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(!cli.embed);
     }
 
     #[cfg(feature = "openai")]
