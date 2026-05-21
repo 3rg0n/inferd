@@ -63,6 +63,7 @@ async fn capabilities_advertise_v2_and_tools_only() {
             audio: false,
             video: false,
             thinking: false,
+            embed: false,
             accelerator: Default::default(),
         }
     );

@@ -20,8 +20,8 @@
 #![allow(unsafe_code)] // FFI surface; module-scoped.
 
 use crate::backend::{
-    AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, GenerateError, TokenEvent,
-    TokenEventV2, TokenStream, TokenStreamV2,
+    AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, EmbedError, EmbedResult,
+    GenerateError, TokenEvent, TokenEventV2, TokenStream, TokenStreamV2,
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::Gemma4Renderer;
@@ -30,6 +30,7 @@ use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
 use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
 use async_trait::async_trait;
 use base64::Engine as _;
+use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::ffi::CString;
@@ -103,6 +104,22 @@ pub struct LlamaCppConfig {
     /// Optional expected SHA-256 of the mmproj file. Same shape as
     /// `model_sha256`; verified before mtmd_init_from_file.
     pub mmproj_sha256: Option<[u8; 32]>,
+    /// Enable the embedding pathway (per ADR 0017). When `true` the
+    /// adapter allocates a second `llama_context` configured with
+    /// `embeddings = true` + `pooling_type = MEAN`, advertises
+    /// `BackendCapabilities::embed = true`, and serves
+    /// `Backend::embed`. Defaults to `false` so generation-only
+    /// deployments don't pay the second-context allocation cost.
+    pub embed: bool,
+    /// Pooling type for the embed context. `LLAMA_POOLING_TYPE_MEAN`
+    /// (1) is the EmbeddingGemma default and is the value used when
+    /// this is `None`. Other values map directly to the libllama
+    /// `llama_pooling_type` enum.
+    pub embed_pooling: Option<i32>,
+    /// Context window for the embed context. EmbeddingGemma 300M
+    /// supports up to 2048; defaults to that. Larger inputs produce
+    /// `EmbedError::InvalidRequest`.
+    pub embed_n_ctx: u32,
 }
 
 impl Default for LlamaCppConfig {
@@ -115,6 +132,9 @@ impl Default for LlamaCppConfig {
             seed: 0xDEADBEEF,
             mmproj_path: None,
             mmproj_sha256: None,
+            embed: false,
+            embed_pooling: None,
+            embed_n_ctx: 2048,
         }
     }
 }
@@ -180,6 +200,23 @@ struct State {
     /// Cached capabilities derived from the `Mtmd` probe. None when
     /// no mmproj was configured (text-only).
     caps_v2: Option<BackendCapabilitiesV2>,
+    /// Dedicated embedding context. `Some` when the adapter was
+    /// configured with `embed = true`. Allocated alongside the
+    /// generation context so embed and generate calls don't fight
+    /// over `llama_set_embeddings`. Drop order (embed → ctx → model)
+    /// ensures the embed context is freed before the parent model.
+    embed: Option<EmbedContext>,
+}
+
+/// Owned `llama_context` reserved for embedding. Same shape as
+/// `ContextHandle` but kept as its own type so a future divergence in
+/// per-context state (e.g. cached batch) doesn't need a rename.
+struct EmbedContext {
+    ctx: ContextHandle,
+    /// Embedding dimension reported by `llama_n_embd` at construction
+    /// time. Cached so `embed()` can size the output vectors without
+    /// re-querying.
+    n_embd: u32,
 }
 
 /// Internal capability snapshot used by `Backend::capabilities()`.
@@ -247,6 +284,38 @@ impl LlamaCpp {
             gpu_layers: config.n_gpu_layers.max(0) as u32,
         };
 
+        // Optional dedicated embedding context. Built with
+        // `embeddings = true` + a configurable pooling_type (default
+        // MEAN, what EmbeddingGemma expects). Kept alongside the
+        // generation context so `Backend::embed` doesn't toggle
+        // `llama_set_embeddings` on the generation context — that
+        // would corrupt active generations on the same context.
+        let embed = if config.embed {
+            // SAFETY: FFI. `model.as_ptr()` is non-null and valid.
+            // `params` is POD initialised by libllama.
+            let embed_ctx_ptr = unsafe {
+                let mut params = ffi::llama_context_default_params();
+                params.n_ctx = config.embed_n_ctx;
+                params.embeddings = true;
+                params.pooling_type = config.embed_pooling.unwrap_or(ffi::LLAMA_POOLING_TYPE_MEAN);
+                ffi::llama_init_from_model(model.as_ptr(), params)
+            };
+            let embed_ctx = NonNull::new(embed_ctx_ptr)
+                .map(|ptr| ContextHandle { ptr })
+                .ok_or(LlamaCppError::ContextInit)?;
+            // SAFETY: FFI; `model.as_ptr()` valid.
+            let n_embd = unsafe { ffi::llama_n_embd(model.as_ptr()) };
+            if n_embd <= 0 {
+                return Err(LlamaCppError::ContextInit);
+            }
+            Some(EmbedContext {
+                ctx: embed_ctx,
+                n_embd: n_embd as u32,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             name: "llamacpp",
             ready: AtomicBool::new(true),
@@ -257,6 +326,7 @@ impl LlamaCpp {
                 ctx,
                 mtmd,
                 caps_v2,
+                embed,
             })),
         })
     }
@@ -285,9 +355,9 @@ impl Backend for LlamaCpp {
         // initialised successfully — without an mmproj we'd reject
         // image / audio attachments anyway, so v2-without-mmproj is
         // not a useful state to advertise.
-        let snap = {
+        let (snap, embed) = {
             let guard = self.state.lock().expect("poisoned llamacpp state mutex");
-            guard.caps_v2
+            (guard.caps_v2, guard.embed.is_some())
         };
         match snap {
             Some(caps) => BackendCapabilities {
@@ -297,9 +367,11 @@ impl Backend for LlamaCpp {
                 video: false,
                 tools: true,
                 thinking: true,
+                embed,
                 accelerator: self.accelerator,
             },
             None => BackendCapabilities {
+                embed,
                 accelerator: self.accelerator,
                 ..BackendCapabilities::default()
             },
@@ -373,6 +445,30 @@ impl Backend for LlamaCpp {
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    async fn embed(&self, req: EmbedResolved) -> Result<EmbedResult, EmbedError> {
+        if !self.ready() {
+            return Err(EmbedError::NotReady);
+        }
+
+        // Pre-stamp inputs with the EmbeddingGemma task prefix on the
+        // calling task so the spawn_blocking closure sees the final
+        // text. Synchronous + cheap.
+        let task = req.task.clone();
+        let prefixed: Vec<String> = req
+            .input
+            .iter()
+            .map(|s| apply_task_prefix(task.as_ref(), s))
+            .collect();
+        let dimensions = req.dimensions;
+
+        let state = Arc::clone(&self.state);
+        // FFI must run on a blocking thread so it doesn't stall the
+        // tokio runtime.
+        tokio::task::spawn_blocking(move || run_embed(&state, &prefixed, dimensions))
+            .await
+            .map_err(|e| EmbedError::Internal(format!("embed task join: {e}")))?
     }
 
     async fn stop(&self, _timeout: Duration) -> Result<(), GenerateError> {
@@ -994,6 +1090,139 @@ fn parser_output_to_event_v2(ev: TokenOutput, emitted_tool_use: &mut bool) -> Op
             })
         }
         TokenOutput::Malformed(_) => None,
+    }
+}
+
+/// Apply the EmbeddingGemma task-prefix convention. The prefixes are
+/// the documented strings the model was trained with; backends that
+/// don't apply prefixes ignore the field. `None` returns the input
+/// unchanged.
+fn apply_task_prefix(task: Option<&inferd_proto::embed::EmbedTask>, input: &str) -> String {
+    use inferd_proto::embed::EmbedTask;
+    let prefix = match task {
+        None | Some(EmbedTask::Other) => return input.to_string(),
+        Some(EmbedTask::RetrievalQuery) => "task: search result | query: ",
+        Some(EmbedTask::RetrievalDocument) => "title: none | text: ",
+        Some(EmbedTask::Similarity) => "task: sentence similarity | query: ",
+        Some(EmbedTask::Classification) => "task: classification | query: ",
+        Some(EmbedTask::Clustering) => "task: clustering | query: ",
+        Some(EmbedTask::QuestionAnswering) => "task: question answering | query: ",
+        Some(EmbedTask::FactVerification) => "task: fact checking | query: ",
+        Some(EmbedTask::CodeRetrievalQuery) => "task: code retrieval | query: ",
+    };
+    let mut out = String::with_capacity(prefix.len() + input.len());
+    out.push_str(prefix);
+    out.push_str(input);
+    out
+}
+
+/// Run `n_inputs` embed calls against the dedicated embed context.
+///
+/// Each input is tokenised, encoded with `llama_encode`, and the
+/// pooled per-sequence embedding read via
+/// `llama_get_embeddings_seq`. KV cache is cleared between inputs so
+/// independent inputs don't bleed into one another.
+///
+/// Matryoshka truncation: when `requested_dim` is `Some(n)` and `n <=
+/// model_n_embd`, the leading `n` dimensions are returned (and
+/// L2-renormalised so the truncated vector remains unit-norm — this
+/// is the EmbeddingGemma MRL convention). When `n > model_n_embd` we
+/// emit `InvalidRequest` so the caller knows the request is
+/// unsatisfiable.
+fn run_embed(
+    state: &Arc<Mutex<State>>,
+    inputs: &[String],
+    requested_dim: Option<u32>,
+) -> Result<EmbedResult, EmbedError> {
+    let guard = state.lock().expect("poisoned llamacpp state mutex");
+    let model = guard.model.as_ptr();
+    let embed = guard.embed.as_ref().ok_or(EmbedError::Unsupported)?;
+    let ctx = embed.ctx.ptr.as_ptr();
+    let n_embd = embed.n_embd as usize;
+
+    if let Some(d) = requested_dim
+        && d as usize > n_embd
+    {
+        return Err(EmbedError::InvalidRequest(format!(
+            "dimensions {d} exceeds model n_embd {n_embd}"
+        )));
+    }
+    let out_dim = requested_dim.map(|d| d as usize).unwrap_or(n_embd);
+
+    // SAFETY: FFI; pointers held under the lock guard.
+    let vocab = unsafe { ffi::llama_model_get_vocab(model) };
+
+    let mut input_tokens: u32 = 0;
+    let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
+
+    for text in inputs {
+        // Reset KV cache so each input starts at position 0.
+        // SAFETY: FFI; ctx valid in scope.
+        unsafe {
+            let mem = ffi::llama_get_memory(ctx);
+            if !mem.is_null() {
+                ffi::llama_memory_clear(mem, true);
+            }
+        }
+
+        // Tokenise. add_special=true so BOS/EOS markers the encoder
+        // expects are emitted; parse_special=false because user input
+        // shouldn't be interpreted as a control token.
+        let mut tokens = tokenize(vocab, text.as_bytes(), true, false)
+            .map_err(|_| EmbedError::InvalidRequest("tokenize failed".into()))?;
+        if tokens.is_empty() {
+            return Err(EmbedError::InvalidRequest(
+                "input produced zero tokens".into(),
+            ));
+        }
+        input_tokens = input_tokens.saturating_add(tokens.len() as u32);
+
+        // SAFETY: FFI; tokens.as_mut_ptr() valid for the call.
+        let batch = unsafe { ffi::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32) };
+        // SAFETY: FFI; ctx valid.
+        let rc = unsafe { ffi::llama_encode(ctx, batch) };
+        if rc != 0 {
+            return Err(EmbedError::Unavailable(format!(
+                "llama_encode failed: {rc}"
+            )));
+        }
+
+        // Read pooled embedding for sequence 0 (llama_batch_get_one
+        // assigns all tokens to seq_id 0).
+        // SAFETY: FFI; ctx valid; pointer is owned by libllama and
+        // valid until the next encode/decode call.
+        let raw = unsafe { ffi::llama_get_embeddings_seq(ctx, 0) };
+        if raw.is_null() {
+            return Err(EmbedError::Unavailable(
+                "llama_get_embeddings_seq returned null".into(),
+            ));
+        }
+        // SAFETY: FFI contract — `raw` points to `n_embd` consecutive
+        // f32 values.
+        let slice = unsafe { std::slice::from_raw_parts(raw, n_embd) };
+
+        // Truncate (MRL) + L2-normalise.
+        let mut vec: Vec<f32> = slice[..out_dim].to_vec();
+        l2_normalise(&mut vec);
+        embeddings.push(vec);
+    }
+
+    Ok(EmbedResult {
+        embeddings,
+        dimensions: out_dim as u32,
+        model: "llamacpp".to_string(),
+        usage: EmbedUsage { input_tokens },
+    })
+}
+
+/// In-place L2 normalisation. Zero-norm vectors are left unchanged
+/// (no division by zero).
+fn l2_normalise(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
     }
 }
 

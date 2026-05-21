@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 3: llamacpp embed adapter.** `LlamaCppConfig`
+  grows `embed: bool`, `embed_pooling: Option<i32>` (defaults to
+  `LLAMA_POOLING_TYPE_MEAN` — what EmbeddingGemma expects), and
+  `embed_n_ctx: u32` (defaults to 2048, the EmbeddingGemma 300M
+  context). When `embed = true` the adapter allocates a dedicated
+  second `llama_context` configured with `embeddings = true` so
+  `Backend::embed` doesn't have to toggle `llama_set_embeddings` on
+  the live generation context (which would race active generations).
+  `capabilities().embed` flips `true` accordingly. The new
+  `LlamaCpp::embed` impl applies EmbeddingGemma's task-prefix
+  convention before tokenisation (eight `EmbedTask` variants mapped
+  to the documented prefixes; `None` and `Other` pass through
+  unchanged), tokenises each input under the lock guard, runs
+  `llama_encode`, reads the pooled per-sequence vector via
+  `llama_get_embeddings_seq`, applies Matryoshka truncation when
+  `dimensions` is set (rejects values larger than the model's
+  `n_embd`), L2-renormalises the truncated vector, and returns one
+  `Vec<f32>` per input. The FFI work runs on `spawn_blocking` so it
+  doesn't stall the tokio runtime. `bedrock_invoke` and
+  `openai_compat` adapters keep `embed: false` per ADR 0017's
+  v0.2.0 scope. Workspace clippy + tests stay green; daemon
+  socket binding lands in part 4.
+
 - **Phase 6B-7 part 2: `Backend::embed` trait method + Mock impl.**
   Engine crate gains `EmbedResult` (one vector per input + dimensions
   + model name + `EmbedUsage`) and `EmbedError` (its own taxonomy:

@@ -164,6 +164,9 @@ impl Backend for OpenAiCompat {
             audio: false,
             video: false,
             thinking: false,
+            // /v1/embeddings support for openai-compat is deferred
+            // per ADR 0017 §"v0.2.0 scope" — capability stays false.
+            embed: false,
             // Hardware acceleration is upstream-side and not
             // introspectable from here. Default `Cpu / 0` is the
             // honest answer about what *this process* contributes.
