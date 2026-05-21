@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-21
+
 ### Fixed
 
 - **Phase 6B-7 part 8: `LlamaCpp::embed` reports the actual model
