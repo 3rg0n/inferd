@@ -1,6 +1,7 @@
 //! `Backend` trait and shared types.
 
 use async_trait::async_trait;
+use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, ToolCallId, ToolUseInput, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::pin::Pin;
@@ -159,12 +160,62 @@ pub struct BackendCapabilities {
     /// `true` if the backend separates `<|think|>` reasoning trace
     /// from user-visible output.
     pub thinking: bool,
+    /// `true` if the backend implements `embed` (per ADR 0017). When
+    /// `false` the daemon does not bind the embed socket; if it
+    /// somehow gets bound and a request arrives, dispatch returns
+    /// `Error{EmbedUnsupported}`.
+    pub embed: bool,
     /// Hardware-acceleration snapshot. `Cpu / 0` for the default
     /// trait impl; `mock` keeps the default; `llamacpp` reports the
     /// compile-time GGML backend + the configured `n_gpu_layers`.
     /// Reported on admin `status: capabilities` frames and in
     /// `inferd doctor` (#77).
     pub accelerator: AcceleratorInfo,
+}
+
+/// Result of a successful `Backend::embed()` call.
+///
+/// Embedding requests produce a single complete result, not a stream:
+/// one vector per input string in the same order as the request's
+/// `input`. `dimensions` is the actual length of each inner vector
+/// after any MRL truncation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedResult {
+    /// One vector per input string, in input order. All inner vectors
+    /// share the same length (`dimensions`).
+    pub embeddings: Vec<Vec<f32>>,
+    /// Actual length of each inner vector after any MRL truncation.
+    pub dimensions: u32,
+    /// Backend-reported model name (e.g. `"embeddinggemma-300m"`).
+    pub model: String,
+    /// Token-count usage.
+    pub usage: EmbedUsage,
+}
+
+/// Errors returned by `Backend::embed()`.
+///
+/// Distinct from `GenerateError` because the embed surface has a
+/// different error taxonomy (no streaming → no mid-stream concept;
+/// adds `Unsupported` for the not-an-embed-backend case).
+#[derive(Debug, thiserror::Error)]
+pub enum EmbedError {
+    /// Backend was not ready when `embed()` was called.
+    #[error("backend not ready")]
+    NotReady,
+    /// Backend doesn't expose embedding capability.
+    #[error("embed not supported by this backend")]
+    Unsupported,
+    /// Backend rejected the request as malformed (dimensions out of
+    /// range for the model, input too long for the context, etc.).
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    /// Backend tried to embed and failed (model not loaded, remote
+    /// API errored, etc.).
+    #[error("backend unavailable: {0}")]
+    Unavailable(String),
+    /// Anything else.
+    #[error("internal: {0}")]
+    Internal(String),
 }
 
 /// Errors returned by `Backend::generate()` *before* any tokens have streamed.
@@ -233,6 +284,17 @@ pub trait Backend: Send + Sync {
         Err(GenerateError::Internal(
             "v2 not supported by this backend".into(),
         ))
+    }
+
+    /// Compute embeddings for the request's input strings (per
+    /// ADR 0017). Default impl returns `EmbedError::Unsupported` —
+    /// adapters opt in by overriding and setting
+    /// `capabilities().embed = true`. The daemon binds the embed
+    /// socket only when the active backend's capability is `true`,
+    /// so reaching this default impl in production is a fail-safe
+    /// for misconfiguration.
+    async fn embed(&self, _req: EmbedResolved) -> Result<EmbedResult, EmbedError> {
+        Err(EmbedError::Unsupported)
     }
 
     /// Best-effort graceful shutdown. The daemon calls this on stop; the

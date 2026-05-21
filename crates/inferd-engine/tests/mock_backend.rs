@@ -2,7 +2,8 @@
 //! `docs/test-strategy.md`.
 
 use inferd_engine::mock::{Mock, MockConfig, MockError};
-use inferd_engine::{Backend, GenerateError, TokenEvent};
+use inferd_engine::{Backend, EmbedError, GenerateError, TokenEvent};
+use inferd_proto::embed::EmbedRequest;
 use inferd_proto::{Message, Resolved, Role, StopReason};
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -114,4 +115,82 @@ async fn mock_name_is_stable_diagnostic() {
 async fn mock_stop_succeeds() {
     let mock = Mock::new();
     mock.stop(Duration::from_secs(1)).await.unwrap();
+}
+
+#[tokio::test]
+async fn mock_advertises_embed_capability() {
+    let mock = Mock::new();
+    assert!(mock.capabilities().embed);
+}
+
+#[tokio::test]
+async fn mock_embed_returns_one_vector_per_input() {
+    let mock = Mock::new();
+    let req = EmbedRequest {
+        id: "e1".into(),
+        input: vec!["hello".into(), "world!".into()],
+        ..Default::default()
+    }
+    .resolve()
+    .unwrap();
+    let result = mock.embed(req).await.expect("embed ok");
+    assert_eq!(result.embeddings.len(), 2);
+    assert_eq!(result.dimensions, 8);
+    assert!(result.embeddings.iter().all(|v| v.len() == 8));
+    assert_eq!(result.model, "mock");
+    // input_tokens accumulates byte-length per the deterministic mock
+    // formula: 5 + 6 = 11.
+    assert_eq!(result.usage.input_tokens, 11);
+}
+
+#[tokio::test]
+async fn mock_embed_honours_requested_dimensions() {
+    let mock = Mock::new();
+    let req = EmbedRequest {
+        id: "e1".into(),
+        input: vec!["hi".into()],
+        dimensions: Some(3),
+        ..Default::default()
+    }
+    .resolve()
+    .unwrap();
+    let result = mock.embed(req).await.unwrap();
+    assert_eq!(result.dimensions, 3);
+    assert_eq!(result.embeddings[0].len(), 3);
+}
+
+#[tokio::test]
+async fn mock_embed_pre_stream_error_maps_to_unavailable() {
+    let mock = Mock::with_config(MockConfig {
+        pre_stream_error: Some(MockError::Unavailable),
+        ..Default::default()
+    });
+    let req = EmbedRequest {
+        id: "e1".into(),
+        input: vec!["hi".into()],
+        ..Default::default()
+    }
+    .resolve()
+    .unwrap();
+    match mock.embed(req).await {
+        Err(EmbedError::Unavailable(_)) => {}
+        other => panic!("expected Unavailable error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mock_embed_not_ready_when_toggled() {
+    let mock = Mock::new();
+    mock.set_ready(false);
+    let req = EmbedRequest {
+        id: "e1".into(),
+        input: vec!["hi".into()],
+        ..Default::default()
+    }
+    .resolve()
+    .unwrap();
+    match mock.embed(req).await {
+        Err(EmbedError::NotReady) => {}
+        other => panic!("expected NotReady, got {other:?}"),
+    }
 }
