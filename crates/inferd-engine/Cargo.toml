@@ -30,6 +30,12 @@ rocm                 = ["llamacpp"]
 # narrow outbound carve-out wrapped behind the Backend trait
 # (ADR 0006 §"cloud backends").
 openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util"]
+# AWS Bedrock-runtime InvokeModelWithResponseStream backend (Phase
+# 6B-5). Anthropic-on-Bedrock body shape only in v0.2.0; SigV4 +
+# AWS_BEARER_TOKEN_BEDROCK auth; AWS event-stream framing parser.
+# Same lean-core posture as `openai`: outbound HTTPS only, no extra
+# inbound surface in the daemon.
+bedrock              = ["dep:reqwest", "dep:futures-util", "dep:hmac", "dep:hex", "dep:url"]
 
 [dependencies]
 inferd-proto = { path = "../inferd-proto", version = "=0.2.0" }
@@ -58,6 +64,14 @@ serde_json   = { workspace = true }
 reqwest             = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"], optional = true }
 eventsource-stream  = { version = "0.2", optional = true }
 futures-util        = { version = "0.3", optional = true }
+
+# --- Optional: Bedrock-invoke backend (Phase 6B-5). SigV4 needs HMAC-
+# SHA-256 (hmac+sha2 — sha2 is already a workspace dep) and lowercase
+# hex for the canonical request hash. `url` parses the configured
+# endpoint into host/path/query for the canonical request shape.
+hmac                = { version = "0.12", optional = true }
+hex                 = { version = "0.4", optional = true }
+url                 = { version = "2", optional = true }
 
 [build-dependencies]
 # Only invoked when the `llamacpp` feature is enabled; the build.rs

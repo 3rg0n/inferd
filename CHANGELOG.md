@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-5 part 1: bedrock-invoke backend adapter (engine crate).**
+  New `bedrock_invoke` module behind the `bedrock` cargo feature
+  ships the AWS Bedrock-runtime
+  `InvokeModelWithResponseStream` plumbing: a hand-rolled SigV4 signer
+  (HMAC-SHA-256 chain, ~150 lines — avoids pulling in the AWS SDK
+  ecosystem), an AWS event-stream binary frame decoder
+  (`application/vnd.amazon.eventstream`, 1 MB safety cap, CRCs trusted
+  to TLS), an Anthropic-on-Bedrock body mapper for the locked
+  `anthropic_version: "bedrock-2023-05-31"` shape, and a
+  `StreamAccumulator` that absorbs the inner Anthropic SSE-shaped
+  events (`message_start` → `content_block_delta`* →
+  `content_block_stop` → `message_delta` → `message_stop`) and emits
+  `TokenEventV2`. Two auth modes, in order: bearer token
+  (`AWS_BEARER_TOKEN_BEDROCK`, sent as `Authorization: Bearer`, skips
+  SigV4) and the standard AWS access-key chain. v0.2.0 multimodal
+  gate is single-sided — image/audio/video content blocks are
+  rejected at request build time; tool-use is supported in both
+  directions. 35 unit tests cover the body mapper round-trips, the
+  event-stream decoder against partial feeds and exception frames,
+  the SigV4 signer's determinism + session-token handling, and the
+  adapter's URL/host/header construction. The adapter is built but
+  not yet wired into the daemon binary — that lands in part 2
+  (`BackendKind::BedrockInvoke` + `kind: "bedrock-invoke"` config-
+  file entry).
 - **Phase 6B-4: TCP transport as config opt-in (default off).** Closes
   the v0.2.0-tagging gap that enabling TCP required a CLI flag, which
   blocked operators who run inferd under a system service manager
