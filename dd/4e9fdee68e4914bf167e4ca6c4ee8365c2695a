@@ -1,0 +1,41 @@
+crates/inferd-engine/src/bedrock_invoke/eventstream.rs
+  s_126aec4081f728::t_5b85fca1d1c155 100
+crates/inferd-engine/src/bedrock_invoke/mod.rs
+  s_126aec4081f728::t_3c78ff19579671 1-57
+CHANGELOG.md
+  s_126aec4081f728::t_c276543b8b6198 12-35
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_22f2d33b35ea81 68-75
+  s_126aec4081f728::t_c460b4d973ae73 33-38
+crates/inferd-engine/src/bedrock_invoke/body.rs
+  s_126aec4081f728::t_5b85fca1d1c155 560-562,768-771,813-816,830-833,846-849,866-869,891-894
+  s_126aec4081f728::t_cbdda244994521 1-328,330-333,335-559,563-767,772-812,817-829,834-845,850-865,870-890,895-897
+  s_126aec4081f728::t_4d90c935a4856e 329,334
+crates/inferd-engine/src/bedrock_invoke/adapter.rs
+  s_126aec4081f728::t_5b85fca1d1c155 132-134,171,191-193,241-242,256-257,424-427
+  s_126aec4081f728::t_bcbfe736019f4f 1-119,121-131,135-170,172-190,194-240,243-255,258-423,428-492,495-660
+  s_126aec4081f728::t_32bce07e5f85fb 493-494
+  s_126aec4081f728::t_0e20c4f95dab33 120
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_7a9a056bb82e53 19-20
+crates/inferd-engine/src/bedrock_invoke/sigv4.rs
+  s_126aec4081f728::t_69e5e0e00e355b 161-165,171-184,186-187,190,193-199
+  s_126aec4081f728::t_5b85fca1d1c155 224-226
+  s_126aec4081f728::t_b57389628307fe 1-160,166-170,185,188-189,191-192,200-223,227-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "dd4e9fdee68e4914bf167e4ca6c4ee8365c2695a",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
