@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B: v0.2.0 release prep.** Workspace version bumped to
+  `0.2.0`. All intra-workspace pinned deps (`=0.1.13`) bumped in
+  lockstep to `=0.2.0` so each crate's published artefact resolves
+  consistently. INTEGRATING.md migrated from "v0.2 preview" framing
+  to v0.2 reality: the v2-wire section now documents the
+  default-bound socket paths (`infer.v2.sock` / `\\.\pipe\inferd-
+  infer-v2`), the raw-bytes attachment posture (ADR 0016 — the
+  daemon does not link image / audio codecs; consumers decode), the
+  tool-call lifecycle (`tool_use` content blocks in stream,
+  `tool_result` blocks back), the in-place migration shape
+  (`Message.content: String` → `Vec<ContentBlock>`), and the v0.2
+  backend matrix (`llamacpp` default + feature-gated `openai`
+  outbound HTTPS adapter). Versioning section updated to call out
+  that `inferd-client = "0.1"` consumers keep working unmodified
+  against the v1 socket of a v0.2 daemon.
 - **CI: v2 + openai-compat matrix coverage** (Phase 6A). New
   `openai` job runs `cargo clippy --features inferd-engine/openai`
   and `cargo test -p inferd-engine --features openai` on the same
