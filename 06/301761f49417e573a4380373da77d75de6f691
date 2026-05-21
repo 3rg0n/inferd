@@ -1,0 +1,39 @@
+crates/inferd-engine/src/openai_compat/mod.rs
+  s_126aec4081f728::t_37521fc1697ca0 1-41
+crates/inferd-engine/src/openai_compat/mapper.rs
+  s_126aec4081f728::t_eee8bc80e30eb7 1-660
+crates/inferd-engine/tests/openai_compat.rs
+  s_126aec4081f728::t_d32bbf3d4578c6 13-15,46
+  s_126aec4081f728::t_06fbc9efa562b1 184-187
+  s_126aec4081f728::t_8bad9779a0f8e8 1-12,16-45,47-183,188-228
+CHANGELOG.md
+  s_126aec4081f728::t_727c86f96c4edf 12-61
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_34b36be6a01b79 55-61
+  s_126aec4081f728::t_fbd53876d306db 28-32
+  s_126aec4081f728::t_f238df3ebefe2c 77-78
+crates/inferd-engine/src/openai_compat/adapter.rs
+  s_126aec4081f728::t_00203aae75afe1 1-13,16-184,187-237,244-298
+  s_126aec4081f728::t_85ebfd8bf1901d 14-15
+  s_126aec4081f728::t_d32bbf3d4578c6 185-186,238-243
+crates/inferd-engine/src/openai_compat/client.rs
+  s_126aec4081f728::t_418ec0a0047302 1-143
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_b7983ec7c91426 26-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "06301761f49417e573a4380373da77d75de6f691",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
