@@ -6,10 +6,15 @@
 //!
 //! See ADR 0015 for the v2 specification — typed content blocks,
 //! attachments, tools. v2 types live under [`mod@v2`].
+//!
+//! See ADR 0017 for the embeddings specification — single-frame
+//! request/response over a third dedicated socket. Embed types live
+//! under [`mod@embed`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
+pub mod embed;
 mod error;
 mod frame;
 mod request;
