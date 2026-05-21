@@ -31,7 +31,7 @@
 use clap::{Parser, Subcommand};
 use inferd_client::AdminClient;
 use inferd_daemon::admin::StatusBroadcaster;
-use inferd_daemon::config_file::ConfigFile;
+use inferd_daemon::config_file::{BackendEntry, ConfigFile, LlamacppEntry};
 use inferd_daemon::fetch::{ModelSpec, fetch_model};
 use inferd_daemon::status::StatusEvent;
 use inferd_daemon::store::ModelStore;
@@ -178,34 +178,47 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
         None => ModelStore::open(inferd_daemon::store::default_models_home()),
     };
 
-    let spec: ModelSpec = (&cfg.model).into();
-    eprintln!(
-        "inferd: pulling {} -> {}",
-        spec.name,
-        store.root().display()
-    );
+    // Multi-backend configs may declare several llamacpp entries
+    // (each with its own model file) plus zero or more cloud
+    // entries — only the local-model entries have a blob to pull.
+    let llamacpp_entries: Vec<LlamacppEntry> = cfg
+        .resolved_backends()
+        .into_iter()
+        .filter_map(|e| match e {
+            BackendEntry::Llamacpp(l) => Some(l),
+            _ => None,
+        })
+        .collect();
 
-    // The fetch_model function publishes progress through a
-    // StatusBroadcaster; we don't have an admin socket here so we
-    // just create a throwaway broadcaster. Status events are
-    // dropped on the floor — for `inferd pull` the daemon's
-    // stdout-style log lines from fetch.rs are enough.
-    let broadcaster = StatusBroadcaster::new(StatusEvent::Starting);
-    let bcast = std::sync::Arc::new(broadcaster);
-    let spec_clone = spec.clone();
-    let store_clone = store.clone();
+    if llamacpp_entries.is_empty() {
+        eprintln!(
+            "inferd: no llamacpp backends in {}; nothing to pull",
+            config_path.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
 
-    // fetch_model is sync (uses ureq blocking). Run on a blocking
-    // thread so we don't block the runtime — though for a CLI we
-    // could just call it directly. Keeping the boundary consistent
-    // with how the daemon does it.
-    let blob_path =
-        tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
-            .await
-            .context("fetch task join")?
-            .context("fetch failed")?;
+    for entry in &llamacpp_entries {
+        let spec: ModelSpec = (&entry.model).into();
+        eprintln!(
+            "inferd: pulling {} -> {}",
+            spec.name,
+            store.root().display()
+        );
 
-    eprintln!("inferd: blob ready at {}", blob_path.display());
+        let broadcaster = StatusBroadcaster::new(StatusEvent::Starting);
+        let bcast = std::sync::Arc::new(broadcaster);
+        let spec_clone = spec.clone();
+        let store_clone = store.clone();
+
+        let blob_path =
+            tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
+                .await
+                .context("fetch task join")?
+                .context("fetch failed")?;
+
+        eprintln!("inferd: blob ready at {}", blob_path.display());
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -227,62 +240,82 @@ async fn cmd_doctor(
     // 1. Config file present and parses?
     match ConfigFile::load(config_path) {
         Ok(cfg) => {
+            let entries = cfg.resolved_backends();
+            let llamacpp_entries: Vec<&LlamacppEntry> = entries
+                .iter()
+                .filter_map(|e| match e {
+                    BackendEntry::Llamacpp(l) => Some(l),
+                    _ => None,
+                })
+                .collect();
+            let summary = entries
+                .iter()
+                .map(|e| match e {
+                    BackendEntry::Llamacpp(l) => format!("llamacpp:{}", l.name),
+                    BackendEntry::OpenaiCompat(o) => format!("openai-compat:{}", o.name),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             report_problem(
                 "config",
                 true,
                 &format!(
-                    "loaded {} (model {}, auto_pull={})",
+                    "loaded {} (backends: [{summary}], auto_pull={})",
                     config_path.display(),
-                    cfg.model.name,
                     cfg.auto_pull
                 ),
             );
 
-            // 2. Is the model on disk?
+            // 2. Are the local models on disk? Only llamacpp entries
+            // have a blob; cloud entries have nothing to check here
+            // (their reachability is admin-socket / runtime concern).
             let store = match cfg.models_home.as_ref() {
                 Some(p) => ModelStore::open(p),
                 None => ModelStore::open(inferd_daemon::store::default_models_home()),
             };
-            let blob_path = store.blob_path(&cfg.model.sha256);
-            if blob_path.exists() {
-                let size = std::fs::metadata(&blob_path).map(|m| m.len()).unwrap_or(0);
-                report_problem(
-                    "model",
-                    true,
-                    &format!("blob present ({} bytes) at {}", size, blob_path.display()),
-                );
-            } else {
-                report_problem(
-                    "model",
-                    false,
-                    &format!(
-                        "blob missing at {}; run `inferd pull` or set auto_pull=true",
-                        blob_path.display()
-                    ),
-                );
-            }
-
-            // 3. Manifest readable?
-            match store.read_manifest(&cfg.model.name) {
-                Ok(Some(_)) => {
+            for entry in &llamacpp_entries {
+                let label = format!("model[{}]", entry.name);
+                let blob_path = store.blob_path(&entry.model.sha256);
+                if blob_path.exists() {
+                    let size = std::fs::metadata(&blob_path).map(|m| m.len()).unwrap_or(0);
                     report_problem(
-                        "manifest",
+                        &label,
                         true,
+                        &format!("blob present ({} bytes) at {}", size, blob_path.display()),
+                    );
+                } else {
+                    report_problem(
+                        &label,
+                        false,
                         &format!(
-                            "present at {}",
-                            store.manifest_path(&cfg.model.name).display()
+                            "blob missing at {}; run `inferd pull` or set auto_pull=true",
+                            blob_path.display()
                         ),
                     );
                 }
-                Ok(None) => report_problem(
-                    "manifest",
-                    false,
-                    &format!(
-                        "missing at {}; daemon hasn't fetched yet, or operator skipped pull",
-                        store.manifest_path(&cfg.model.name).display()
+
+                let manifest_label = format!("manifest[{}]", entry.name);
+                match store.read_manifest(&entry.model.name) {
+                    Ok(Some(_)) => {
+                        report_problem(
+                            &manifest_label,
+                            true,
+                            &format!(
+                                "present at {}",
+                                store.manifest_path(&entry.model.name).display()
+                            ),
+                        );
+                    }
+                    Ok(None) => report_problem(
+                        &manifest_label,
+                        false,
+                        &format!(
+                            "missing at {}; daemon hasn't fetched yet, or operator skipped pull",
+                            store.manifest_path(&entry.model.name).display()
+                        ),
                     ),
-                ),
-                Err(e) => report_problem("manifest", false, &format!("read error: {e}")),
+                    Err(e) => report_problem(&manifest_label, false, &format!("read error: {e}")),
+                }
             }
         }
         Err(e) => {

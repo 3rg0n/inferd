@@ -22,7 +22,13 @@
 use clap::Parser;
 use inferd_daemon::admin::StatusBroadcaster;
 use inferd_daemon::config::{BackendKind, Cli};
+#[cfg(any(feature = "llamacpp", feature = "openai"))]
+use inferd_daemon::config_file::BackendEntry;
 use inferd_daemon::config_file::ConfigFile;
+#[cfg(feature = "llamacpp")]
+use inferd_daemon::config_file::LlamacppEntry;
+#[cfg(feature = "openai")]
+use inferd_daemon::config_file::OpenaiCompatEntry;
 #[cfg(unix)]
 use inferd_daemon::endpoint::bind_admin_uds;
 #[cfg(unix)]
@@ -83,10 +89,11 @@ async fn main() -> anyhow::Result<()> {
     // permitted: the daemon runs CLI-only against the mock backend.
     let config = load_config_file(cli.config.as_deref());
 
-    // Resolve model + construct backend. Publishes loading_model
-    // phase events through the broadcaster.
-    let backend: Arc<dyn Backend> =
-        match build_backend(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
+    // Resolve models + construct backends. Publishes loading_model
+    // phase events through the broadcaster. Returns the canonical
+    // ordered list (multi-backend per ADR 0007).
+    let backends: Vec<Arc<dyn Backend>> =
+        match build_backends(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
             Ok(b) => b,
             Err(e) => {
                 let _ = admin_shutdown_tx.send(());
@@ -94,14 +101,17 @@ async fn main() -> anyhow::Result<()> {
                 return Err(e);
             }
         };
-    info!(name = backend.name(), "backend constructed");
+    for b in &backends {
+        info!(name = b.name(), "backend constructed");
+    }
 
     // Publish capability snapshot so admin subscribers can introspect
     // multimodal / tools / accelerator posture before Ready (#77).
-    {
-        let caps = backend.capabilities();
+    // One frame per backend so subscribers see the full router shape.
+    for b in &backends {
+        let caps = b.capabilities();
         broadcaster.publish(StatusEvent::Capabilities {
-            backend: backend.name().to_string(),
+            backend: b.name().to_string(),
             v2: caps.v2,
             vision: caps.vision,
             audio: caps.audio,
@@ -112,8 +122,8 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Build router (no-op v0.1: one backend).
-    let router = Arc::new(Router::new(vec![Arc::clone(&backend)]));
+    // Build router. Walks the ordered list per ADR 0007.
+    let router = Arc::new(Router::new(backends));
 
     // Wait for Backend::ready (F-13). Mock flips ready immediately;
     // LlamaCpp flips ready in `new()` after model load + KV cache.
@@ -373,38 +383,156 @@ fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
     }
 }
 
-/// Construct the backend per CLI + config. Publishes `loading_model`
+/// Construct backends per CLI + config. Publishes `loading_model`
 /// phase events as it goes.
-async fn build_backend(
+///
+/// Dispatch:
+/// - `--backend mock` ignores the config (dev-mode echo daemon).
+/// - When the config file declares `backends:` (or legacy `model:`,
+///   which auto-promotes to a one-element llamacpp list), every entry
+///   is built and the router walks them in order per ADR 0007.
+/// - When no config is present, the CLI-flag path builds a single
+///   backend matching `--backend <kind>` for v0.1.x compatibility.
+async fn build_backends(
     cli: &Cli,
-    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] config: Option<&ConfigFile>,
+    #[cfg_attr(
+        all(not(feature = "llamacpp"), not(feature = "openai")),
+        allow(unused_variables)
+    )]
+    config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
-) -> anyhow::Result<Arc<dyn Backend>> {
+) -> anyhow::Result<Vec<Arc<dyn Backend>>> {
     match cli.backend {
         BackendKind::Mock => {
-            // Mock: no model on disk, no fetch, ready immediately.
-            // Still publish the lifecycle phases so admin subscribers
-            // see the same shape as the production path.
             broadcaster.publish(StatusEvent::LoadingModel {
                 phase: LoadPhase::CheckingLocal {
                     path: PathBuf::from("(mock)"),
                 },
             });
-            Ok(Arc::new(Mock::new()))
+            Ok(vec![Arc::new(Mock::new())])
         }
-        #[cfg(feature = "llamacpp")]
-        BackendKind::Llamacpp => build_llamacpp(cli, config, broadcaster).await,
-        #[cfg(feature = "openai")]
-        BackendKind::OpenaiCompat => build_openai_compat(cli, broadcaster),
+        #[cfg(any(feature = "llamacpp", feature = "openai"))]
+        _ => {
+            if let Some(cfg) = config {
+                let entries = cfg.resolved_backends();
+                let auto_pull = cfg.auto_pull;
+                let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let b = build_entry(&entry, cfg, auto_pull, Arc::clone(&broadcaster)).await?;
+                    out.push(b);
+                }
+                return Ok(out);
+            }
+
+            // No config file: CLI-flag-only path. Single backend
+            // matching `--backend <kind>`.
+            match cli.backend {
+                BackendKind::Mock => unreachable!("handled above"),
+                #[cfg(feature = "llamacpp")]
+                BackendKind::Llamacpp => {
+                    let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
+                    Ok(vec![b])
+                }
+                #[cfg(feature = "openai")]
+                BackendKind::OpenaiCompat => {
+                    let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
+                    Ok(vec![b])
+                }
+            }
+        }
     }
 }
 
-/// Construct the OpenAI-compat outbound adapter. v0.2 cloud
-/// carve-out per ADR 0006: the daemon never serves HTTP, but a
-/// `Backend` impl is allowed to reach out via HTTPS. No model file,
-/// no CAS lookup, no fetch — the upstream provider hosts the model.
+/// Dispatch a single config-file backend entry to the right builder.
+#[cfg(any(feature = "llamacpp", feature = "openai"))]
+async fn build_entry(
+    entry: &BackendEntry,
+    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] cfg: &ConfigFile,
+    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] auto_pull: bool,
+    #[cfg_attr(
+        all(not(feature = "llamacpp"), not(feature = "openai")),
+        allow(unused_variables)
+    )]
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    match entry {
+        #[cfg(feature = "llamacpp")]
+        BackendEntry::Llamacpp(e) => build_llamacpp_entry(e, cfg, auto_pull, broadcaster).await,
+        #[cfg(not(feature = "llamacpp"))]
+        BackendEntry::Llamacpp(_) => {
+            anyhow::bail!(
+                "config declares a `kind: llamacpp` backend but this daemon \
+                 binary was built without the `llamacpp` feature"
+            )
+        }
+        #[cfg(feature = "openai")]
+        BackendEntry::OpenaiCompat(e) => build_openai_compat_entry(e, broadcaster),
+        #[cfg(not(feature = "openai"))]
+        BackendEntry::OpenaiCompat(_) => {
+            anyhow::bail!(
+                "config declares a `kind: openai-compat` backend but this \
+                 daemon binary was built without the `openai` feature"
+            )
+        }
+    }
+}
+
+/// Build an OpenAI-compat backend from a config-file entry.
+/// API key is resolved from env-var name only; no literal in config.
 #[cfg(feature = "openai")]
-fn build_openai_compat(
+fn build_openai_compat_entry(
+    entry: &OpenaiCompatEntry,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::openai_compat::{OpenAiCompat, OpenAiCompatConfig};
+
+    let api_key = resolve_openai_api_key(entry.api_key_env.as_deref());
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!(
+                "(openai-compat: {} / {})",
+                entry.base_url, entry.model
+            )),
+        },
+    });
+
+    let backend = OpenAiCompat::new(OpenAiCompatConfig {
+        base_url: entry.base_url.clone(),
+        api_key,
+        model: entry.model.clone(),
+        timeout: Duration::from_secs(entry.timeout_secs),
+    })
+    .map_err(|e| anyhow::anyhow!("openai-compat init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// Resolve the bearer token for an openai-compat backend.
+///
+/// Order: explicit `api_key_env: "<NAME>"` → `INFERD_OPENAI_API_KEY`
+/// → `OPENAI_API_KEY` → empty (skips `Authorization` header). Never
+/// reads a literal key from the config file (THREAT_MODEL: secrets
+/// stay in env, not on disk).
+#[cfg(feature = "openai")]
+fn resolve_openai_api_key(api_key_env: Option<&str>) -> String {
+    if let Some(name) = api_key_env
+        && let Ok(v) = std::env::var(name)
+    {
+        return v;
+    }
+    if let Ok(v) = std::env::var("INFERD_OPENAI_API_KEY") {
+        return v;
+    }
+    if let Ok(v) = std::env::var("OPENAI_API_KEY") {
+        return v;
+    }
+    String::new()
+}
+
+/// CLI-only path for `--backend openai-compat` without a config file.
+/// Mirrors the v0.1.14 surface so existing scripts keep working.
+#[cfg(feature = "openai")]
+fn build_openai_compat_cli_only(
     cli: &Cli,
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
@@ -422,16 +550,12 @@ fn build_openai_compat(
              (e.g. gpt-4o-mini, llama3.1:8b)"
         )
     })?;
-    // API key resolution: CLI flag → INFERD_OPENAI_API_KEY (handled
-    // by clap's env=) → fall back to the de-facto provider env name.
     let api_key = cli
         .openai_api_key
         .clone()
         .or_else(|| std::env::var("OPENAI_API_KEY").ok())
         .unwrap_or_default();
 
-    // No on-disk model; emit a single CheckingLocal phase so admin
-    // subscribers see the same shape as the local-model path.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::CheckingLocal {
             path: PathBuf::from(format!("(openai-compat: {base_url} / {model})")),
@@ -448,108 +572,45 @@ fn build_openai_compat(
     Ok(Arc::new(backend))
 }
 
-/// Resolve the model into the shared CAS store (ADR 0011). On
-/// success returns the verified blob's path so the engine can mmap
-/// it. Publishes phase events through the broadcaster throughout.
+/// Build a llamacpp backend from a config-file entry. Resolves the
+/// model into the shared CAS store (ADR 0011) and returns the verified
+/// blob's path so the engine can mmap it. Publishes phase events
+/// through the broadcaster throughout.
 #[cfg(feature = "llamacpp")]
-async fn build_llamacpp(
-    cli: &Cli,
-    config: Option<&ConfigFile>,
+async fn build_llamacpp_entry(
+    entry: &LlamacppEntry,
+    cfg: &ConfigFile,
+    auto_pull: bool,
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
     use inferd_daemon::fetch::{ModelSpec, fetch_model};
     use inferd_daemon::store::{ModelStore, default_models_home};
     use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 
-    // Resolve the spec + store: prefer config-file, fall back to CLI flags.
-    let (spec, store, n_ctx, n_gpu_layers, model_sha256_bytes, cli_only_path) = match config {
-        Some(cfg) => {
-            let spec: ModelSpec = (&cfg.model).into();
-            let n_ctx = if cli.n_ctx != 8192 {
-                cli.n_ctx
-            } else {
-                cfg.n_ctx
-            };
-            let n_gpu_layers = if cli.n_gpu_layers != 0 {
-                cli.n_gpu_layers
-            } else {
-                cfg.n_gpu_layers
-            };
-            let sha = parse_sha256_hex(&cfg.model.sha256)?;
-            let store = match cfg.models_home.as_ref() {
-                Some(p) => ModelStore::open(p),
-                None => ModelStore::open(default_models_home()),
-            };
-            (spec, store, n_ctx, n_gpu_layers, sha, None)
-        }
-        None => {
-            let path = cli.model_path.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--backend llamacpp needs either ~/.inferd/config.json or \
-                     --model-path/--model-sha256 CLI flags"
-                )
-            })?;
-            let sha_str = cli.model_sha256.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("--model-sha256 is required for --backend llamacpp")
-            })?;
-            let sha = parse_sha256_hex(sha_str)?;
-            // CLI-only mode: bypass the CAS store; the operator
-            // pointed us at a specific file. Useful for dev / CI.
-            let spec = ModelSpec {
-                name: "cli".into(),
-                source_url: String::new(),
-                sha256_hex: sha_str.clone(),
-                size_bytes: None,
-                license: None,
-                source: None,
-            };
-            // Store is constructed but unused in this branch.
-            (
-                spec,
-                ModelStore::open(default_models_home()),
-                cli.n_ctx,
-                cli.n_gpu_layers,
-                sha,
-                Some(path.clone()),
-            )
-        }
+    let spec: ModelSpec = (&entry.model).into();
+    let n_ctx = entry.n_ctx;
+    let n_gpu_layers = entry.n_gpu_layers;
+    let model_sha256_bytes = parse_sha256_hex(&entry.model.sha256)?;
+    let store = match cfg.models_home.as_ref() {
+        Some(p) => ModelStore::open(p),
+        None => ModelStore::open(default_models_home()),
     };
 
-    // Resolve / fetch.
-    let auto_pull = config.map(|c| c.auto_pull).unwrap_or(false);
-    let model_path = if let Some(direct) = cli_only_path {
-        // CLI-only mode: file must be at --model-path. No CAS lookup,
-        // no fetch.
-        broadcaster.publish(StatusEvent::LoadingModel {
-            phase: LoadPhase::CheckingLocal {
-                path: direct.clone(),
-            },
-        });
-        if !direct.exists() {
-            anyhow::bail!("model not present at {} (CLI-only mode)", direct.display());
-        }
-        direct
-    } else if auto_pull {
-        // Run the (synchronous) fetch on a blocking thread so we
-        // don't block the tokio runtime.
+    let model_path = if auto_pull {
         let spec_clone = spec.clone();
         let store_clone = store.clone();
         let bcast = Arc::clone(&broadcaster);
         tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
             .await
             .map_err(|e| anyhow::anyhow!("fetch task join: {e}"))?
-            .map_err(|e| anyhow::anyhow!("fetch failed: {e}"))?
+            .map_err(|e| anyhow::anyhow!("fetch failed for {}: {e}", entry.name))?
     } else {
-        // auto_pull == false: blob must already exist in the CAS at
-        // its SHA path. fetch_model() returns immediately when the
-        // manifest + blob agree, so we still call it — it does no
-        // network when source_url is unset OR the cached blob
-        // matches.
         let blob_path = store.blob_path(&spec.sha256_hex);
         if !blob_path.exists() {
             anyhow::bail!(
-                "model not present in store at {} and auto_pull is disabled. \
-                 Run `inferdctl pull` or set auto_pull: true in config.",
+                "model {} not present in store at {} and auto_pull is disabled. \
+                 Run `inferd pull` or set auto_pull: true in config.",
+                entry.name,
                 blob_path.display()
             );
         }
@@ -561,13 +622,11 @@ async fn build_llamacpp(
         blob_path
     };
 
-    // Mmap phase.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Mmap {
             path: model_path.clone(),
         },
     });
-    // KV cache phase.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::KvCache { n_ctx },
     });
@@ -577,6 +636,54 @@ async fn build_llamacpp(
         model_sha256: Some(model_sha256_bytes),
         n_ctx,
         n_gpu_layers,
+        ..Default::default()
+    })
+    .map_err(|e| anyhow::anyhow!("llamacpp init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// CLI-only path for `--backend llamacpp` without a config file. The
+/// operator points us at a specific file via `--model-path` and the
+/// daemon bypasses the CAS store / fetch entirely. Useful for dev /
+/// CI.
+#[cfg(feature = "llamacpp")]
+async fn build_llamacpp_cli_only(
+    cli: &Cli,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
+
+    let path = cli.model_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend llamacpp needs either ~/.inferd/config.json or \
+             --model-path/--model-sha256 CLI flags"
+        )
+    })?;
+    let sha_str = cli
+        .model_sha256
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--model-sha256 is required for --backend llamacpp"))?;
+    let model_sha256_bytes = parse_sha256_hex(sha_str)?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal { path: path.clone() },
+    });
+    if !path.exists() {
+        anyhow::bail!("model not present at {} (CLI-only mode)", path.display());
+    }
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::Mmap { path: path.clone() },
+    });
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::KvCache { n_ctx: cli.n_ctx },
+    });
+
+    let backend = LlamaCpp::new(LlamaCppConfig {
+        model_path: path.clone(),
+        model_sha256: Some(model_sha256_bytes),
+        n_ctx: cli.n_ctx,
+        n_gpu_layers: cli.n_gpu_layers,
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;
