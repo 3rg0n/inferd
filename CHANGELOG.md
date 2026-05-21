@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 5: `inferd-client` embed surface.** New
+  `EmbedClient` (sibling to `Client` / `ClientV2`) ships
+  `dial_tcp` / `dial_uds` (Unix) / `dial_pipe` (Windows) and a
+  single `embed(req)` method that round-trips one terminal
+  `EmbedResponse` per `EmbedRequest`. The connection stays open
+  for the next call — long-lived semantics match v1 / v2.
+  Default endpoint resolution (`default_embed_addr`) mirrors the
+  daemon's `endpoint::default_embed_addr` (XDG → `~/.inferd/run`
+  → `/tmp` on Linux, `${TMPDIR}/inferd` on macOS, named pipe on
+  Windows). `dial_and_wait_ready` is generic over the client type
+  so the existing F-13 retry shape serves embed clients without
+  duplication. Embed wire types are re-exported (`EmbedRequest`,
+  `EmbedResponse`, `EmbedTask`, `EmbedErrorCode`, `EmbedUsage`,
+  `EmbedResolved`) so consumers don't need a separate
+  `inferd-proto` dep. Four new unit tests cover success-frame and
+  error-frame round-trips, EOF handling, and connection reuse
+  across multiple requests. INTEGRATING.md update lands in part 6.
+
 - **Phase 6B-7 part 4: daemon embed socket lifecycle.** Daemon now
   binds a dedicated third inference socket (`/inferd-infer-embed`
   UDS / `\\.\pipe\inferd-infer-embed` named pipe / `--embed-tcp`

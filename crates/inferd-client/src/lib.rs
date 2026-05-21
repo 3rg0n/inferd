@@ -104,17 +104,57 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## Quickstart (embed — single-frame request/response)
+//!
+//! Embed lives on a *third* socket separate from v1 and v2 per ADR
+//! 0017. Use [`EmbedClient`] with `dial_embed_*` and the embed wire
+//! types (`EmbedRequest`, `EmbedResponse`, `EmbedTask`, …). The call
+//! is a single round-trip — no streaming, since an embedding is a
+//! complete vector.
+//!
+//! ```no_run
+//! use inferd_client::{EmbedClient, EmbedRequest, EmbedResponse, EmbedTask};
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut client = inferd_client::dial_and_wait_ready(
+//!     std::time::Duration::from_secs(30),
+//!     || EmbedClient::dial_tcp("127.0.0.1:47323"),
+//! )
+//! .await?;
+//!
+//! let resp = client.embed(EmbedRequest {
+//!     id: "demo-1".into(),
+//!     input: vec!["the quick brown fox".into()],
+//!     dimensions: Some(256),
+//!     task: Some(EmbedTask::RetrievalDocument),
+//! })
+//! .await?;
+//!
+//! match resp {
+//!     EmbedResponse::Embeddings { embeddings, dimensions, .. } => {
+//!         println!("got {} vectors of dim {dimensions}", embeddings.len());
+//!     }
+//!     EmbedResponse::Error { code, message, .. } => {
+//!         eprintln!("[embed error {code:?}: {message}]");
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
 mod admin;
 mod client;
+mod embed_client;
 mod v2_client;
 mod wait;
 
 pub use admin::{AdminClient, AdminEvent};
 pub use client::{Client, ClientError, FrameStream};
+pub use embed_client::{EmbedClient, default_embed_addr};
 pub use v2_client::{ClientV2, FrameStreamV2, default_v2_addr};
 pub use wait::{WaitError, default_admin_addr, dial_and_wait_ready, is_transient_dial_error};
 
@@ -133,4 +173,12 @@ pub use inferd_proto::{
 pub use inferd_proto::v2::{
     Attachment, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResolvedV2, ResponseBlock,
     ResponseV2, RoleV2, StopReasonV2, Tool, ToolCallId, ToolUseInput, UsageV2,
+};
+
+/// Re-exports of the embed wire types per ADR 0017. Embed lives on
+/// the *third* inferd socket (separate from v1 and v2); the
+/// proto types are re-exported here so consumers don't need a separate
+/// `inferd-proto` dep.
+pub use inferd_proto::embed::{
+    EmbedErrorCode, EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask, EmbedUsage,
 };
