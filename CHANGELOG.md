@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 6: INTEGRATING.md embed section.**
+  Added an "Embeddings (v0.2)" section with the third-socket
+  endpoint table, capability-discovery / `inferd doctor` snippet,
+  config-file shape (`llamacpp` entry with `embed: true`,
+  `embed_pooling`, `embed_n_ctx`), Rust example, supported
+  request fields (`input` / `dimensions` / `task` with the
+  EmbeddingGemma task taxonomy), and the embed-specific error
+  contract. Bedrock-invoke also added to the "Backends in v0.2"
+  list (was missing). Versioning section now mentions the embed
+  wire as separate-socket-frozen-once-shipped per ADR 0017.
+
 - **Phase 6B-7 part 5: `inferd-client` embed surface.** New
   `EmbedClient` (sibling to `Client` / `ClientV2`) ships
   `dial_tcp` / `dial_uds` (Unix) / `dial_pipe` (Windows) and a
