@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 2: `Backend::embed` trait method + Mock impl.**
+  Engine crate gains `EmbedResult` (one vector per input + dimensions
+  + model name + `EmbedUsage`) and `EmbedError` (its own taxonomy:
+  `NotReady`, `Unsupported`, `InvalidRequest`, `Unavailable`,
+  `Internal` — distinct from `GenerateError` because the embed
+  surface has no streaming, no mid-stream concept, and adds the
+  not-an-embed-backend case). The `Backend` trait grows a default
+  `embed()` returning `EmbedError::Unsupported` so existing adapters
+  (`bedrock_invoke`, `openai_compat`) compile unchanged; opt-in is
+  via `capabilities().embed = true`. The Mock backend opts in and
+  returns deterministic vectors derived from input length so daemon
+  embed-socket dispatch can be exercised end-to-end without a real
+  engine. Five new mock-backend tests cover the cap advertisement,
+  vector-shape determinism, requested-dimensions honoring,
+  pre-stream-error mapping, and not-ready short-circuit. Workspace
+  clippy + tests stay green; `llamacpp` adapter wiring lands in part
+  3.
+
 - **Phase 6B-7 part 1: embed wire types in `inferd-proto`.** New
   `embed` module (sibling to `v2`) ships `EmbedRequest` / `EmbedResolved`
   / `EmbedTask` / `EmbedResponse` / `EmbedErrorCode` / `EmbedUsage`,

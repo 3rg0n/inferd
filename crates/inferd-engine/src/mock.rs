@@ -10,10 +10,11 @@
 //!   `Done` event) to exercise the mid-stream failure path.
 
 use crate::backend::{
-    Backend, BackendCapabilities, GenerateError, TokenEvent, TokenEventV2, TokenStream,
-    TokenStreamV2,
+    Backend, BackendCapabilities, EmbedError, EmbedResult, GenerateError, TokenEvent, TokenEventV2,
+    TokenStream, TokenStreamV2,
 };
 use async_trait::async_trait;
+use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
 use std::sync::Arc;
@@ -110,15 +111,15 @@ impl Backend for Mock {
         self.ready.load(Ordering::SeqCst)
     }
 
-    /// Mock advertises v2 + thinking so daemon-side v2 dispatch can
-    /// be exercised end-to-end without a real engine. Multimodal /
-    /// tool flags stay `false` — Mock doesn't pretend to ingest
-    /// images or parse tool calls. Tests that need richer v2 surface
-    /// configure the mock with explicit token tape.
+    /// Mock advertises v2 + thinking + embed so daemon-side dispatch
+    /// across all three sockets can be exercised end-to-end without a
+    /// real engine. Multimodal / tool flags stay `false` — Mock
+    /// doesn't pretend to ingest images or parse tool calls.
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             v2: true,
             thinking: true,
+            embed: true,
             ..BackendCapabilities::default()
         }
     }
@@ -220,5 +221,48 @@ impl Backend for Mock {
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    /// Deterministic mock embedding. Emits one fixed-length vector per
+    /// input string; entries are derived from the input length so
+    /// tests can assert correlation. `dimensions` defaults to 8 when
+    /// the request doesn't supply one; otherwise the request's value
+    /// is honoured (no model-specific MRL set to validate against).
+    /// Pre-stream-error knob (`MockError::Unavailable` /
+    /// `InvalidRequest`) is reused on the embed path to exercise
+    /// daemon-side error mapping; `NotReady` mode short-circuits to
+    /// `EmbedError::NotReady` to mirror the v1/v2 paths.
+    async fn embed(&self, req: EmbedResolved) -> Result<EmbedResult, EmbedError> {
+        if let Some(err) = self.config.pre_stream_error {
+            return Err(match err {
+                MockError::NotReady => EmbedError::NotReady,
+                MockError::InvalidRequest => EmbedError::InvalidRequest("mock".into()),
+                MockError::Unavailable => EmbedError::Unavailable("mock".into()),
+            });
+        }
+        if !self.ready() {
+            return Err(EmbedError::NotReady);
+        }
+
+        let dimensions = req.dimensions.unwrap_or(8);
+        let mut input_tokens: u32 = 0;
+        let embeddings = req
+            .input
+            .iter()
+            .map(|s| {
+                input_tokens = input_tokens.saturating_add(s.len() as u32);
+                let len_f = s.len() as f32;
+                (0..dimensions)
+                    .map(|i| (i as f32 + 1.0) / (len_f + 1.0))
+                    .collect()
+            })
+            .collect();
+
+        Ok(EmbedResult {
+            embeddings,
+            dimensions,
+            model: "mock".into(),
+            usage: EmbedUsage { input_tokens },
+        })
     }
 }
