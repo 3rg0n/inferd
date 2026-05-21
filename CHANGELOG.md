@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-3: multi-backend config shape.** Closes the v0.2.0-tagging
+  gap that `~/.inferd/config.json` only carried a single `model:` entry
+  even though the engine, router, and circuit breaker were already
+  designed for the multi-backend world. The schema grows a new
+  optional `backends:` array of `kind:`-tagged entries — `kind:
+  "llamacpp"` (with its own `model:` block, `n_ctx`, `n_gpu_layers`)
+  and `kind: "openai-compat"` (with `base_url`, `model`, optional
+  `api_key_env`, `timeout_secs`) — that the router walks in order per
+  ADR 0007. The legacy top-level `model:` field stays optional and
+  keeps working: when set without `backends:`, `resolved_backends()`
+  auto-promotes it to a one-element `[{kind: "llamacpp", ...}]` list,
+  so v0.1.x configs land unmodified. Setting both is a parse-time
+  validation error. API keys for `openai-compat` are referenced by
+  env-var **name** via `api_key_env: "<NAME>"` — never embedded
+  literally in the file — and the daemon resolves through
+  `api_key_env` → `INFERD_OPENAI_API_KEY` → `OPENAI_API_KEY` → empty
+  (skipping the `Authorization` header) so secrets stay in env, not
+  on disk. Daemon `build_backends` now returns
+  `Vec<Arc<dyn Backend>>` and feeds the router directly; one
+  `Capabilities` admin frame fires per backend so subscribers see
+  the full router shape. The `inferd doctor` and `inferd pull`
+  subcommands walk every llamacpp entry (each with its own blob /
+  manifest) and skip cloud entries. The `kind:` field is an
+  open-ended tagged union so future variants (`bedrock-invoke`, …)
+  slot in additively without a config break. Twelve new
+  `config_file::tests` cover the multi-backend happy path,
+  mutual-exclusion validation, duplicate-name rejection, scheme
+  validation (http/https only), unknown-kind parse error, and the
+  legacy-model auto-promotion path.
 - **Phase 6B-2: `BackendKind::OpenaiCompat` wired into the daemon
   binary.** Closes the v0.2.0-tagging gap that the engine shipped an
   OpenAI-compat adapter behind `--features openai` but the daemon
