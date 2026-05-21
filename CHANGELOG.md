@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **inferd-daemon: real router policy** (Phase 5B, per ADR 0007).
+  `crates/inferd-daemon/src/router.rs` rewritten from the v0.1 single-
+  backend stub into a priority-ordered router with per-backend circuit
+  breaker. Public surface: `Router`, `Dispatch { backend, name }`,
+  `BreakerPolicy { failure_threshold, failure_window, cooldown }`,
+  `RouterError { NoBackends, NoneAvailable }`. Defaults: 3 failures in
+  60s opens the breaker; 30s cooldown; first dispatch after cooldown
+  enters half-open and one outcome (success closes / failure re-opens)
+  decides next state. `dispatch()` walks slots in priority order, skips
+  not-ready and open-breaker slots, returns `NoneAvailable` if every
+  registered backend is unfit. New name-keyed feedback methods
+  `record_success(name)` / `record_failure(name)` are O(1) via a
+  `name → index` map populated at construction (backends are static
+  in v0.2; no admin add/remove API). Lifecycle wiring in both
+  `lifecycle.rs` and `lifecycle_v2.rs`: pre-stream `GenerateError`
+  paths distinguish `is_backend_failure` (NotReady / Unavailable /
+  Internal trip the breaker; `InvalidRequest` does not — caller bug
+  is not a backend health signal); terminal `Done` calls
+  `record_success`; mid-stream silent termination calls
+  `record_failure`. No retry, no failover (ADR 0007). 8 unit tests
+  exercise empty-router rejection, ready-backend dispatch, unready
+  fallthrough, priority ordering, threshold-trip, success-resets-
+  count, post-cooldown half-open recovery, sliding-window pruning,
+  and unknown-backend feedback no-op. Dev-dep `async-trait` added
+  for the named-backend test harness.
 - **inferd-engine: OpenAI-compat HTTP backend adapter** (Phase 5A,
   feature-gated behind `openai`). New `openai_compat` module
   implementing `Backend` against any upstream that speaks the
