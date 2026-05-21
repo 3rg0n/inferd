@@ -32,7 +32,7 @@ rocm                 = ["llamacpp"]
 openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util"]
 
 [dependencies]
-inferd-proto = { path = "../inferd-proto", version = "=0.1.13" }
+inferd-proto = { path = "../inferd-proto", version = "=0.2.0" }
 async-trait  = { workspace = true }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
