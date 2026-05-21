@@ -23,6 +23,8 @@ pub mod llamacpp;
 pub mod mock;
 #[cfg(feature = "llamacpp")]
 pub(crate) mod mtmd_ffi;
+#[cfg(feature = "openai")]
+pub mod openai_compat;
 
 pub use backend::{
     AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, GenerateError, TokenEvent,
