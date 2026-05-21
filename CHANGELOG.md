@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CI: v2 + openai-compat matrix coverage** (Phase 6A). New
+  `openai` job runs `cargo clippy --features inferd-engine/openai`
+  and `cargo test -p inferd-engine --features openai` on the same
+  three-OS matrix as the default suite, catching mapper / SSE
+  drift before it ships. The existing `systemd-unit` smoke job now
+  starts the daemon with `--v2` (sed-injected into the shipped
+  `inferd.service` unit at install time, leaving the canonical
+  v1-only file untouched), verifies `infer.v2.sock` exists with the
+  spec-mandated `0660` mode, and round-trips a v2 NDJSON request
+  (`messages[].content` typed blocks, `text` block) through the v2
+  UDS to a `done` frame from the mock backend. Catches regressions
+  in v2 socket binding, v1+v2 AcceptContext sharing, RequestV2
+  resolve, and the router's V2-capable check.
 - **inferd-daemon: real router policy** (Phase 5B, per ADR 0007).
   `crates/inferd-daemon/src/router.rs` rewritten from the v0.1 single-
   backend stub into a priority-ordered router with per-backend circuit
