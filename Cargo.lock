@@ -961,6 +961,7 @@ name = "inferd-daemon"
 version = "0.1.13"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "chrono",
  "clap",

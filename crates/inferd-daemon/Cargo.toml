@@ -67,3 +67,4 @@ windows-sys = { version = "0.52", features = [
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
+async-trait = { workspace = true }
