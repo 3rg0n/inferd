@@ -21,6 +21,7 @@ implementation choices aren't.
 | [0014](0014-inferd-cli-is-a-reference-middleware.md) | The inferd CLI is a reference middleware, not a privileged surface | Accepted |
 | [0015](0015-v2-wire-protocol-typed-content-blocks.md) | v2 wire protocol — typed content blocks, attachments, tools | Accepted (§"v2 Attachment" amended by 0016) |
 | [0016](0016-consumer-decodes-media-before-sending.md) | Consumer decodes media before sending — daemon stays codec-free | Accepted |
+| [0017](0017-embeddings-on-a-third-socket.md) | Embeddings on a third socket — NDJSON, not HTTP | Accepted |
 
 ## Writing a new ADR
 

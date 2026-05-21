@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ADR 0017: embeddings on a third socket.** Locks the v0.2.0 wire shape
+  for embedding requests before code lands. Embeddings ship on a
+  dedicated NDJSON-over-IPC socket (`infer.embed.sock` /
+  `\\.\pipe\inferd-infer-embed`) — same framing as v1 / v2, separate
+  path. HTTP `/v1/embeddings` stays an ecosystem-extension job per
+  ADR 0006. ADR 0012's "one warm model per process" rule stands:
+  operators who want both generation and embeddings run two inferd
+  processes. The capability frame on the admin socket gains an
+  `embed: bool` field; the daemon binds the embed socket only when
+  the active backend reports `supports().embed == true`. v0.2.0
+  scope is llamacpp + EmbeddingGemma 300M only — `openai-compat`
+  `/v1/embeddings` and Bedrock Titan Embed are explicitly deferred
+  to v0.2.1+.
+
 - **Phase 6B-5 part 2: bedrock-invoke wired into the daemon binary.**
   New daemon-side `bedrock` cargo feature; `--backend bedrock-invoke`
   CLI flag plus `--bedrock-region`, `--bedrock-model-id`,
