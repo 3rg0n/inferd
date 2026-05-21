@@ -170,6 +170,12 @@ pub struct ListenConfig {
     #[serde(default)]
     pub tcp_v2: Option<String>,
 
+    /// Loopback TCP bind address for the embed socket per ADR 0017.
+    /// Has no effect unless `--embed` is also set on the CLI and the
+    /// active backend advertises `capabilities().embed == true`.
+    #[serde(default)]
+    pub tcp_embed: Option<String>,
+
     /// **Name** of the env var carrying the pre-shared API key for
     /// TCP clients (THREAT_MODEL F-8). When set, the daemon reads
     /// the named env at startup and clients must send
@@ -479,6 +485,13 @@ impl ConfigFile {
             {
                 return Err(ConfigError::Invalid(
                     "listen.tcp_v2 must not be empty when set".into(),
+                ));
+            }
+            if let Some(addr) = &listen.tcp_embed
+                && addr.trim().is_empty()
+            {
+                return Err(ConfigError::Invalid(
+                    "listen.tcp_embed must not be empty when set".into(),
                 ));
             }
         }

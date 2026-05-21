@@ -383,13 +383,14 @@ async fn cmd_doctor(
                     let audio = c.audio.unwrap_or(false);
                     let tools = c.tools.unwrap_or(false);
                     let thinking = c.thinking.unwrap_or(false);
+                    let embed = c.embed.unwrap_or(false);
                     report_problem(
                         "backend",
                         true,
                         &format!(
                             "{backend} accelerator={accel} gpu_layers={gpu_layers} \
                              v2={v2} vision={vision} audio={audio} tools={tools} \
-                             thinking={thinking}"
+                             thinking={thinking} embed={embed}"
                         ),
                     );
                 }
@@ -476,6 +477,9 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(b) = event.thinking {
         obj.insert("thinking".into(), json!(b));
+    }
+    if let Some(b) = event.embed {
+        obj.insert("embed".into(), json!(b));
     }
     if let Some(s) = &event.accelerator {
         obj.insert("accelerator".into(), Value::String(s.clone()));

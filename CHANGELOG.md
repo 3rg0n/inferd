@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-7 part 4: daemon embed socket lifecycle.** Daemon now
+  binds a dedicated third inference socket (`/inferd-infer-embed`
+  UDS / `\\.\pipe\inferd-infer-embed` named pipe / `--embed-tcp`
+  loopback) per ADR 0017 when `--embed` is requested *and* at
+  least one registered backend advertises `capabilities().embed`.
+  The new `lifecycle_embed` module mirrors `lifecycle_v2` but
+  short-circuits to a single terminal frame per request
+  (`embeddings` or `error`) — no streaming. Admission, F-7
+  peer-cred (UDS / pipe), and F-8 first-frame TCP API-key gates
+  are reused from the existing accept context, and embed dispatch
+  shares the one warm-model admission slot with v1+v2 (one slot
+  is one slot per ADR 0012). Capability advertisement
+  (`StatusEvent::Capabilities { embed, .. }`) flows through to
+  the admin socket, the `inferd-client` `AdminEvent`, and the
+  `inferd doctor` / `inferd watch` surfaces so operators can see
+  whether the warm backend can serve embeddings. CLI gains
+  `--embed`, `--embed-addr`, `--embed-tcp` (with the same
+  conflicts-with shape as v2) and `listen.tcp_embed` joins the
+  config-file shape. CLI flag without a capable backend warns
+  and skips binding rather than failing — keeps the v0.2 cloud
+  adapters (which legitimately don't embed yet) running clean.
+  Workspace clippy + tests stay green; client surface lands in
+  part 5.
+
 - **Phase 6B-7 part 3: llamacpp embed adapter.** `LlamaCppConfig`
   grows `embed: bool`, `embed_pooling: Option<i32>` (defaults to
   `LLAMA_POOLING_TYPE_MEAN` — what EmbeddingGemma expects), and

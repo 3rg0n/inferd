@@ -88,6 +88,34 @@ pub fn default_v2_addr() -> std::path::PathBuf {
     }
 }
 
+/// Default embed inference endpoint per ADR 0017 §Endpoints.
+///
+/// - Linux: `${XDG_RUNTIME_DIR}/inferd/infer.embed.sock` (same
+///   fallback chain as v1 / v2)
+/// - macOS: `${TMPDIR}/inferd/infer.embed.sock`
+/// - Windows: `\\.\pipe\inferd-infer-embed`
+pub fn default_embed_addr() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        linux_runtime_path("infer.embed.sock")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut p = std::env::temp_dir();
+        p.push("inferd");
+        p.push("infer.embed.sock");
+        p
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(DEFAULT_PIPE_EMBED_PATH)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        std::path::PathBuf::from("/tmp/inferd/infer.embed.sock")
+    }
+}
+
 /// Resolve a Linux runtime-dir path with the fallback chain
 /// documented on `default_admin_addr`. `leaf` is the basename to
 /// append (e.g. `admin.sock`, `infer.sock`, `inferd.lock`).
@@ -270,6 +298,13 @@ pub const DEFAULT_PIPE_V2_PATH: &str = r"\\.\pipe\inferd-infer-v2";
 /// (ADR 0015 §Endpoints — admin is lifecycle, not request-shape).
 #[cfg(windows)]
 pub const DEFAULT_ADMIN_PIPE_PATH: &str = r"\\.\pipe\inferd-admin";
+
+/// Default Windows named-pipe path for the embed inference endpoint
+/// per ADR 0017 §Endpoints. Distinct from `DEFAULT_PIPE_PATH` /
+/// `DEFAULT_PIPE_V2_PATH` so v1, v2 and embed can coexist on the
+/// same daemon.
+#[cfg(windows)]
+pub const DEFAULT_PIPE_EMBED_PATH: &str = r"\\.\pipe\inferd-infer-embed";
 
 /// Bind a Windows named-pipe **server endpoint** at `path`.
 ///

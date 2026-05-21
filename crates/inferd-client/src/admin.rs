@@ -81,6 +81,10 @@ pub struct AdminEvent {
     /// user-visible output (capabilities phase).
     #[serde(default)]
     pub thinking: Option<bool>,
+    /// `true` if the backend implements `embed` per ADR 0017
+    /// (capabilities phase).
+    #[serde(default)]
+    pub embed: Option<bool>,
     /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
     /// / `"vulkan"` / `"rocm"` (capabilities phase).
     #[serde(default)]

@@ -327,6 +327,7 @@ mod tests {
             audio: false,
             tools: true,
             thinking: true,
+            embed: false,
             accelerator: "cuda".into(),
             gpu_layers: 99,
         });
@@ -362,6 +363,7 @@ mod tests {
             audio: false,
             tools: true,
             thinking: true,
+            embed: false,
             accelerator: "cpu".into(),
             gpu_layers: 0,
         });
