@@ -11,7 +11,9 @@ use std::path::PathBuf;
 ///
 /// `LlamaCpp` is gated behind the `llamacpp` cargo feature — default
 /// daemon builds only ship the mock adapter (per ADR 0006: lean core,
-/// extensions are separate concerns).
+/// extensions are separate concerns). `OpenAiCompat` is gated behind
+/// the `openai` cargo feature — pulled in only when the operator
+/// wants the outbound HTTPS adapter (ADR 0006 cloud carve-out).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BackendKind {
     /// Deterministic test double — used by integration tests and the
@@ -20,6 +22,15 @@ pub enum BackendKind {
     /// Local llama.cpp backend via FFI (M2). Requires `--model-path`.
     #[cfg(feature = "llamacpp")]
     Llamacpp,
+    /// OpenAI-compatible outbound HTTPS adapter (Phase 5A). Reaches
+    /// any provider speaking the `/v1/chat/completions` wire (OpenAI,
+    /// vLLM, LM Studio, LocalAI, OpenRouter, llama.cpp's HTTP server).
+    /// Requires `--openai-base-url` + `--openai-model`. The API key
+    /// is read from `--openai-api-key` or env (`INFERD_OPENAI_API_KEY`
+    /// then `OPENAI_API_KEY`); pass an empty string to skip the
+    /// `Authorization` header for self-hosted endpoints.
+    #[cfg(feature = "openai")]
+    OpenaiCompat,
 }
 
 /// Top-level CLI for `inferd-daemon`.
@@ -86,6 +97,37 @@ pub struct Cli {
     /// build time.
     #[arg(long, default_value_t = 0, env = "INFERD_N_GPU_LAYERS")]
     pub n_gpu_layers: i32,
+
+    /// Base URL of the upstream OpenAI-compat endpoint, no trailing
+    /// slash and no path (the adapter appends `/v1/chat/completions`).
+    /// Required when `--backend openai-compat`. Examples:
+    /// `https://api.openai.com`, `http://localhost:11434`,
+    /// `https://openrouter.ai`.
+    #[arg(long, env = "INFERD_OPENAI_BASE_URL")]
+    pub openai_base_url: Option<String>,
+
+    /// Bearer token for the OpenAI-compat upstream. Sent as
+    /// `Authorization: Bearer <value>`. Pass an empty string to skip
+    /// the header entirely for self-hosted endpoints. Resolves from
+    /// `--openai-api-key`, then `INFERD_OPENAI_API_KEY`, then
+    /// `OPENAI_API_KEY` (the de-facto env name most providers' SDKs
+    /// already use).
+    #[arg(long, env = "INFERD_OPENAI_API_KEY", hide_env_values = true)]
+    pub openai_api_key: Option<String>,
+
+    /// Upstream model identifier echoed in the request `model` field
+    /// — provider-specific (e.g. `gpt-4o-mini`, `llama3.1:8b`,
+    /// `meta-llama/Meta-Llama-3-70B-Instruct`). Required when
+    /// `--backend openai-compat`.
+    #[arg(long, env = "INFERD_OPENAI_MODEL")]
+    pub openai_model: Option<String>,
+
+    /// Total request timeout for OpenAI-compat calls, in seconds.
+    /// Default 300 (5 minutes) — long enough for a slow first-token
+    /// from a cold cloud model, short enough to surface stuck
+    /// requests rather than hang forever.
+    #[arg(long, default_value_t = 300, env = "INFERD_OPENAI_TIMEOUT_SECS")]
+    pub openai_timeout_secs: u64,
 
     /// Optional pre-shared API key. When set, TCP clients MUST send
     /// `{"type":"auth","key":"<this value>"}` as their first NDJSON
@@ -280,5 +322,55 @@ mod tests {
             "127.0.0.1:0",
         ]);
         assert!(!cli.v2);
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn cli_accepts_openai_compat_backend() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "openai-compat",
+            "--openai-base-url",
+            "http://localhost:11434",
+            "--openai-model",
+            "llama3.1:8b",
+            "--openai-api-key",
+            "sk-x",
+            "--openai-timeout-secs",
+            "30",
+        ]);
+        assert_eq!(cli.backend, BackendKind::OpenaiCompat);
+        assert_eq!(
+            cli.openai_base_url.as_deref(),
+            Some("http://localhost:11434")
+        );
+        assert_eq!(cli.openai_model.as_deref(), Some("llama3.1:8b"));
+        assert_eq!(cli.openai_api_key.as_deref(), Some("sk-x"));
+        assert_eq!(cli.openai_timeout_secs, 30);
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn cli_openai_timeout_defaults_to_300() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "openai-compat",
+            "--openai-base-url",
+            "https://api.openai.com",
+            "--openai-model",
+            "gpt-4o-mini",
+        ]);
+        assert_eq!(cli.openai_timeout_secs, 300);
+        assert!(cli.openai_api_key.is_none());
     }
 }

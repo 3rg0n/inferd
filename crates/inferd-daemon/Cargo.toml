@@ -24,6 +24,10 @@ cuda     = ["inferd-engine/cuda"]
 metal    = ["inferd-engine/metal"]
 vulkan   = ["inferd-engine/vulkan"]
 rocm     = ["inferd-engine/rocm"]
+# OpenAI-compat outbound HTTPS adapter (Phase 5A). Daemon-side
+# enables `--backend openai-compat` plus the matching `--openai-*`
+# CLI flags. Pulls in the engine's `openai` feature.
+openai   = ["inferd-engine/openai"]
 # Tier 5 security regression tests live behind this feature.
 security = []
 
