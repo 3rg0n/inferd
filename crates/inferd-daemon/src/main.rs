@@ -22,8 +22,10 @@
 use clap::Parser;
 use inferd_daemon::admin::StatusBroadcaster;
 use inferd_daemon::config::{BackendKind, Cli};
-#[cfg(any(feature = "llamacpp", feature = "openai"))]
+#[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
 use inferd_daemon::config_file::BackendEntry;
+#[cfg(feature = "bedrock")]
+use inferd_daemon::config_file::BedrockInvokeEntry;
 use inferd_daemon::config_file::ConfigFile;
 #[cfg(feature = "llamacpp")]
 use inferd_daemon::config_file::LlamacppEntry;
@@ -485,7 +487,7 @@ async fn build_backends(
             });
             Ok(vec![Arc::new(Mock::new())])
         }
-        #[cfg(any(feature = "llamacpp", feature = "openai"))]
+        #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
         _ => {
             if let Some(cfg) = config {
                 let entries = cfg.resolved_backends();
@@ -512,19 +514,28 @@ async fn build_backends(
                     let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
                     Ok(vec![b])
                 }
+                #[cfg(feature = "bedrock")]
+                BackendKind::BedrockInvoke => {
+                    let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
+                    Ok(vec![b])
+                }
             }
         }
     }
 }
 
 /// Dispatch a single config-file backend entry to the right builder.
-#[cfg(any(feature = "llamacpp", feature = "openai"))]
+#[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
 async fn build_entry(
     entry: &BackendEntry,
     #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] cfg: &ConfigFile,
     #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] auto_pull: bool,
     #[cfg_attr(
-        all(not(feature = "llamacpp"), not(feature = "openai")),
+        all(
+            not(feature = "llamacpp"),
+            not(feature = "openai"),
+            not(feature = "bedrock")
+        ),
         allow(unused_variables)
     )]
     broadcaster: Arc<StatusBroadcaster>,
@@ -546,6 +557,15 @@ async fn build_entry(
             anyhow::bail!(
                 "config declares a `kind: openai-compat` backend but this \
                  daemon binary was built without the `openai` feature"
+            )
+        }
+        #[cfg(feature = "bedrock")]
+        BackendEntry::BedrockInvoke(e) => build_bedrock_invoke_entry(e, broadcaster),
+        #[cfg(not(feature = "bedrock"))]
+        BackendEntry::BedrockInvoke(_) => {
+            anyhow::bail!(
+                "config declares a `kind: bedrock-invoke` backend but this \
+                 daemon binary was built without the `bedrock` feature"
             )
         }
     }
@@ -644,6 +664,128 @@ fn build_openai_compat_cli_only(
     })
     .map_err(|e| anyhow::anyhow!("openai-compat init failed: {e}"))?;
     Ok(Arc::new(backend))
+}
+
+/// Build a bedrock-invoke backend from a config-file entry. The auth
+/// credentials are read from env at startup — the config file only
+/// names the env var.
+#[cfg(feature = "bedrock")]
+fn build_bedrock_invoke_entry(
+    entry: &BedrockInvokeEntry,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::bedrock_invoke::{BedrockInvoke, BedrockInvokeConfig};
+
+    let bearer = entry
+        .bearer_token_env
+        .as_deref()
+        .and_then(|name| std::env::var(name).ok())
+        .filter(|v| !v.is_empty());
+    let auth = resolve_bedrock_auth(bearer.as_deref()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "bedrock-invoke {:?}: no auth credentials. Set the env var named in \
+             `bearer_token_env` (Bearer auth) or AWS_ACCESS_KEY_ID / \
+             AWS_SECRET_ACCESS_KEY (SigV4)",
+            entry.name
+        )
+    })?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!(
+                "(bedrock-invoke: {} / {})",
+                entry.region, entry.model_id
+            )),
+        },
+    });
+
+    let backend = BedrockInvoke::new(BedrockInvokeConfig {
+        region: entry.region.clone(),
+        model_id: entry.model_id.clone(),
+        auth,
+        timeout: Duration::from_secs(entry.timeout_secs),
+        endpoint_override: entry.endpoint.clone().filter(|s| !s.is_empty()),
+    })
+    .map_err(|e| anyhow::anyhow!("bedrock-invoke init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// CLI-only path for `--backend bedrock-invoke` without a config file.
+/// Mirrors the openai-compat CLI shape.
+#[cfg(feature = "bedrock")]
+fn build_bedrock_invoke_cli_only(
+    cli: &Cli,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::bedrock_invoke::{BedrockInvoke, BedrockInvokeConfig};
+
+    let region = cli.bedrock_region.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend bedrock-invoke requires --bedrock-region \
+             (e.g. us-east-1, eu-central-1)"
+        )
+    })?;
+    let model_id = cli.bedrock_model_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend bedrock-invoke requires --bedrock-model-id \
+             (e.g. anthropic.claude-3-5-sonnet-20241022-v2:0)"
+        )
+    })?;
+    let bearer = cli
+        .bedrock_bearer_token
+        .as_deref()
+        .filter(|v| !v.is_empty());
+    let auth = resolve_bedrock_auth(bearer).ok_or_else(|| {
+        anyhow::anyhow!(
+            "bedrock-invoke: no auth credentials. Set --bedrock-bearer-token / \
+             AWS_BEARER_TOKEN_BEDROCK (Bearer auth) or AWS_ACCESS_KEY_ID / \
+             AWS_SECRET_ACCESS_KEY (SigV4)"
+        )
+    })?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!("(bedrock-invoke: {region} / {model_id})")),
+        },
+    });
+
+    let backend = BedrockInvoke::new(BedrockInvokeConfig {
+        region: region.to_string(),
+        model_id: model_id.to_string(),
+        auth,
+        timeout: Duration::from_secs(cli.bedrock_timeout_secs),
+        endpoint_override: cli.bedrock_endpoint.clone().filter(|s| !s.is_empty()),
+    })
+    .map_err(|e| anyhow::anyhow!("bedrock-invoke init failed: {e}"))?;
+    Ok(Arc::new(backend))
+}
+
+/// Resolve Bedrock auth from a (possibly-empty) bearer token + the
+/// standard AWS env var chain. Returns `None` when neither shape is
+/// satisfied.
+#[cfg(feature = "bedrock")]
+fn resolve_bedrock_auth(
+    bearer: Option<&str>,
+) -> Option<inferd_engine::bedrock_invoke::BedrockAuth> {
+    use inferd_engine::bedrock_invoke::BedrockAuth;
+    if let Some(token) = bearer
+        && !token.is_empty()
+    {
+        return Some(BedrockAuth::BearerToken(token.to_string()));
+    }
+    let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").ok()?;
+    let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok()?;
+    if access_key_id.is_empty() || secret_access_key.is_empty() {
+        return None;
+    }
+    let session_token = std::env::var("AWS_SESSION_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty());
+    Some(BedrockAuth::Sigv4 {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
 }
 
 /// Build a llamacpp backend from a config-file entry. Resolves the

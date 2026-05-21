@@ -182,9 +182,9 @@ pub struct ListenConfig {
 }
 
 /// A single backend declaration. Tagged on `kind:` so future
-/// variants (`bedrock-invoke`, `bedrock-converse`, …) slot in
-/// additively. Unknown kinds are rejected at parse time so operators
-/// see a clear error rather than a silent skip.
+/// variants (`bedrock-converse`, …) slot in additively. Unknown
+/// kinds are rejected at parse time so operators see a clear error
+/// rather than a silent skip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum BackendEntry {
@@ -195,6 +195,12 @@ pub enum BackendEntry {
     /// at `api.anthropic.com/v1/`, OpenRouter, vLLM, LM Studio,
     /// LocalAI, Ollama, llama.cpp's HTTP server).
     OpenaiCompat(OpenaiCompatEntry),
+    /// AWS Bedrock-runtime
+    /// `InvokeModelWithResponseStream` adapter
+    /// (Phase 6B-5). v0.2.0 ships only the Anthropic-on-Bedrock body
+    /// shape — Claude models invoked via Bedrock's pinned
+    /// `anthropic_version: "bedrock-2023-05-31"` payload.
+    BedrockInvoke(BedrockInvokeEntry),
 }
 
 impl BackendEntry {
@@ -204,6 +210,7 @@ impl BackendEntry {
         match self {
             BackendEntry::Llamacpp(e) => &e.name,
             BackendEntry::OpenaiCompat(e) => &e.name,
+            BackendEntry::BedrockInvoke(e) => &e.name,
         }
     }
 }
@@ -259,6 +266,54 @@ pub struct OpenaiCompatEntry {
     pub timeout_secs: u64,
 }
 
+/// Bedrock-invoke backend entry inside `backends:`.
+///
+/// Auth precedence at startup (mirrors `openai-compat` env-var-by-name
+/// shape so secrets stay out of the file):
+///
+/// 1. `bearer_token_env: "<NAME>"` — when the named env contains a
+///    non-empty value, the adapter sends `Authorization: Bearer
+///    <value>` and skips SigV4. Mirrors AWS' 2025-06
+///    `AWS_BEARER_TOKEN_BEDROCK` rollout.
+/// 2. SigV4 against the standard AWS credential chain — env vars
+///    `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional
+///    `AWS_SESSION_TOKEN`). Cross-account assume-role is out of
+///    scope for v0.2.0; operators set the env vars from their own
+///    session before starting the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BedrockInvokeEntry {
+    /// Stable operator-facing identifier, e.g. `"bedrock-claude"`.
+    pub name: String,
+
+    /// AWS region the Bedrock endpoint lives in, e.g. `"us-east-1"`.
+    /// Used for both the endpoint host and SigV4 signing scope.
+    pub region: String,
+
+    /// Bedrock model id, e.g.
+    /// `"anthropic.claude-3-5-sonnet-20241022-v2:0"`. URL-encoded
+    /// by the adapter.
+    pub model_id: String,
+
+    /// Optional **name** of the env var carrying the Bedrock bearer
+    /// token (`AWS_BEARER_TOKEN_BEDROCK` shape) — never the literal
+    /// token. When the named env is non-empty, bearer auth wins and
+    /// SigV4 is skipped. When unset or empty, the adapter falls back
+    /// to the standard `AWS_ACCESS_KEY_ID` /
+    /// `AWS_SECRET_ACCESS_KEY` chain.
+    #[serde(default)]
+    pub bearer_token_env: Option<String>,
+
+    /// Optional endpoint host override. Empty/absent → default
+    /// `bedrock-runtime.<region>.amazonaws.com`. Useful for VPC
+    /// endpoints / integration tests.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+
+    /// Total request timeout in seconds. Default 300 (5 minutes).
+    #[serde(default = "default_bedrock_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
 /// Per-model entry: pinned URL + pinned SHA-256 + name.
 ///
 /// The shape mirrors `fetch::ModelSpec` but as a serde-deserialisable
@@ -294,6 +349,10 @@ fn default_n_ctx() -> u32 {
 }
 
 fn default_openai_timeout_secs() -> u64 {
+    300
+}
+
+fn default_bedrock_timeout_secs() -> u64 {
     300
 }
 
@@ -469,6 +528,23 @@ impl ConfigFile {
                         if e.model.trim().is_empty() {
                             return Err(ConfigError::Invalid(format!(
                                 "backends[{name:?}].model must not be empty"
+                            )));
+                        }
+                        if e.timeout_secs == 0 {
+                            return Err(ConfigError::Invalid(format!(
+                                "backends[{name:?}].timeout_secs must be > 0"
+                            )));
+                        }
+                    }
+                    BackendEntry::BedrockInvoke(e) => {
+                        if e.region.trim().is_empty() {
+                            return Err(ConfigError::Invalid(format!(
+                                "backends[{name:?}].region must not be empty"
+                            )));
+                        }
+                        if e.model_id.trim().is_empty() {
+                            return Err(ConfigError::Invalid(format!(
+                                "backends[{name:?}].model_id must not be empty"
                             )));
                         }
                         if e.timeout_secs == 0 {
@@ -863,7 +939,7 @@ mod tests {
         let json = r#"{
             "backends": [
                 {
-                    "kind": "future-bedrock-thing",
+                    "kind": "future-thing-not-supported",
                     "name": "x"
                 }
             ]
@@ -871,6 +947,79 @@ mod tests {
         let f = write_config(json);
         let err = ConfigFile::load(f.path()).unwrap_err();
         assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn loads_bedrock_invoke_entry() {
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "bedrock-invoke",
+                    "name": "bedrock-claude",
+                    "region": "us-east-1",
+                    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "bearer_token_env": "AWS_BEARER_TOKEN_BEDROCK"
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let list = cfg.backends.as_ref().unwrap();
+        assert_eq!(list.len(), 1);
+        match &list[0] {
+            BackendEntry::BedrockInvoke(e) => {
+                assert_eq!(e.name, "bedrock-claude");
+                assert_eq!(e.region, "us-east-1");
+                assert_eq!(e.model_id, "anthropic.claude-3-5-sonnet-20241022-v2:0");
+                assert_eq!(
+                    e.bearer_token_env.as_deref(),
+                    Some("AWS_BEARER_TOKEN_BEDROCK")
+                );
+                assert!(e.endpoint.is_none());
+                assert_eq!(e.timeout_secs, 300);
+            }
+            other => panic!("expected bedrock-invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_bedrock_invoke_without_region() {
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "bedrock-invoke",
+                    "name": "x",
+                    "region": "",
+                    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let err = ConfigFile::load(f.path()).unwrap_err();
+        match err {
+            ConfigError::Invalid(msg) => assert!(msg.contains("region")),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_bedrock_invoke_without_model_id() {
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "bedrock-invoke",
+                    "name": "x",
+                    "region": "us-east-1",
+                    "model_id": ""
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let err = ConfigFile::load(f.path()).unwrap_err();
+        match err {
+            ConfigError::Invalid(msg) => assert!(msg.contains("model_id")),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 
     #[test]

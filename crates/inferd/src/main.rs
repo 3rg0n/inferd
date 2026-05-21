@@ -253,6 +253,9 @@ async fn cmd_doctor(
                 .map(|e| match e {
                     BackendEntry::Llamacpp(l) => format!("llamacpp:{}", l.name),
                     BackendEntry::OpenaiCompat(o) => format!("openai-compat:{}", o.name),
+                    BackendEntry::BedrockInvoke(b) => {
+                        format!("bedrock-invoke:{}", b.name)
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
