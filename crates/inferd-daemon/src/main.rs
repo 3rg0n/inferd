@@ -394,7 +394,58 @@ async fn build_backend(
         }
         #[cfg(feature = "llamacpp")]
         BackendKind::Llamacpp => build_llamacpp(cli, config, broadcaster).await,
+        #[cfg(feature = "openai")]
+        BackendKind::OpenaiCompat => build_openai_compat(cli, broadcaster),
     }
+}
+
+/// Construct the OpenAI-compat outbound adapter. v0.2 cloud
+/// carve-out per ADR 0006: the daemon never serves HTTP, but a
+/// `Backend` impl is allowed to reach out via HTTPS. No model file,
+/// no CAS lookup, no fetch — the upstream provider hosts the model.
+#[cfg(feature = "openai")]
+fn build_openai_compat(
+    cli: &Cli,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::openai_compat::{OpenAiCompat, OpenAiCompatConfig};
+
+    let base_url = cli.openai_base_url.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend openai-compat requires --openai-base-url \
+             (e.g. https://api.openai.com, http://localhost:11434)"
+        )
+    })?;
+    let model = cli.openai_model.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend openai-compat requires --openai-model \
+             (e.g. gpt-4o-mini, llama3.1:8b)"
+        )
+    })?;
+    // API key resolution: CLI flag → INFERD_OPENAI_API_KEY (handled
+    // by clap's env=) → fall back to the de-facto provider env name.
+    let api_key = cli
+        .openai_api_key
+        .clone()
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+        .unwrap_or_default();
+
+    // No on-disk model; emit a single CheckingLocal phase so admin
+    // subscribers see the same shape as the local-model path.
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!("(openai-compat: {base_url} / {model})")),
+        },
+    });
+
+    let backend = OpenAiCompat::new(OpenAiCompatConfig {
+        base_url: base_url.to_string(),
+        api_key,
+        model: model.to_string(),
+        timeout: Duration::from_secs(cli.openai_timeout_secs),
+    })
+    .map_err(|e| anyhow::anyhow!("openai-compat init failed: {e}"))?;
+    Ok(Arc::new(backend))
 }
 
 /// Resolve the model into the shared CAS store (ADR 0011). On

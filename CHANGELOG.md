@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-2: `BackendKind::OpenaiCompat` wired into the daemon
+  binary.** Closes the v0.2.0-tagging gap that the engine shipped an
+  OpenAI-compat adapter behind `--features openai` but the daemon
+  binary couldn't select it. New `BackendKind::OpenaiCompat` variant
+  (gated on the daemon's `openai` cargo feature, which feeds through
+  to `inferd-engine/openai`) registers as `--backend openai-compat`
+  via clap. Four new CLI flags carry the adapter's config:
+  `--openai-base-url` (env `INFERD_OPENAI_BASE_URL`),
+  `--openai-api-key` (env `INFERD_OPENAI_API_KEY`, `hide_env_values`
+  to keep the bearer out of `--help`), `--openai-model` (env
+  `INFERD_OPENAI_MODEL`), and `--openai-timeout-secs` (env
+  `INFERD_OPENAI_TIMEOUT_SECS`, default 300s). The API key
+  resolution chain is `--openai-api-key` → `INFERD_OPENAI_API_KEY` →
+  `OPENAI_API_KEY` (the de-facto env name most provider SDKs already
+  use); pass an empty string to skip the `Authorization` header
+  entirely for self-hosted endpoints (vLLM, LM Studio, LocalAI,
+  llama.cpp's HTTP server). The `build_openai_compat` builder
+  publishes a `LoadingModel{CheckingLocal}` status event tagged with
+  `(openai-compat: <base_url> / <model>)` so the admin status feed
+  surfaces *which* upstream the daemon is configured for.
 - **Phase 6B-1: `inferd-client` v2 surface.** New `ClientV2` mirrors
   `Client`'s shape (`dial_tcp` / `dial_uds` / `dial_pipe`) but speaks
   the v2 wire types (`RequestV2` / `ResponseV2`) per ADR 0015.
