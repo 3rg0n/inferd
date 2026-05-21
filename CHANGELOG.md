@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Phase 6B-7 part 8: `LlamaCpp::embed` reports the actual model
+  identifier on response frames.** Previously the adapter hard-coded
+  `model: "llamacpp"` on every `embeddings` frame — a duplicate of
+  `Backend::name()` and useless to operators trying to confirm which
+  GGUF served their request. The adapter now reads GGUF `general.name`
+  metadata via `llama_model_meta_val_str` at construction time and
+  caches the result on the adapter; if the key is absent it falls
+  back to the path file stem (e.g. `embeddinggemma-300m-Q8_0` from
+  `embeddinggemma-300m-Q8_0.gguf`), and as a last resort the constant
+  `"llamacpp"` for paths with no valid Unicode stem. Diagnostic-only
+  per ADR 0007 — apps must not branch on this — but accuracy here
+  matters for log correlation and `inferd doctor` parity.
+
 ### Added
+
+- **Phase 6B-7 part 9: real-model embed integration test.** New
+  `crates/inferd-engine/tests/embed_llamacpp.rs` (gated behind
+  `llamacpp-integration`, skips when `INFERD_TEST_EMBED_MODEL_PATH`
+  is unset) drives the FFI path against a real EmbeddingGemma 300M
+  GGUF: capability advertisement, default-dim-768 unit-norm output,
+  in-order batching with cosine-distinct vectors, MRL truncation to
+  256 with re-normalisation, rejection of dimensions above `n_embd`,
+  task-prefix variation across `RetrievalQuery` / `RetrievalDocument`
+  / unprefixed, and a smoke pass through all eight EmbeddingGemma
+  task variants. No mocks anywhere on this path — same Tier-3 shape
+  as `tests/llamacpp.rs` and `tests/llamacpp_multimodal.rs`.
 
 - **Phase 6B-7 part 7: config-file embed fields on `LlamacppEntry`.**
   `LlamacppEntry` (multi-backend `backends:` shape) gains `embed:
