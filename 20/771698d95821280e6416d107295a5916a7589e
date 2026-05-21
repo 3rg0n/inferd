@@ -1,0 +1,24 @@
+CHANGELOG.md
+  s_126aec4081f728::t_b54af1bb2ee204 12-22
+INTEGRATING.md
+  s_126aec4081f728::t_2c960b1177ab3b 337
+  s_126aec4081f728::t_ab8880dfba74f2 327,329,331,335-336,338-433
+  s_126aec4081f728::t_ce2d7ffa84b3ac 113-114
+  s_126aec4081f728::t_6856529291acbb 441
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "20771698d95821280e6416d107295a5916a7589e",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
