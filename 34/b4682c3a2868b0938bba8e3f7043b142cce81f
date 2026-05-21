@@ -1,0 +1,33 @@
+crates/inferd-engine/src/backend.rs
+  s_126aec4081f728::t_a2d5039b00a583 4
+  s_126aec4081f728::t_ea9ae46b0cae93 289-299
+  s_126aec4081f728::t_24ba1a8b383251 163-167
+  s_126aec4081f728::t_e502d378233048 176-220
+crates/inferd-engine/tests/mock_backend.rs
+  s_126aec4081f728::t_4ff3b940b13d18 5-6
+  s_126aec4081f728::t_a6d0a45e2899cf 119-196
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_2be117d4b2727a 32-33
+crates/inferd-engine/src/mock.rs
+  s_126aec4081f728::t_bf66444114b99e 13-14,17
+  s_126aec4081f728::t_698ffba8a0b17a 114-117,122
+  s_126aec4081f728::t_e6c768bf1859ed 225-267
+CHANGELOG.md
+  s_126aec4081f728::t_ef5f4b2f9a5ca7 12-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "34b4682c3a2868b0938bba8e3f7043b142cce81f",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
