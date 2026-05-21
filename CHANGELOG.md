@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-5 part 2: bedrock-invoke wired into the daemon binary.**
+  New daemon-side `bedrock` cargo feature; `--backend bedrock-invoke`
+  CLI flag plus `--bedrock-region`, `--bedrock-model-id`,
+  `--bedrock-bearer-token` (env: `AWS_BEARER_TOKEN_BEDROCK`),
+  `--bedrock-endpoint`, and `--bedrock-timeout-secs` for the
+  CLI-only path; matching `kind: "bedrock-invoke"` config-file
+  entry with `region`, `model_id`, optional `bearer_token_env`
+  (env-var-by-name shape, mirroring openai-compat's
+  `api_key_env` so secrets stay out of the file), optional
+  `endpoint`, and `timeout_secs`. Auth resolves bearer-first
+  (CLI flag → named env var), then the standard
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional
+  `AWS_SESSION_TOKEN` chain via SigV4. Operators with no auth
+  configured get a clear startup error pointing at both options.
+  Five new tests cover the CLI-shape round-trip + defaults and
+  the config-file BedrockInvokeEntry round-trip + validation
+  (empty region / empty model_id rejected).
 - **Phase 6B-5 part 1: bedrock-invoke backend adapter (engine crate).**
   New `bedrock_invoke` module behind the `bedrock` cargo feature
   ships the AWS Bedrock-runtime

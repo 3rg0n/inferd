@@ -31,6 +31,17 @@ pub enum BackendKind {
     /// `Authorization` header for self-hosted endpoints.
     #[cfg(feature = "openai")]
     OpenaiCompat,
+    /// AWS Bedrock-runtime `InvokeModelWithResponseStream` adapter
+    /// (Phase 6B-5). v0.2.0 ships only the Anthropic-on-Bedrock body
+    /// shape — Claude models invoked via Bedrock's pinned
+    /// `anthropic_version: "bedrock-2023-05-31"` payload. Requires
+    /// `--bedrock-region` + `--bedrock-model-id`. Auth resolves from
+    /// `--bedrock-bearer-token` / `AWS_BEARER_TOKEN_BEDROCK` first,
+    /// then the standard `AWS_ACCESS_KEY_ID` /
+    /// `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`)
+    /// chain.
+    #[cfg(feature = "bedrock")]
+    BedrockInvoke,
 }
 
 /// Top-level CLI for `inferd-daemon`.
@@ -128,6 +139,38 @@ pub struct Cli {
     /// requests rather than hang forever.
     #[arg(long, default_value_t = 300, env = "INFERD_OPENAI_TIMEOUT_SECS")]
     pub openai_timeout_secs: u64,
+
+    /// AWS region the Bedrock endpoint lives in, e.g. `us-east-1`,
+    /// `eu-central-1`. Required when `--backend bedrock-invoke`.
+    /// Used for both the endpoint host and SigV4 signing scope.
+    #[arg(long, env = "INFERD_BEDROCK_REGION")]
+    pub bedrock_region: Option<String>,
+
+    /// Bedrock model id (URL-encoded by the adapter), e.g.
+    /// `anthropic.claude-3-5-sonnet-20241022-v2:0`. Required when
+    /// `--backend bedrock-invoke`.
+    #[arg(long, env = "INFERD_BEDROCK_MODEL_ID")]
+    pub bedrock_model_id: Option<String>,
+
+    /// Pre-issued Bedrock bearer token (`AWS_BEARER_TOKEN_BEDROCK`
+    /// shape, AWS rolled this out in 2025-06). When set, the adapter
+    /// sends `Authorization: Bearer <value>` and skips SigV4. When
+    /// unset, the adapter falls back to the standard
+    /// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional
+    /// `AWS_SESSION_TOKEN`) chain via SigV4 signing.
+    #[arg(long, env = "AWS_BEARER_TOKEN_BEDROCK", hide_env_values = true)]
+    pub bedrock_bearer_token: Option<String>,
+
+    /// Override the Bedrock endpoint host. Empty/absent → default
+    /// `bedrock-runtime.<region>.amazonaws.com`. Useful for VPC
+    /// endpoints / integration tests.
+    #[arg(long, env = "INFERD_BEDROCK_ENDPOINT")]
+    pub bedrock_endpoint: Option<String>,
+
+    /// Total request timeout for Bedrock calls, in seconds. Default
+    /// 300 (5 minutes).
+    #[arg(long, default_value_t = 300, env = "INFERD_BEDROCK_TIMEOUT_SECS")]
+    pub bedrock_timeout_secs: u64,
 
     /// Optional pre-shared API key. When set, TCP clients MUST send
     /// `{"type":"auth","key":"<this value>"}` as their first NDJSON
@@ -352,6 +395,57 @@ mod tests {
         assert_eq!(cli.openai_model.as_deref(), Some("llama3.1:8b"));
         assert_eq!(cli.openai_api_key.as_deref(), Some("sk-x"));
         assert_eq!(cli.openai_timeout_secs, 30);
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn cli_accepts_bedrock_invoke_backend() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "bedrock-invoke",
+            "--bedrock-region",
+            "us-east-1",
+            "--bedrock-model-id",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "--bedrock-bearer-token",
+            "abc123",
+            "--bedrock-timeout-secs",
+            "60",
+        ]);
+        assert_eq!(cli.backend, BackendKind::BedrockInvoke);
+        assert_eq!(cli.bedrock_region.as_deref(), Some("us-east-1"));
+        assert_eq!(
+            cli.bedrock_model_id.as_deref(),
+            Some("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        );
+        assert_eq!(cli.bedrock_bearer_token.as_deref(), Some("abc123"));
+        assert_eq!(cli.bedrock_timeout_secs, 60);
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn cli_bedrock_timeout_defaults_to_300() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "bedrock-invoke",
+            "--bedrock-region",
+            "us-east-1",
+            "--bedrock-model-id",
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+        ]);
+        assert_eq!(cli.bedrock_timeout_secs, 300);
+        assert!(cli.bedrock_bearer_token.is_none());
+        assert!(cli.bedrock_endpoint.is_none());
     }
 
     #[cfg(feature = "openai")]
