@@ -136,6 +136,49 @@ pub struct ConfigFile {
     /// next, etc. Mutually exclusive with `model:`.
     #[serde(default)]
     pub backends: Option<Vec<BackendEntry>>,
+
+    /// Optional listener overrides. Default behaviour is unchanged:
+    /// the operator picks a transport via `--tcp` / `--uds` /
+    /// `--pipe` on the CLI. When `listen:` is present **and** the
+    /// CLI did not pass a transport flag, the daemon binds the
+    /// transports declared here. CLI flags always win when both
+    /// are set. Restart-time only — no config watcher.
+    #[serde(default)]
+    pub listen: Option<ListenConfig>,
+}
+
+/// Operator-declared listener overrides. Every field is optional.
+/// TCP is **off by default** — set `tcp:` (and `tcp_v2:` if running
+/// with v2) to opt in for cross-VM use cases (WSL ↔ Windows host,
+/// podman-on-machine, …) where Unix sockets / named pipes don't
+/// cross the boundary cleanly. Mirrors the security shape of
+/// `openai-compat`: the API key is referenced by env-var **name**,
+/// never embedded literally in the file.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListenConfig {
+    /// Loopback TCP bind address for the v1 inference socket, e.g.
+    /// `"127.0.0.1:9090"` or `"0.0.0.0:9090"`. When unset, no v1
+    /// TCP listener is bound from config (CLI `--tcp` may still
+    /// provide one). v0.1 invariant: CLI mutual exclusion still
+    /// applies — if CLI passes `--uds` / `--pipe`, the config
+    /// `tcp:` is ignored with a one-line warning at startup.
+    #[serde(default)]
+    pub tcp: Option<String>,
+
+    /// Loopback TCP bind address for the v2 inference socket. Has
+    /// no effect unless `--v2` is also set on the CLI.
+    #[serde(default)]
+    pub tcp_v2: Option<String>,
+
+    /// **Name** of the env var carrying the pre-shared API key for
+    /// TCP clients (THREAT_MODEL F-8). When set, the daemon reads
+    /// the named env at startup and clients must send
+    /// `{"type":"auth","key":"<value>"}` as their first NDJSON
+    /// frame. UDS and named-pipe transports ignore this — kernel-
+    /// attested peer credentials (F-7) gate those. CLI `--api-key`
+    /// always wins when both are set.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
 }
 
 /// A single backend declaration. Tagged on `kind:` so future
@@ -363,6 +406,22 @@ impl ConfigFile {
         }
         if let Some(m) = &self.model {
             validate_model_config(m)?;
+        }
+        if let Some(listen) = &self.listen {
+            if let Some(addr) = &listen.tcp
+                && addr.trim().is_empty()
+            {
+                return Err(ConfigError::Invalid(
+                    "listen.tcp must not be empty when set".into(),
+                ));
+            }
+            if let Some(addr) = &listen.tcp_v2
+                && addr.trim().is_empty()
+            {
+                return Err(ConfigError::Invalid(
+                    "listen.tcp_v2 must not be empty when set".into(),
+                ));
+            }
         }
         if let Some(list) = &self.backends {
             if list.is_empty() {
@@ -838,5 +897,52 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].name(), "local-gemma");
         assert_eq!(resolved[1].name(), "anthropic-fallback");
+    }
+
+    #[test]
+    fn listen_block_absent_by_default() {
+        let f = write_config(&good_json());
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        assert!(cfg.listen.is_none());
+    }
+
+    #[test]
+    fn listen_block_carries_tcp_and_api_key_env() {
+        let json = r#"{
+            "model": {
+                "name": "gemma-4-e4b",
+                "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                "source_url": "https://example.com/x.gguf"
+            },
+            "listen": {
+                "tcp": "127.0.0.1:9090",
+                "tcp_v2": "127.0.0.1:9091",
+                "api_key_env": "INFERD_TCP_API_KEY"
+            }
+        }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let listen = cfg.listen.as_ref().expect("listen present");
+        assert_eq!(listen.tcp.as_deref(), Some("127.0.0.1:9090"));
+        assert_eq!(listen.tcp_v2.as_deref(), Some("127.0.0.1:9091"));
+        assert_eq!(listen.api_key_env.as_deref(), Some("INFERD_TCP_API_KEY"));
+    }
+
+    #[test]
+    fn listen_rejects_empty_tcp() {
+        let json = r#"{
+            "model": {
+                "name": "gemma-4-e4b",
+                "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                "source_url": "https://example.com/x.gguf"
+            },
+            "listen": { "tcp": "   " }
+        }"#;
+        let f = write_config(json);
+        let err = ConfigFile::load(f.path()).unwrap_err();
+        match err {
+            ConfigError::Invalid(msg) => assert!(msg.contains("listen.tcp")),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 }

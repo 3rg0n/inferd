@@ -53,8 +53,11 @@ async fn main() -> anyhow::Result<()> {
     install_tracing()?;
 
     let cli = Cli::parse();
-    cli.require_one_transport()
-        .map_err(|m| anyhow::anyhow!("{m}"))?;
+    // Note: at-least-one-transport check is deferred until after the
+    // config file is loaded — the operator may declare TCP via
+    // `listen.tcp` in config.json instead of `--tcp` on the CLI
+    // (Phase 6B-4). clap still enforces mutual exclusion when CLI
+    // flags ARE set.
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -88,6 +91,29 @@ async fn main() -> anyhow::Result<()> {
     // Try to load the operator config file. Dev mode (no config) is
     // permitted: the daemon runs CLI-only against the mock backend.
     let config = load_config_file(cli.config.as_deref());
+
+    // Resolve the v1 transport. CLI flags always win; when none is
+    // set, fall back to `listen.tcp` from the config file. Phase
+    // 6B-4: TCP is opt-in by default, declared via config not CLI.
+    let resolved_v1 = resolve_v1_transport(&cli, config.as_ref())?;
+    let resolved_v2_tcp: Option<String> = cli.v2_tcp.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.tcp_v2.clone())
+    });
+    // API key resolution for TCP. CLI flag → config.listen.api_key_env
+    // → INFERD_API_KEY (already wired through clap's env=). The CLI
+    // value (which is the result of the clap layer) is used as the
+    // default; only fall back to config when the CLI didn't set it.
+    let effective_api_key: Option<String> = cli.api_key.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.api_key_env.as_deref())
+            .and_then(|name| std::env::var(name).ok())
+            .filter(|v| !v.is_empty())
+    });
 
     // Resolve models + construct backends. Publishes loading_model
     // phase events through the broadcaster. Returns the canonical
@@ -157,15 +183,17 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let accept_ctx = AcceptContext {
-        expected_api_key: cli.api_key.clone(),
+        expected_api_key: effective_api_key.clone(),
         admission: Some(admission),
     };
-    if cli.tcp.is_some() && accept_ctx.expected_api_key.is_some() {
+    let any_tcp = matches!(resolved_v1, ResolvedTransport::Tcp(_)) || resolved_v2_tcp.is_some();
+    if any_tcp && accept_ctx.expected_api_key.is_some() {
         info!("tcp api-key auth enabled (F-8)");
-    } else if cli.tcp.is_some() {
+    } else if any_tcp {
         warn!(
-            "tcp listener has no --api-key configured; any local process \
-             can connect (THREAT_MODEL F-8)"
+            "tcp listener has no api-key configured (CLI --api-key or \
+             config listen.api_key_env unset); any local process can \
+             connect (THREAT_MODEL F-8)"
         );
     }
 
@@ -174,37 +202,46 @@ async fn main() -> anyhow::Result<()> {
     // v2 share the same Router instance — a single warm model serves
     // both wire versions.
     let v2_handle = if let Some(rx) = v2_shutdown_tx {
-        Some(spawn_v2_listener(&cli, Arc::clone(&router), accept_ctx.clone(), rx).await?)
+        Some(
+            spawn_v2_listener(
+                &cli,
+                resolved_v2_tcp.as_deref(),
+                Arc::clone(&router),
+                accept_ctx.clone(),
+                rx,
+            )
+            .await?,
+        )
     } else {
         None
     };
 
-    let serve_result = if let Some(addr) = cli.tcp.as_deref() {
-        let listener = bind_tcp(addr).await?;
-        info!(addr = %listener.local_addr()?, "tcp listener bound");
-        serve_tcp(listener, router, accept_ctx, inference_shutdown_tx).await
-    } else if let Some(path) = cli.uds.as_ref() {
+    let serve_result = match resolved_v1 {
+        ResolvedTransport::Tcp(addr) => {
+            let listener = bind_tcp(&addr).await?;
+            info!(addr = %listener.local_addr()?, "tcp listener bound");
+            serve_tcp(listener, router, accept_ctx, inference_shutdown_tx).await
+        }
         #[cfg(unix)]
-        {
-            let listener = bind_uds(path, cli.group.as_deref()).await?;
+        ResolvedTransport::Uds(path) => {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
             info!(path = %path.display(), "uds listener bound");
             inferd_daemon::lifecycle::serve_uds(listener, router, accept_ctx, inference_shutdown_tx)
                 .await
         }
         #[cfg(not(unix))]
-        {
+        ResolvedTransport::Uds(path) => {
             drop((path, router, accept_ctx, inference_shutdown_tx));
             anyhow::bail!(
                 "Unix domain sockets are not supported on this platform; use --pipe or --tcp"
             );
         }
-    } else if let Some(path) = cli.pipe.as_ref() {
         #[cfg(windows)]
-        {
-            let first = inferd_daemon::endpoint::bind_named_pipe(path, true)?;
+        ResolvedTransport::Pipe(path) => {
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path, true)?;
             info!(path = %path, "named pipe listener bound");
             inferd_daemon::lifecycle::serve_named_pipe(
-                path,
+                &path,
                 first,
                 router,
                 accept_ctx,
@@ -213,14 +250,12 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         #[cfg(not(windows))]
-        {
+        ResolvedTransport::Pipe(path) => {
             drop((path, router, accept_ctx, inference_shutdown_tx));
             anyhow::bail!(
                 "Windows named pipes are not supported on this platform; use --uds or --tcp"
             );
         }
-    } else {
-        unreachable!("require_one_transport already verified");
     };
 
     // Drain: tell admin subscribers we're going away, then close.
@@ -247,6 +282,7 @@ async fn main() -> anyhow::Result<()> {
 /// advertise v2 capability"}`.
 async fn spawn_v2_listener(
     cli: &Cli,
+    resolved_v2_tcp: Option<&str>,
     router: Arc<Router>,
     accept_ctx: AcceptContext,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
@@ -254,7 +290,7 @@ async fn spawn_v2_listener(
     use inferd_daemon::endpoint::default_v2_addr;
     use inferd_daemon::lifecycle_v2;
 
-    if let Some(addr) = cli.v2_tcp.as_deref() {
+    if let Some(addr) = resolved_v2_tcp {
         let listener = bind_tcp(addr).await?;
         info!(addr = %listener.local_addr()?, "v2 tcp listener bound");
         Ok(tokio::spawn(async move {
@@ -381,6 +417,44 @@ fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
             None
         }
     }
+}
+
+/// Resolved v1 inference transport. CLI flags win; config-file
+/// `listen.tcp` is the fallback (Phase 6B-4 — TCP is opt-in).
+enum ResolvedTransport {
+    Tcp(String),
+    Uds(PathBuf),
+    Pipe(String),
+}
+
+/// Pick the v1 transport from CLI > config > error. clap already
+/// enforces that no two CLI flags are set; this layer adds the
+/// config-file fallback for `listen.tcp` and produces a clear error
+/// when neither source supplies a transport.
+fn resolve_v1_transport(
+    cli: &Cli,
+    config: Option<&ConfigFile>,
+) -> anyhow::Result<ResolvedTransport> {
+    if let Some(addr) = cli.tcp.as_deref() {
+        return Ok(ResolvedTransport::Tcp(addr.to_string()));
+    }
+    if let Some(path) = cli.uds.as_ref() {
+        return Ok(ResolvedTransport::Uds(path.clone()));
+    }
+    if let Some(path) = cli.pipe.as_ref() {
+        return Ok(ResolvedTransport::Pipe(path.clone()));
+    }
+    if let Some(addr) = config
+        .and_then(|c| c.listen.as_ref())
+        .and_then(|l| l.tcp.as_deref())
+    {
+        info!(addr = %addr, "tcp listener from config (listen.tcp)");
+        return Ok(ResolvedTransport::Tcp(addr.to_string()));
+    }
+    anyhow::bail!(
+        "no transport configured: pass --tcp / --uds / --pipe on the CLI, \
+         or set `listen.tcp` in ~/.inferd/config.json"
+    )
 }
 
 /// Construct backends per CLI + config. Publishes `loading_model`
