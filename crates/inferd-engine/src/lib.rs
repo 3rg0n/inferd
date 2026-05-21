@@ -16,6 +16,8 @@
 #![warn(missing_docs, rust_2018_idioms)]
 
 mod backend;
+#[cfg(feature = "bedrock")]
+pub mod bedrock_invoke;
 #[cfg(feature = "llamacpp")]
 pub(crate) mod ffi;
 #[cfg(feature = "llamacpp")]
