@@ -1,7 +1,9 @@
 //! Connect-and-retry helpers per `docs/protocol-v1.md` §"Client
 //! connection lifecycle".
 
-use crate::client::{Client, ClientError};
+#[cfg(test)]
+use crate::client::Client;
+use crate::client::ClientError;
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,13 +47,13 @@ pub enum WaitError {
 /// .await?;
 /// # Ok(()) }
 /// ```
-pub async fn dial_and_wait_ready<F, Fut>(
+pub async fn dial_and_wait_ready<C, F, Fut>(
     timeout: Duration,
     mut dial_fn: F,
-) -> Result<Client, WaitError>
+) -> Result<C, WaitError>
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = Result<Client, ClientError>>,
+    Fut: Future<Output = Result<C, ClientError>>,
 {
     let deadline = Instant::now() + timeout;
     let mut delay = Duration::from_millis(100);

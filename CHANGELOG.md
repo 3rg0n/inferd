@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-1: `inferd-client` v2 surface.** New `ClientV2` mirrors
+  `Client`'s shape (`dial_tcp` / `dial_uds` / `dial_pipe`) but speaks
+  the v2 wire types (`RequestV2` / `ResponseV2`) per ADR 0015.
+  `generate(RequestV2)` returns a `FrameStreamV2` of `ResponseV2`
+  frames, terminating on `Done` / `Error` exactly like v1. Defaults
+  helper `default_v2_addr()` returns the same per-platform fallback
+  chain the daemon binds (`${XDG_RUNTIME_DIR}/inferd/infer.v2.sock`
+  on Linux, `${TMPDIR}/inferd/infer.v2.sock` on macOS,
+  `\\.\pipe\inferd-infer-v2` on Windows). `dial_and_wait_ready` is
+  now generic over the client type so the same retry helper serves
+  both v1 and v2 — existing callers infer the client type
+  unchanged. v2 wire types (`RequestV2`, `ResponseV2`,
+  `ContentBlock`, `MessageV2`, `RoleV2`, `Attachment`, `Tool`,
+  `ToolCallId`, `ToolUseInput`, `ResponseBlock`, `StopReasonV2`,
+  `ErrorCodeV2`, `UsageV2`, `ResolvedV2`) re-exported at the crate
+  root so consumers don't need a separate `inferd-proto` dep. Two
+  unit tests cover the streams-frame-then-done happy path and the
+  unexpected-EOF error path. Closes the v0.2.0-tagging gap that the
+  shipped daemon spoke v2 but the published client could not.
 - **Phase 6B: v0.2.0 release prep.** Workspace version bumped to
   `0.2.0`. All intra-workspace pinned deps (`=0.1.13`) bumped in
   lockstep to `=0.2.0` so each crate's published artefact resolves
