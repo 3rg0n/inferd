@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 6B-4: TCP transport as config opt-in (default off).** Closes
+  the v0.2.0-tagging gap that enabling TCP required a CLI flag, which
+  blocked operators who run inferd under a system service manager
+  (systemd, launchd, NSSM) where editing the unit file just to flip a
+  transport is friction. Config-file schema grows an optional `listen`
+  block with `tcp` (v1 inference socket bind address), `tcp_v2` (v2
+  inference socket bind address — only honoured when `--v2` is also
+  set), and `api_key_env` (env-var **name** carrying the pre-shared
+  TCP API key, mirroring the `openai-compat` env-var-by-name shape so
+  secrets stay out of the file). Default behaviour is unchanged: when
+  the operator passes `--tcp`/`--uds`/`--pipe`, the CLI flag wins and
+  the config block is ignored with a one-line info log; when no CLI
+  transport is set, `listen.tcp` is the fallback. Errors with a clear
+  punch-list when neither source supplies a transport (`pass
+  --tcp/--uds/--pipe on the CLI, or set listen.tcp in
+  ~/.inferd/config.json`). API-key resolution chain: CLI `--api-key`
+  → `config.listen.api_key_env` → `INFERD_API_KEY` env (already wired
+  via clap's `env=`). The "no api-key configured but TCP listener
+  bound" warning (THREAT_MODEL F-8) now fires for both CLI-driven and
+  config-driven TCP. Restart-time only — no config watcher; operators
+  changing `listen:` must restart the service. Targets WSL ↔ Windows
+  host and podman cross-VM boundary scenarios where Unix sockets and
+  named pipes don't cross the VM line cleanly. Three new
+  `config_file::tests` cover the listen-absent default, the full
+  `tcp` + `tcp_v2` + `api_key_env` round-trip, and empty-string
+  rejection.
 - **Phase 6B-3: multi-backend config shape.** Closes the v0.2.0-tagging
   gap that `~/.inferd/config.json` only carried a single `model:` entry
   even though the engine, router, and circuit breaker were already
