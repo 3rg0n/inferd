@@ -165,6 +165,13 @@ pub struct LlamaCpp {
     /// configured `n_gpu_layers`). Cached on the adapter so
     /// `capabilities()` can return it without locking the state mutex.
     accelerator: AcceleratorInfo,
+    /// Model identifier reported on `done` / `embeddings` frames. Read
+    /// from GGUF `general.name` metadata when the model exposes it,
+    /// otherwise derived from the file stem (e.g.
+    /// `embeddinggemma-300m-Q8_0` from `embeddinggemma-300m-Q8_0.gguf`).
+    /// Stable for the lifetime of the adapter; cached so we don't pay
+    /// an FFI roundtrip per request.
+    model_label: String,
     /// Shared so the spawn_blocking generation task can reach the model
     /// and context. Locked for the duration of one generation; the
     /// daemon's queue serialises calls, so contention is structural
@@ -284,6 +291,13 @@ impl LlamaCpp {
             gpu_layers: config.n_gpu_layers.max(0) as u32,
         };
 
+        // Resolve a stable, human-meaningful model label. Try GGUF
+        // `general.name` metadata first; fall back to the file stem.
+        // Diagnostic-only per ADR 0007 — apps must not branch on it —
+        // but still must be accurate (saying "llamacpp" when the
+        // backend's `name()` already exposes that is wrong twice).
+        let model_label = read_model_label(model.as_ptr(), &config.model_path);
+
         // Optional dedicated embedding context. Built with
         // `embeddings = true` + a configurable pooling_type (default
         // MEAN, what EmbeddingGemma expects). Kept alongside the
@@ -321,6 +335,7 @@ impl LlamaCpp {
             ready: AtomicBool::new(true),
             seed: config.seed,
             accelerator,
+            model_label,
             state: Arc::new(Mutex::new(State {
                 model,
                 ctx,
@@ -330,6 +345,78 @@ impl LlamaCpp {
             })),
         })
     }
+}
+
+/// Read a stable model identifier for diagnostic frames.
+///
+/// Order:
+/// 1. GGUF `general.name` metadata (the canonical model name as
+///    encoded by the producer — e.g. `"EmbeddingGemma 300M"` or
+///    `"Gemma-4-9B-Instruct"`).
+/// 2. Path file stem (e.g. `embeddinggemma-300m-Q8_0.gguf` →
+///    `embeddinggemma-300m-Q8_0`).
+/// 3. Constant `"llamacpp"` as a last resort if the path has no
+///    valid Unicode stem (extremely unusual).
+fn read_model_label(model: *const ffi::llama_model, path: &std::path::Path) -> String {
+    if let Some(name) = read_gguf_meta_string(model, "general.name") {
+        return name;
+    }
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        return stem.to_string();
+    }
+    "llamacpp".to_string()
+}
+
+/// Look up a string-valued GGUF metadata key on a loaded model.
+///
+/// Returns `None` if the key is absent, the value is empty, or the
+/// FFI surface returns a negative length. Allocates a 256-byte stack
+/// buffer first, retries with a heap buffer sized to the FFI's
+/// reported length if 256 bytes is too small (cheap insurance — most
+/// metadata strings are far under 64 bytes).
+fn read_gguf_meta_string(model: *const ffi::llama_model, key: &str) -> Option<String> {
+    let key_c = CString::new(key).ok()?;
+    // First pass: stack buffer.
+    let mut buf = [0i8; 256];
+    // SAFETY: FFI; `model` valid, `key_c` lives for the call,
+    // `buf` covers `buf.len()` bytes.
+    let needed = unsafe {
+        ffi::llama_model_meta_val_str(
+            model,
+            key_c.as_ptr(),
+            buf.as_mut_ptr() as *mut std::os::raw::c_char,
+            buf.len(),
+        )
+    };
+    if needed < 0 {
+        return None;
+    }
+    let needed = needed as usize;
+    if needed == 0 {
+        return None;
+    }
+    if needed < buf.len() {
+        // SAFETY: FFI wrote `needed` bytes + NUL into `buf`.
+        let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const _) };
+        return cstr.to_str().ok().map(|s| s.to_string());
+    }
+    // Stack buffer too small — retry with a heap buffer of `needed + 1`.
+    let mut heap = vec![0i8; needed + 1];
+    // SAFETY: FFI; same contract as above.
+    let n = unsafe {
+        ffi::llama_model_meta_val_str(
+            model,
+            key_c.as_ptr(),
+            heap.as_mut_ptr() as *mut std::os::raw::c_char,
+            heap.len(),
+        )
+    };
+    if n < 0 {
+        return None;
+    }
+    // SAFETY: FFI wrote up to `n` bytes + NUL into `heap`.
+    let cstr = unsafe { std::ffi::CStr::from_ptr(heap.as_ptr() as *const _) };
+    cstr.to_str().ok().map(|s| s.to_string())
 }
 
 fn ensure_backend_init() {
@@ -462,11 +549,12 @@ impl Backend for LlamaCpp {
             .map(|s| apply_task_prefix(task.as_ref(), s))
             .collect();
         let dimensions = req.dimensions;
+        let label = self.model_label.clone();
 
         let state = Arc::clone(&self.state);
         // FFI must run on a blocking thread so it doesn't stall the
         // tokio runtime.
-        tokio::task::spawn_blocking(move || run_embed(&state, &prefixed, dimensions))
+        tokio::task::spawn_blocking(move || run_embed(&state, &prefixed, dimensions, label))
             .await
             .map_err(|e| EmbedError::Internal(format!("embed task join: {e}")))?
     }
@@ -1133,6 +1221,7 @@ fn run_embed(
     state: &Arc<Mutex<State>>,
     inputs: &[String],
     requested_dim: Option<u32>,
+    model_label: String,
 ) -> Result<EmbedResult, EmbedError> {
     let guard = state.lock().expect("poisoned llamacpp state mutex");
     let model = guard.model.as_ptr();
@@ -1210,7 +1299,7 @@ fn run_embed(
     Ok(EmbedResult {
         embeddings,
         dimensions: out_dim as u32,
-        model: "llamacpp".to_string(),
+        model: model_label,
         usage: EmbedUsage { input_tokens },
     })
 }

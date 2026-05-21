@@ -47,13 +47,19 @@ config; it is the contract that the CI config implements.
 - `cargo test --all --features llamacpp-integration`.
 - Requires: C++ toolchain, the vendored `llama.cpp` submodule
   built, a Gemma 4 GGUF on disk at a path read from
-  `INFERD_TEST_MODEL_PATH`.
+  `INFERD_TEST_MODEL_PATH` (generation tests) and an
+  EmbeddingGemma 300M GGUF at `INFERD_TEST_EMBED_MODEL_PATH`
+  (embed tests). Tests for which the relevant env var is unset
+  skip themselves with an explanatory message rather than fail.
 - Skipped by default. Run nightly in CI on every supported
   platform; run on-demand by developers with a local model.
 - Exercises: real inference round-trip, GBNF grammar
   enforcement (assert constrained output structure),
   cancellation propagation through the C++ generation loop,
-  multi-request serialisation through the queue.
+  multi-request serialisation through the queue, and the
+  embed FFI path (dedicated context, MEAN pooling, MRL
+  truncation, L2 renormalisation, all 8 EmbeddingGemma task
+  prefixes).
 
 ### Tier 4 — cross-language wire validation
 
@@ -134,7 +140,9 @@ Tier 4 runs on Linux x86_64 only, gated on a release tag.
   lifecycle/queue work. < 30 s.
 - **Engine loop**: `cargo test -p inferd-engine --features
   llamacpp-integration` after `INFERD_TEST_MODEL_PATH` is
-  set. Minutes; only run when touching the engine adapter.
+  set (and `INFERD_TEST_EMBED_MODEL_PATH` if you're touching
+  the embed path). Minutes; only run when touching the engine
+  adapter.
 - **Full pre-push**: `cargo fmt --all && cargo clippy
   --all-targets --all-features -- -D warnings && cargo test
   --all && cargo audit && cargo deny check`. ~2 minutes
