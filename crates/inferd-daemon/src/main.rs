@@ -22,7 +22,15 @@
 use clap::Parser;
 use inferd_daemon::admin::StatusBroadcaster;
 use inferd_daemon::config::{BackendKind, Cli};
+#[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
+use inferd_daemon::config_file::BackendEntry;
+#[cfg(feature = "bedrock")]
+use inferd_daemon::config_file::BedrockInvokeEntry;
 use inferd_daemon::config_file::ConfigFile;
+#[cfg(feature = "llamacpp")]
+use inferd_daemon::config_file::LlamacppEntry;
+#[cfg(feature = "openai")]
+use inferd_daemon::config_file::OpenaiCompatEntry;
 #[cfg(unix)]
 use inferd_daemon::endpoint::bind_admin_uds;
 #[cfg(unix)]
@@ -47,8 +55,11 @@ async fn main() -> anyhow::Result<()> {
     install_tracing()?;
 
     let cli = Cli::parse();
-    cli.require_one_transport()
-        .map_err(|m| anyhow::anyhow!("{m}"))?;
+    // Note: at-least-one-transport check is deferred until after the
+    // config file is loaded — the operator may declare TCP via
+    // `listen.tcp` in config.json instead of `--tcp` on the CLI
+    // (Phase 6B-4). clap still enforces mutual exclusion when CLI
+    // flags ARE set.
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -83,10 +94,40 @@ async fn main() -> anyhow::Result<()> {
     // permitted: the daemon runs CLI-only against the mock backend.
     let config = load_config_file(cli.config.as_deref());
 
-    // Resolve model + construct backend. Publishes loading_model
-    // phase events through the broadcaster.
-    let backend: Arc<dyn Backend> =
-        match build_backend(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
+    // Resolve the v1 transport. CLI flags always win; when none is
+    // set, fall back to `listen.tcp` from the config file. Phase
+    // 6B-4: TCP is opt-in by default, declared via config not CLI.
+    let resolved_v1 = resolve_v1_transport(&cli, config.as_ref())?;
+    let resolved_v2_tcp: Option<String> = cli.v2_tcp.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.tcp_v2.clone())
+    });
+    let resolved_embed_tcp: Option<String> = cli.embed_tcp.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.tcp_embed.clone())
+    });
+    // API key resolution for TCP. CLI flag → config.listen.api_key_env
+    // → INFERD_API_KEY (already wired through clap's env=). The CLI
+    // value (which is the result of the clap layer) is used as the
+    // default; only fall back to config when the CLI didn't set it.
+    let effective_api_key: Option<String> = cli.api_key.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.listen.as_ref())
+            .and_then(|l| l.api_key_env.as_deref())
+            .and_then(|name| std::env::var(name).ok())
+            .filter(|v| !v.is_empty())
+    });
+
+    // Resolve models + construct backends. Publishes loading_model
+    // phase events through the broadcaster. Returns the canonical
+    // ordered list (multi-backend per ADR 0007).
+    let backends: Vec<Arc<dyn Backend>> =
+        match build_backends(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
             Ok(b) => b,
             Err(e) => {
                 let _ = admin_shutdown_tx.send(());
@@ -94,10 +135,42 @@ async fn main() -> anyhow::Result<()> {
                 return Err(e);
             }
         };
-    info!(name = backend.name(), "backend constructed");
+    for b in &backends {
+        info!(name = b.name(), "backend constructed");
+    }
 
-    // Build router (no-op v0.1: one backend).
-    let router = Arc::new(Router::new(vec![Arc::clone(&backend)]));
+    // Publish capability snapshot so admin subscribers can introspect
+    // multimodal / tools / accelerator posture before Ready (#77).
+    // One frame per backend so subscribers see the full router shape.
+    for b in &backends {
+        let caps = b.capabilities();
+        broadcaster.publish(StatusEvent::Capabilities {
+            backend: b.name().to_string(),
+            v2: caps.v2,
+            vision: caps.vision,
+            audio: caps.audio,
+            tools: caps.tools,
+            thinking: caps.thinking,
+            embed: caps.embed,
+            accelerator: caps.accelerator.kind.as_str().to_string(),
+            gpu_layers: caps.accelerator.gpu_layers,
+        });
+    }
+
+    // Decide whether to bind the embed socket: opt-in via `--embed`
+    // AND at least one registered backend advertises `embed`
+    // capability (ADR 0017 §"Capability-driven binding"). Without
+    // both, the embed socket simply isn't bound.
+    let embed_enabled = cli.embed && backends.iter().any(|b| b.capabilities().embed);
+    if cli.embed && !embed_enabled {
+        warn!(
+            "--embed requested but no registered backend advertises \
+             `capabilities().embed = true`; embed socket will not bind"
+        );
+    }
+
+    // Build router. Walks the ordered list per ADR 0007.
+    let router = Arc::new(Router::new(backends));
 
     // Wait for Backend::ready (F-13). Mock flips ready immediately;
     // LlamaCpp flips ready in `new()` after model load + KV cache.
@@ -111,8 +184,21 @@ async fn main() -> anyhow::Result<()> {
     // connect — guaranteed ordering on the wire.
     broadcaster.publish(StatusEvent::Ready);
 
-    // Inference shutdown channel.
-    let inference_shutdown_tx = install_shutdown_signal()?;
+    // Inference shutdown channels — one per listener (v1 always, v2
+    // when enabled, embed when enabled + capability matches).
+    let fanout = 1 + usize::from(cli.v2) + usize::from(embed_enabled);
+    let mut shutdown_rxs = install_shutdown_signal(fanout)?;
+    let inference_shutdown_tx = shutdown_rxs.remove(0);
+    let v2_shutdown_tx = if cli.v2 {
+        Some(shutdown_rxs.remove(0))
+    } else {
+        None
+    };
+    let embed_shutdown_tx = if embed_enabled {
+        Some(shutdown_rxs.remove(0))
+    } else {
+        None
+    };
 
     let admission = inferd_daemon::queue::Admission::new(cli.active_permits, cli.queue_depth);
     info!(
@@ -123,44 +209,85 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let accept_ctx = AcceptContext {
-        expected_api_key: cli.api_key.clone(),
+        expected_api_key: effective_api_key.clone(),
         admission: Some(admission),
     };
-    if cli.tcp.is_some() && accept_ctx.expected_api_key.is_some() {
+    let any_tcp = matches!(resolved_v1, ResolvedTransport::Tcp(_))
+        || resolved_v2_tcp.is_some()
+        || (embed_enabled && resolved_embed_tcp.is_some());
+    if any_tcp && accept_ctx.expected_api_key.is_some() {
         info!("tcp api-key auth enabled (F-8)");
-    } else if cli.tcp.is_some() {
+    } else if any_tcp {
         warn!(
-            "tcp listener has no --api-key configured; any local process \
-             can connect (THREAT_MODEL F-8)"
+            "tcp listener has no api-key configured (CLI --api-key or \
+             config listen.api_key_env unset); any local process can \
+             connect (THREAT_MODEL F-8)"
         );
     }
 
-    let serve_result = if let Some(addr) = cli.tcp.as_deref() {
-        let listener = bind_tcp(addr).await?;
-        info!(addr = %listener.local_addr()?, "tcp listener bound");
-        serve_tcp(listener, router, accept_ctx, inference_shutdown_tx).await
-    } else if let Some(path) = cli.uds.as_ref() {
+    // Spawn the v2 listener if enabled. It runs in parallel with the
+    // v1 main accept loop and shuts down on the same signal. v1 and
+    // v2 share the same Router instance — a single warm model serves
+    // both wire versions.
+    let v2_handle = if let Some(rx) = v2_shutdown_tx {
+        Some(
+            spawn_v2_listener(
+                &cli,
+                resolved_v2_tcp.as_deref(),
+                Arc::clone(&router),
+                accept_ctx.clone(),
+                rx,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    // Spawn the embed listener if enabled and the active backend
+    // advertises embed capability (ADR 0017). Embed shares the same
+    // Router + admission gate as v1 / v2.
+    let embed_handle = if let Some(rx) = embed_shutdown_tx {
+        Some(
+            spawn_embed_listener(
+                &cli,
+                resolved_embed_tcp.as_deref(),
+                Arc::clone(&router),
+                accept_ctx.clone(),
+                rx,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let serve_result = match resolved_v1 {
+        ResolvedTransport::Tcp(addr) => {
+            let listener = bind_tcp(&addr).await?;
+            info!(addr = %listener.local_addr()?, "tcp listener bound");
+            serve_tcp(listener, router, accept_ctx, inference_shutdown_tx).await
+        }
         #[cfg(unix)]
-        {
-            let listener = bind_uds(path, cli.group.as_deref()).await?;
+        ResolvedTransport::Uds(path) => {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
             info!(path = %path.display(), "uds listener bound");
             inferd_daemon::lifecycle::serve_uds(listener, router, accept_ctx, inference_shutdown_tx)
                 .await
         }
         #[cfg(not(unix))]
-        {
+        ResolvedTransport::Uds(path) => {
             drop((path, router, accept_ctx, inference_shutdown_tx));
             anyhow::bail!(
                 "Unix domain sockets are not supported on this platform; use --pipe or --tcp"
             );
         }
-    } else if let Some(path) = cli.pipe.as_ref() {
         #[cfg(windows)]
-        {
-            let first = inferd_daemon::endpoint::bind_named_pipe(path, true)?;
+        ResolvedTransport::Pipe(path) => {
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path, true)?;
             info!(path = %path, "named pipe listener bound");
             inferd_daemon::lifecycle::serve_named_pipe(
-                path,
+                &path,
                 first,
                 router,
                 accept_ctx,
@@ -169,14 +296,12 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         #[cfg(not(windows))]
-        {
+        ResolvedTransport::Pipe(path) => {
             drop((path, router, accept_ctx, inference_shutdown_tx));
             anyhow::bail!(
                 "Windows named pipes are not supported on this platform; use --uds or --tcp"
             );
         }
-    } else {
-        unreachable!("require_one_transport already verified");
     };
 
     // Drain: tell admin subscribers we're going away, then close.
@@ -184,9 +309,164 @@ async fn main() -> anyhow::Result<()> {
     let _ = admin_shutdown_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(2), admin_handle).await;
 
+    // Wait for the v2 listener to finish draining if it was running.
+    if let Some(handle) = v2_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
+    // Same for embed.
+    if let Some(handle) = embed_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
     serve_result?;
     info!("shutdown complete");
     Ok(())
+}
+
+/// Bind the v2 inference listener and spawn its accept loop. Returns
+/// the JoinHandle so main can await graceful drain. v2 is per ADR
+/// 0015: separate socket from v1; reuses the same admission gate +
+/// API key + Router. Backends that don't advertise
+/// `BackendCapabilities::v2 == true` see their dispatched v2
+/// requests respond with `Error{Internal, "backend ... does not
+/// advertise v2 capability"}`.
+async fn spawn_v2_listener(
+    cli: &Cli,
+    resolved_v2_tcp: Option<&str>,
+    router: Arc<Router>,
+    accept_ctx: AcceptContext,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    use inferd_daemon::endpoint::default_v2_addr;
+    use inferd_daemon::lifecycle_v2;
+
+    if let Some(addr) = resolved_v2_tcp {
+        let listener = bind_tcp(addr).await?;
+        info!(addr = %listener.local_addr()?, "v2 tcp listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) =
+                lifecycle_v2::serve_tcp_v2(listener, router, accept_ctx, shutdown_rx).await
+            {
+                error!(error = ?e, "v2 tcp listener error");
+            }
+        }))
+    } else {
+        let path = cli.v2_addr.clone().unwrap_or_else(default_v2_addr);
+        #[cfg(unix)]
+        {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
+            info!(path = %path.display(), "v2 uds listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) =
+                    lifecycle_v2::serve_uds_v2(listener, router, accept_ctx, shutdown_rx).await
+                {
+                    error!(error = ?e, "v2 uds listener error");
+                }
+            }))
+        }
+        #[cfg(windows)]
+        {
+            let path_str = path
+                .to_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("v2 pipe path is not valid utf-8: {}", path.display())
+                })?
+                .to_string();
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
+            info!(path = %path_str, "v2 named pipe listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) = lifecycle_v2::serve_named_pipe_v2(
+                    &path_str,
+                    first,
+                    router,
+                    accept_ctx,
+                    shutdown_rx,
+                )
+                .await
+                {
+                    error!(error = ?e, "v2 named pipe listener error");
+                }
+            }))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            drop((path, router, accept_ctx, shutdown_rx));
+            anyhow::bail!("v2 endpoint requires unix or windows; use --v2-tcp instead")
+        }
+    }
+}
+
+/// Bind the embed inference listener and spawn its accept loop.
+/// Returns the JoinHandle so main can await graceful drain. Embed is
+/// per ADR 0017: separate socket from v1/v2; reuses the same admission
+/// gate + API key + Router. Bound only when the active router has at
+/// least one backend with `BackendCapabilities::embed == true`.
+async fn spawn_embed_listener(
+    cli: &Cli,
+    resolved_embed_tcp: Option<&str>,
+    router: Arc<Router>,
+    accept_ctx: AcceptContext,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    use inferd_daemon::endpoint::default_embed_addr;
+    use inferd_daemon::lifecycle_embed;
+
+    if let Some(addr) = resolved_embed_tcp {
+        let listener = bind_tcp(addr).await?;
+        info!(addr = %listener.local_addr()?, "embed tcp listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) =
+                lifecycle_embed::serve_tcp_embed(listener, router, accept_ctx, shutdown_rx).await
+            {
+                error!(error = ?e, "embed tcp listener error");
+            }
+        }))
+    } else {
+        let path = cli.embed_addr.clone().unwrap_or_else(default_embed_addr);
+        #[cfg(unix)]
+        {
+            let listener = bind_uds(&path, cli.group.as_deref()).await?;
+            info!(path = %path.display(), "embed uds listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) =
+                    lifecycle_embed::serve_uds_embed(listener, router, accept_ctx, shutdown_rx)
+                        .await
+                {
+                    error!(error = ?e, "embed uds listener error");
+                }
+            }))
+        }
+        #[cfg(windows)]
+        {
+            let path_str = path
+                .to_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("embed pipe path is not valid utf-8: {}", path.display())
+                })?
+                .to_string();
+            let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
+            info!(path = %path_str, "embed named pipe listener bound");
+            Ok(tokio::spawn(async move {
+                if let Err(e) = lifecycle_embed::serve_named_pipe_embed(
+                    &path_str,
+                    first,
+                    router,
+                    accept_ctx,
+                    shutdown_rx,
+                )
+                .await
+                {
+                    error!(error = ?e, "embed named pipe listener error");
+                }
+            }))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            drop((path, router, accept_ctx, shutdown_rx));
+            anyhow::bail!("embed endpoint requires unix or windows; use --embed-tcp instead")
+        }
+    }
 }
 
 /// Bind the admin socket and spawn the accept loop. Returns the
@@ -262,132 +542,412 @@ fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
     }
 }
 
-/// Construct the backend per CLI + config. Publishes `loading_model`
-/// phase events as it goes.
-async fn build_backend(
+/// Resolved v1 inference transport. CLI flags win; config-file
+/// `listen.tcp` is the fallback (Phase 6B-4 — TCP is opt-in).
+enum ResolvedTransport {
+    Tcp(String),
+    Uds(PathBuf),
+    Pipe(String),
+}
+
+/// Pick the v1 transport from CLI > config > error. clap already
+/// enforces that no two CLI flags are set; this layer adds the
+/// config-file fallback for `listen.tcp` and produces a clear error
+/// when neither source supplies a transport.
+fn resolve_v1_transport(
     cli: &Cli,
-    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] config: Option<&ConfigFile>,
+    config: Option<&ConfigFile>,
+) -> anyhow::Result<ResolvedTransport> {
+    if let Some(addr) = cli.tcp.as_deref() {
+        return Ok(ResolvedTransport::Tcp(addr.to_string()));
+    }
+    if let Some(path) = cli.uds.as_ref() {
+        return Ok(ResolvedTransport::Uds(path.clone()));
+    }
+    if let Some(path) = cli.pipe.as_ref() {
+        return Ok(ResolvedTransport::Pipe(path.clone()));
+    }
+    if let Some(addr) = config
+        .and_then(|c| c.listen.as_ref())
+        .and_then(|l| l.tcp.as_deref())
+    {
+        info!(addr = %addr, "tcp listener from config (listen.tcp)");
+        return Ok(ResolvedTransport::Tcp(addr.to_string()));
+    }
+    anyhow::bail!(
+        "no transport configured: pass --tcp / --uds / --pipe on the CLI, \
+         or set `listen.tcp` in ~/.inferd/config.json"
+    )
+}
+
+/// Construct backends per CLI + config. Publishes `loading_model`
+/// phase events as it goes.
+///
+/// Dispatch:
+/// - `--backend mock` ignores the config (dev-mode echo daemon).
+/// - When the config file declares `backends:` (or legacy `model:`,
+///   which auto-promotes to a one-element llamacpp list), every entry
+///   is built and the router walks them in order per ADR 0007.
+/// - When no config is present, the CLI-flag path builds a single
+///   backend matching `--backend <kind>` for v0.1.x compatibility.
+async fn build_backends(
+    cli: &Cli,
+    #[cfg_attr(
+        all(not(feature = "llamacpp"), not(feature = "openai")),
+        allow(unused_variables)
+    )]
+    config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
-) -> anyhow::Result<Arc<dyn Backend>> {
+) -> anyhow::Result<Vec<Arc<dyn Backend>>> {
     match cli.backend {
         BackendKind::Mock => {
-            // Mock: no model on disk, no fetch, ready immediately.
-            // Still publish the lifecycle phases so admin subscribers
-            // see the same shape as the production path.
             broadcaster.publish(StatusEvent::LoadingModel {
                 phase: LoadPhase::CheckingLocal {
                     path: PathBuf::from("(mock)"),
                 },
             });
-            Ok(Arc::new(Mock::new()))
+            Ok(vec![Arc::new(Mock::new())])
         }
-        #[cfg(feature = "llamacpp")]
-        BackendKind::Llamacpp => build_llamacpp(cli, config, broadcaster).await,
+        #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
+        _ => {
+            if let Some(cfg) = config {
+                let entries = cfg.resolved_backends();
+                let auto_pull = cfg.auto_pull;
+                let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let b = build_entry(&entry, cfg, auto_pull, Arc::clone(&broadcaster)).await?;
+                    out.push(b);
+                }
+                return Ok(out);
+            }
+
+            // No config file: CLI-flag-only path. Single backend
+            // matching `--backend <kind>`.
+            match cli.backend {
+                BackendKind::Mock => unreachable!("handled above"),
+                #[cfg(feature = "llamacpp")]
+                BackendKind::Llamacpp => {
+                    let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
+                    Ok(vec![b])
+                }
+                #[cfg(feature = "openai")]
+                BackendKind::OpenaiCompat => {
+                    let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
+                    Ok(vec![b])
+                }
+                #[cfg(feature = "bedrock")]
+                BackendKind::BedrockInvoke => {
+                    let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
+                    Ok(vec![b])
+                }
+            }
+        }
     }
 }
 
-/// Resolve the model into the shared CAS store (ADR 0011). On
-/// success returns the verified blob's path so the engine can mmap
-/// it. Publishes phase events through the broadcaster throughout.
-#[cfg(feature = "llamacpp")]
-async fn build_llamacpp(
+/// Dispatch a single config-file backend entry to the right builder.
+#[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
+async fn build_entry(
+    entry: &BackendEntry,
+    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] cfg: &ConfigFile,
+    #[cfg_attr(not(feature = "llamacpp"), allow(unused_variables))] auto_pull: bool,
+    #[cfg_attr(
+        all(
+            not(feature = "llamacpp"),
+            not(feature = "openai"),
+            not(feature = "bedrock")
+        ),
+        allow(unused_variables)
+    )]
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    match entry {
+        #[cfg(feature = "llamacpp")]
+        BackendEntry::Llamacpp(e) => build_llamacpp_entry(e, cfg, auto_pull, broadcaster).await,
+        #[cfg(not(feature = "llamacpp"))]
+        BackendEntry::Llamacpp(_) => {
+            anyhow::bail!(
+                "config declares a `kind: llamacpp` backend but this daemon \
+                 binary was built without the `llamacpp` feature"
+            )
+        }
+        #[cfg(feature = "openai")]
+        BackendEntry::OpenaiCompat(e) => build_openai_compat_entry(e, broadcaster),
+        #[cfg(not(feature = "openai"))]
+        BackendEntry::OpenaiCompat(_) => {
+            anyhow::bail!(
+                "config declares a `kind: openai-compat` backend but this \
+                 daemon binary was built without the `openai` feature"
+            )
+        }
+        #[cfg(feature = "bedrock")]
+        BackendEntry::BedrockInvoke(e) => build_bedrock_invoke_entry(e, broadcaster),
+        #[cfg(not(feature = "bedrock"))]
+        BackendEntry::BedrockInvoke(_) => {
+            anyhow::bail!(
+                "config declares a `kind: bedrock-invoke` backend but this \
+                 daemon binary was built without the `bedrock` feature"
+            )
+        }
+    }
+}
+
+/// Build an OpenAI-compat backend from a config-file entry.
+/// API key is resolved from env-var name only; no literal in config.
+#[cfg(feature = "openai")]
+fn build_openai_compat_entry(
+    entry: &OpenaiCompatEntry,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::openai_compat::{OpenAiCompat, OpenAiCompatConfig};
+
+    let api_key = resolve_openai_api_key(entry.api_key_env.as_deref());
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!(
+                "(openai-compat: {} / {})",
+                entry.base_url, entry.model
+            )),
+        },
+    });
+
+    let backend = OpenAiCompat::new(OpenAiCompatConfig {
+        base_url: entry.base_url.clone(),
+        api_key,
+        model: entry.model.clone(),
+        timeout: Duration::from_secs(entry.timeout_secs),
+    })
+    .map_err(|e| anyhow::anyhow!("openai-compat init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// Resolve the bearer token for an openai-compat backend.
+///
+/// Order: explicit `api_key_env: "<NAME>"` → `INFERD_OPENAI_API_KEY`
+/// → `OPENAI_API_KEY` → empty (skips `Authorization` header). Never
+/// reads a literal key from the config file (THREAT_MODEL: secrets
+/// stay in env, not on disk).
+#[cfg(feature = "openai")]
+fn resolve_openai_api_key(api_key_env: Option<&str>) -> String {
+    if let Some(name) = api_key_env
+        && let Ok(v) = std::env::var(name)
+    {
+        return v;
+    }
+    if let Ok(v) = std::env::var("INFERD_OPENAI_API_KEY") {
+        return v;
+    }
+    if let Ok(v) = std::env::var("OPENAI_API_KEY") {
+        return v;
+    }
+    String::new()
+}
+
+/// CLI-only path for `--backend openai-compat` without a config file.
+/// Mirrors the v0.1.14 surface so existing scripts keep working.
+#[cfg(feature = "openai")]
+fn build_openai_compat_cli_only(
     cli: &Cli,
-    config: Option<&ConfigFile>,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::openai_compat::{OpenAiCompat, OpenAiCompatConfig};
+
+    let base_url = cli.openai_base_url.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend openai-compat requires --openai-base-url \
+             (e.g. https://api.openai.com, http://localhost:11434)"
+        )
+    })?;
+    let model = cli.openai_model.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend openai-compat requires --openai-model \
+             (e.g. gpt-4o-mini, llama3.1:8b)"
+        )
+    })?;
+    let api_key = cli
+        .openai_api_key
+        .clone()
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+        .unwrap_or_default();
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!("(openai-compat: {base_url} / {model})")),
+        },
+    });
+
+    let backend = OpenAiCompat::new(OpenAiCompatConfig {
+        base_url: base_url.to_string(),
+        api_key,
+        model: model.to_string(),
+        timeout: Duration::from_secs(cli.openai_timeout_secs),
+    })
+    .map_err(|e| anyhow::anyhow!("openai-compat init failed: {e}"))?;
+    Ok(Arc::new(backend))
+}
+
+/// Build a bedrock-invoke backend from a config-file entry. The auth
+/// credentials are read from env at startup — the config file only
+/// names the env var.
+#[cfg(feature = "bedrock")]
+fn build_bedrock_invoke_entry(
+    entry: &BedrockInvokeEntry,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::bedrock_invoke::{BedrockInvoke, BedrockInvokeConfig};
+
+    let bearer = entry
+        .bearer_token_env
+        .as_deref()
+        .and_then(|name| std::env::var(name).ok())
+        .filter(|v| !v.is_empty());
+    let auth = resolve_bedrock_auth(bearer.as_deref()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "bedrock-invoke {:?}: no auth credentials. Set the env var named in \
+             `bearer_token_env` (Bearer auth) or AWS_ACCESS_KEY_ID / \
+             AWS_SECRET_ACCESS_KEY (SigV4)",
+            entry.name
+        )
+    })?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!(
+                "(bedrock-invoke: {} / {})",
+                entry.region, entry.model_id
+            )),
+        },
+    });
+
+    let backend = BedrockInvoke::new(BedrockInvokeConfig {
+        region: entry.region.clone(),
+        model_id: entry.model_id.clone(),
+        auth,
+        timeout: Duration::from_secs(entry.timeout_secs),
+        endpoint_override: entry.endpoint.clone().filter(|s| !s.is_empty()),
+    })
+    .map_err(|e| anyhow::anyhow!("bedrock-invoke init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// CLI-only path for `--backend bedrock-invoke` without a config file.
+/// Mirrors the openai-compat CLI shape.
+#[cfg(feature = "bedrock")]
+fn build_bedrock_invoke_cli_only(
+    cli: &Cli,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::bedrock_invoke::{BedrockInvoke, BedrockInvokeConfig};
+
+    let region = cli.bedrock_region.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend bedrock-invoke requires --bedrock-region \
+             (e.g. us-east-1, eu-central-1)"
+        )
+    })?;
+    let model_id = cli.bedrock_model_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend bedrock-invoke requires --bedrock-model-id \
+             (e.g. anthropic.claude-3-5-sonnet-20241022-v2:0)"
+        )
+    })?;
+    let bearer = cli
+        .bedrock_bearer_token
+        .as_deref()
+        .filter(|v| !v.is_empty());
+    let auth = resolve_bedrock_auth(bearer).ok_or_else(|| {
+        anyhow::anyhow!(
+            "bedrock-invoke: no auth credentials. Set --bedrock-bearer-token / \
+             AWS_BEARER_TOKEN_BEDROCK (Bearer auth) or AWS_ACCESS_KEY_ID / \
+             AWS_SECRET_ACCESS_KEY (SigV4)"
+        )
+    })?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal {
+            path: PathBuf::from(format!("(bedrock-invoke: {region} / {model_id})")),
+        },
+    });
+
+    let backend = BedrockInvoke::new(BedrockInvokeConfig {
+        region: region.to_string(),
+        model_id: model_id.to_string(),
+        auth,
+        timeout: Duration::from_secs(cli.bedrock_timeout_secs),
+        endpoint_override: cli.bedrock_endpoint.clone().filter(|s| !s.is_empty()),
+    })
+    .map_err(|e| anyhow::anyhow!("bedrock-invoke init failed: {e}"))?;
+    Ok(Arc::new(backend))
+}
+
+/// Resolve Bedrock auth from a (possibly-empty) bearer token + the
+/// standard AWS env var chain. Returns `None` when neither shape is
+/// satisfied.
+#[cfg(feature = "bedrock")]
+fn resolve_bedrock_auth(
+    bearer: Option<&str>,
+) -> Option<inferd_engine::bedrock_invoke::BedrockAuth> {
+    use inferd_engine::bedrock_invoke::BedrockAuth;
+    if let Some(token) = bearer
+        && !token.is_empty()
+    {
+        return Some(BedrockAuth::BearerToken(token.to_string()));
+    }
+    let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").ok()?;
+    let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok()?;
+    if access_key_id.is_empty() || secret_access_key.is_empty() {
+        return None;
+    }
+    let session_token = std::env::var("AWS_SESSION_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty());
+    Some(BedrockAuth::Sigv4 {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
+}
+
+/// Build a llamacpp backend from a config-file entry. Resolves the
+/// model into the shared CAS store (ADR 0011) and returns the verified
+/// blob's path so the engine can mmap it. Publishes phase events
+/// through the broadcaster throughout.
+#[cfg(feature = "llamacpp")]
+async fn build_llamacpp_entry(
+    entry: &LlamacppEntry,
+    cfg: &ConfigFile,
+    auto_pull: bool,
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
     use inferd_daemon::fetch::{ModelSpec, fetch_model};
     use inferd_daemon::store::{ModelStore, default_models_home};
     use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 
-    // Resolve the spec + store: prefer config-file, fall back to CLI flags.
-    let (spec, store, n_ctx, n_gpu_layers, model_sha256_bytes, cli_only_path) = match config {
-        Some(cfg) => {
-            let spec: ModelSpec = (&cfg.model).into();
-            let n_ctx = if cli.n_ctx != 8192 {
-                cli.n_ctx
-            } else {
-                cfg.n_ctx
-            };
-            let n_gpu_layers = if cli.n_gpu_layers != 0 {
-                cli.n_gpu_layers
-            } else {
-                cfg.n_gpu_layers
-            };
-            let sha = parse_sha256_hex(&cfg.model.sha256)?;
-            let store = match cfg.models_home.as_ref() {
-                Some(p) => ModelStore::open(p),
-                None => ModelStore::open(default_models_home()),
-            };
-            (spec, store, n_ctx, n_gpu_layers, sha, None)
-        }
-        None => {
-            let path = cli.model_path.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--backend llamacpp needs either ~/.inferd/config.json or \
-                     --model-path/--model-sha256 CLI flags"
-                )
-            })?;
-            let sha_str = cli.model_sha256.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("--model-sha256 is required for --backend llamacpp")
-            })?;
-            let sha = parse_sha256_hex(sha_str)?;
-            // CLI-only mode: bypass the CAS store; the operator
-            // pointed us at a specific file. Useful for dev / CI.
-            let spec = ModelSpec {
-                name: "cli".into(),
-                source_url: String::new(),
-                sha256_hex: sha_str.clone(),
-                size_bytes: None,
-                license: None,
-                source: None,
-            };
-            // Store is constructed but unused in this branch.
-            (
-                spec,
-                ModelStore::open(default_models_home()),
-                cli.n_ctx,
-                cli.n_gpu_layers,
-                sha,
-                Some(path.clone()),
-            )
-        }
+    let spec: ModelSpec = (&entry.model).into();
+    let n_ctx = entry.n_ctx;
+    let n_gpu_layers = entry.n_gpu_layers;
+    let model_sha256_bytes = parse_sha256_hex(&entry.model.sha256)?;
+    let store = match cfg.models_home.as_ref() {
+        Some(p) => ModelStore::open(p),
+        None => ModelStore::open(default_models_home()),
     };
 
-    // Resolve / fetch.
-    let auto_pull = config.map(|c| c.auto_pull).unwrap_or(false);
-    let model_path = if let Some(direct) = cli_only_path {
-        // CLI-only mode: file must be at --model-path. No CAS lookup,
-        // no fetch.
-        broadcaster.publish(StatusEvent::LoadingModel {
-            phase: LoadPhase::CheckingLocal {
-                path: direct.clone(),
-            },
-        });
-        if !direct.exists() {
-            anyhow::bail!("model not present at {} (CLI-only mode)", direct.display());
-        }
-        direct
-    } else if auto_pull {
-        // Run the (synchronous) fetch on a blocking thread so we
-        // don't block the tokio runtime.
+    let model_path = if auto_pull {
         let spec_clone = spec.clone();
         let store_clone = store.clone();
         let bcast = Arc::clone(&broadcaster);
         tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
             .await
             .map_err(|e| anyhow::anyhow!("fetch task join: {e}"))?
-            .map_err(|e| anyhow::anyhow!("fetch failed: {e}"))?
+            .map_err(|e| anyhow::anyhow!("fetch failed for {}: {e}", entry.name))?
     } else {
-        // auto_pull == false: blob must already exist in the CAS at
-        // its SHA path. fetch_model() returns immediately when the
-        // manifest + blob agree, so we still call it — it does no
-        // network when source_url is unset OR the cached blob
-        // matches.
         let blob_path = store.blob_path(&spec.sha256_hex);
         if !blob_path.exists() {
             anyhow::bail!(
-                "model not present in store at {} and auto_pull is disabled. \
+                "model {} not present in store at {} and auto_pull is disabled. \
                  Run `inferdctl pull` or set auto_pull: true in config.",
+                entry.name,
                 blob_path.display()
             );
         }
@@ -399,13 +959,11 @@ async fn build_llamacpp(
         blob_path
     };
 
-    // Mmap phase.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Mmap {
             path: model_path.clone(),
         },
     });
-    // KV cache phase.
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::KvCache { n_ctx },
     });
@@ -415,6 +973,57 @@ async fn build_llamacpp(
         model_sha256: Some(model_sha256_bytes),
         n_ctx,
         n_gpu_layers,
+        embed: entry.embed,
+        embed_pooling: entry.embed_pooling,
+        embed_n_ctx: entry.embed_n_ctx,
+        ..Default::default()
+    })
+    .map_err(|e| anyhow::anyhow!("llamacpp init failed for {}: {e}", entry.name))?;
+    Ok(Arc::new(backend))
+}
+
+/// CLI-only path for `--backend llamacpp` without a config file. The
+/// operator points us at a specific file via `--model-path` and the
+/// daemon bypasses the CAS store / fetch entirely. Useful for dev /
+/// CI.
+#[cfg(feature = "llamacpp")]
+async fn build_llamacpp_cli_only(
+    cli: &Cli,
+    broadcaster: Arc<StatusBroadcaster>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
+
+    let path = cli.model_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--backend llamacpp needs either ~/.inferd/config.json or \
+             --model-path/--model-sha256 CLI flags"
+        )
+    })?;
+    let sha_str = cli
+        .model_sha256
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--model-sha256 is required for --backend llamacpp"))?;
+    let model_sha256_bytes = parse_sha256_hex(sha_str)?;
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::CheckingLocal { path: path.clone() },
+    });
+    if !path.exists() {
+        anyhow::bail!("model not present at {} (CLI-only mode)", path.display());
+    }
+
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::Mmap { path: path.clone() },
+    });
+    broadcaster.publish(StatusEvent::LoadingModel {
+        phase: LoadPhase::KvCache { n_ctx: cli.n_ctx },
+    });
+
+    let backend = LlamaCpp::new(LlamaCppConfig {
+        model_path: path.clone(),
+        model_sha256: Some(model_sha256_bytes),
+        n_ctx: cli.n_ctx,
+        n_gpu_layers: cli.n_gpu_layers,
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;
@@ -473,10 +1082,15 @@ fn install_tracing() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Wire Ctrl-C (SIGINT on Unix) to a oneshot channel so the accept loop
-/// exits cleanly. On Unix we additionally listen for SIGTERM.
-fn install_shutdown_signal() -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
+/// Wire Ctrl-C (SIGINT on Unix) to N oneshot channels so multiple
+/// accept loops exit cleanly on the same signal. On Unix we
+/// additionally listen for SIGTERM. Returns one receiver per
+/// requested fan-out — e.g. 2 when both v1 and v2 listeners are
+/// running.
+fn install_shutdown_signal(
+    fanout: usize,
+) -> anyhow::Result<Vec<tokio::sync::oneshot::Receiver<()>>> {
+    let (txs, rxs): (Vec<_>, Vec<_>) = (0..fanout).map(|_| tokio::sync::oneshot::channel()).unzip();
 
     tokio::spawn(async move {
         #[cfg(unix)]
@@ -495,11 +1109,13 @@ fn install_shutdown_signal() -> anyhow::Result<tokio::sync::oneshot::Receiver<()
         let result: Result<(), std::io::Error> = tokio::signal::ctrl_c().await;
 
         if let Err(e) = result {
-            error!(error = ?e, "signal handler failed; shutdown channel will not fire");
+            error!(error = ?e, "signal handler failed; shutdown channels will not fire");
             return;
         }
-        let _ = tx.send(());
+        for tx in txs {
+            let _ = tx.send(());
+        }
     });
 
-    Ok(rx)
+    Ok(rxs)
 }

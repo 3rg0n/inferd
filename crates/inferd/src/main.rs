@@ -1,26 +1,26 @@
-//! `inferd` — single CLI binary in the gh / kubectl shape.
+//! `inferdctl` — single CLI binary in the gh / kubectl shape.
 //!
 //! Distinct from `inferd-daemon` (the long-running service). The
-//! `inferd` binary is what operators and consumers run from a
+//! `inferdctl` binary is what operators and consumers run from a
 //! shell.
 //!
 //! v0.1 subcommand surface:
 //!
-//! - `inferd status`  — one-shot admin snapshot (the current
+//! - `inferdctl status`  — one-shot admin snapshot (the current
 //!   lifecycle state) as JSON. Exits 0 on `ready`, non-zero
 //!   otherwise. Useful for shell scripts.
-//! - `inferd watch`   — stream admin events forever. Useful
+//! - `inferdctl watch`   — stream admin events forever. Useful
 //!   during the first-boot model download.
-//! - `inferd pull`    — read `~/.inferd/config.json`, fetch
+//! - `inferdctl pull`    — read `~/.inferd/config.json`, fetch
 //!   the configured model into the CAS store
 //!   (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-
 //!   256 with constant-time compare, write the manifest. Bypasses
 //!   the daemon — operates directly on the store.
-//! - `inferd doctor`  — diagnose connectivity. Prints a punch
+//! - `inferdctl doctor`  — diagnose connectivity. Prints a punch
 //!   list of "what's there / what's missing" so consumers can
 //!   debug install issues.
 //!
-//! Planned but not in v0.1: `inferd -p "hello world"` — connect
+//! Planned but not in v0.1: `inferdctl -p "hello world"` — connect
 //! to the running daemon, send a one-shot prompt, stream tokens
 //! to stdout. Replaces the previously-scaffolded `inferd-stdio`
 //! crate (one binary, many shapes — gh / kubectl pattern).
@@ -31,7 +31,7 @@
 use clap::{Parser, Subcommand};
 use inferd_client::AdminClient;
 use inferd_daemon::admin::StatusBroadcaster;
-use inferd_daemon::config_file::ConfigFile;
+use inferd_daemon::config_file::{BackendEntry, ConfigFile, LlamacppEntry};
 use inferd_daemon::fetch::{ModelSpec, fetch_model};
 use inferd_daemon::status::StatusEvent;
 use inferd_daemon::store::ModelStore;
@@ -41,7 +41,7 @@ use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "inferd",
+    name = "inferdctl",
     about = "Single CLI binary for inferd. Subcommands: status, watch, pull, doctor.",
     version,
     arg_required_else_help = true
@@ -112,7 +112,7 @@ async fn main() -> ExitCode {
 
 /// Plain stderr tracing; the CLI's stdout is for machine-readable
 /// output (status JSON, watch events). Anything chatty goes to
-/// stderr so `inferd status | jq` stays clean.
+/// stderr so `inferdctl status | jq` stays clean.
 fn install_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -178,34 +178,47 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
         None => ModelStore::open(inferd_daemon::store::default_models_home()),
     };
 
-    let spec: ModelSpec = (&cfg.model).into();
-    eprintln!(
-        "inferd: pulling {} -> {}",
-        spec.name,
-        store.root().display()
-    );
+    // Multi-backend configs may declare several llamacpp entries
+    // (each with its own model file) plus zero or more cloud
+    // entries — only the local-model entries have a blob to pull.
+    let llamacpp_entries: Vec<LlamacppEntry> = cfg
+        .resolved_backends()
+        .into_iter()
+        .filter_map(|e| match e {
+            BackendEntry::Llamacpp(l) => Some(l),
+            _ => None,
+        })
+        .collect();
 
-    // The fetch_model function publishes progress through a
-    // StatusBroadcaster; we don't have an admin socket here so we
-    // just create a throwaway broadcaster. Status events are
-    // dropped on the floor — for `inferd pull` the daemon's
-    // stdout-style log lines from fetch.rs are enough.
-    let broadcaster = StatusBroadcaster::new(StatusEvent::Starting);
-    let bcast = std::sync::Arc::new(broadcaster);
-    let spec_clone = spec.clone();
-    let store_clone = store.clone();
+    if llamacpp_entries.is_empty() {
+        eprintln!(
+            "inferdctl: no llamacpp backends in {}; nothing to pull",
+            config_path.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
 
-    // fetch_model is sync (uses ureq blocking). Run on a blocking
-    // thread so we don't block the runtime — though for a CLI we
-    // could just call it directly. Keeping the boundary consistent
-    // with how the daemon does it.
-    let blob_path =
-        tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
-            .await
-            .context("fetch task join")?
-            .context("fetch failed")?;
+    for entry in &llamacpp_entries {
+        let spec: ModelSpec = (&entry.model).into();
+        eprintln!(
+            "inferdctl: pulling {} -> {}",
+            spec.name,
+            store.root().display()
+        );
 
-    eprintln!("inferd: blob ready at {}", blob_path.display());
+        let broadcaster = StatusBroadcaster::new(StatusEvent::Starting);
+        let bcast = std::sync::Arc::new(broadcaster);
+        let spec_clone = spec.clone();
+        let store_clone = store.clone();
+
+        let blob_path =
+            tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
+                .await
+                .context("fetch task join")?
+                .context("fetch failed")?;
+
+        eprintln!("inferdctl: blob ready at {}", blob_path.display());
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -227,62 +240,85 @@ async fn cmd_doctor(
     // 1. Config file present and parses?
     match ConfigFile::load(config_path) {
         Ok(cfg) => {
+            let entries = cfg.resolved_backends();
+            let llamacpp_entries: Vec<&LlamacppEntry> = entries
+                .iter()
+                .filter_map(|e| match e {
+                    BackendEntry::Llamacpp(l) => Some(l),
+                    _ => None,
+                })
+                .collect();
+            let summary = entries
+                .iter()
+                .map(|e| match e {
+                    BackendEntry::Llamacpp(l) => format!("llamacpp:{}", l.name),
+                    BackendEntry::OpenaiCompat(o) => format!("openai-compat:{}", o.name),
+                    BackendEntry::BedrockInvoke(b) => {
+                        format!("bedrock-invoke:{}", b.name)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             report_problem(
                 "config",
                 true,
                 &format!(
-                    "loaded {} (model {}, auto_pull={})",
+                    "loaded {} (backends: [{summary}], auto_pull={})",
                     config_path.display(),
-                    cfg.model.name,
                     cfg.auto_pull
                 ),
             );
 
-            // 2. Is the model on disk?
+            // 2. Are the local models on disk? Only llamacpp entries
+            // have a blob; cloud entries have nothing to check here
+            // (their reachability is admin-socket / runtime concern).
             let store = match cfg.models_home.as_ref() {
                 Some(p) => ModelStore::open(p),
                 None => ModelStore::open(inferd_daemon::store::default_models_home()),
             };
-            let blob_path = store.blob_path(&cfg.model.sha256);
-            if blob_path.exists() {
-                let size = std::fs::metadata(&blob_path).map(|m| m.len()).unwrap_or(0);
-                report_problem(
-                    "model",
-                    true,
-                    &format!("blob present ({} bytes) at {}", size, blob_path.display()),
-                );
-            } else {
-                report_problem(
-                    "model",
-                    false,
-                    &format!(
-                        "blob missing at {}; run `inferd pull` or set auto_pull=true",
-                        blob_path.display()
-                    ),
-                );
-            }
-
-            // 3. Manifest readable?
-            match store.read_manifest(&cfg.model.name) {
-                Ok(Some(_)) => {
+            for entry in &llamacpp_entries {
+                let label = format!("model[{}]", entry.name);
+                let blob_path = store.blob_path(&entry.model.sha256);
+                if blob_path.exists() {
+                    let size = std::fs::metadata(&blob_path).map(|m| m.len()).unwrap_or(0);
                     report_problem(
-                        "manifest",
+                        &label,
                         true,
+                        &format!("blob present ({} bytes) at {}", size, blob_path.display()),
+                    );
+                } else {
+                    report_problem(
+                        &label,
+                        false,
                         &format!(
-                            "present at {}",
-                            store.manifest_path(&cfg.model.name).display()
+                            "blob missing at {}; run `inferdctl pull` or set auto_pull=true",
+                            blob_path.display()
                         ),
                     );
                 }
-                Ok(None) => report_problem(
-                    "manifest",
-                    false,
-                    &format!(
-                        "missing at {}; daemon hasn't fetched yet, or operator skipped pull",
-                        store.manifest_path(&cfg.model.name).display()
+
+                let manifest_label = format!("manifest[{}]", entry.name);
+                match store.read_manifest(&entry.model.name) {
+                    Ok(Some(_)) => {
+                        report_problem(
+                            &manifest_label,
+                            true,
+                            &format!(
+                                "present at {}",
+                                store.manifest_path(&entry.model.name).display()
+                            ),
+                        );
+                    }
+                    Ok(None) => report_problem(
+                        &manifest_label,
+                        false,
+                        &format!(
+                            "missing at {}; daemon hasn't fetched yet, or operator skipped pull",
+                            store.manifest_path(&entry.model.name).display()
+                        ),
                     ),
-                ),
-                Err(e) => report_problem("manifest", false, &format!("read error: {e}")),
+                    Err(e) => report_problem(&manifest_label, false, &format!("read error: {e}")),
+                }
             }
         }
         Err(e) => {
@@ -297,30 +333,67 @@ async fn cmd_doctor(
     // 4. Admin socket reachable?
     match tokio::time::timeout(Duration::from_secs(1), dial_admin(admin_addr)).await {
         Ok(Ok(mut admin)) => {
-            // Read one frame so we know the daemon's actual state.
-            match tokio::time::timeout(Duration::from_secs(1), admin.recv()).await {
-                Ok(Ok(event)) => report_problem(
-                    "admin",
-                    true,
-                    &format!(
-                        "connected at {}; daemon status={} phase={}",
-                        admin_addr.display(),
-                        event.status,
-                        if event.phase.is_empty() {
-                            "-"
-                        } else {
-                            &event.phase
-                        }
-                    ),
-                ),
-                _ => report_problem(
+            // Read up to two frames: the daemon emits a capabilities
+            // frame before the lifecycle snapshot when it's been
+            // through backend construction. If we only see one frame,
+            // it's the snapshot (daemon may not have hit Capabilities
+            // yet — e.g. still in LoadingModel).
+            let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
+            for _ in 0..2 {
+                match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
+                    Ok(Ok(event)) => frames.push(event),
+                    _ => break,
+                }
+            }
+            if frames.is_empty() {
+                report_problem(
                     "admin",
                     false,
                     &format!(
                         "connected at {} but no frame within 1s",
                         admin_addr.display()
                     ),
-                ),
+                );
+            } else {
+                let caps = frames.iter().find(|e| e.status == "capabilities");
+                let snapshot = frames
+                    .iter()
+                    .find(|e| e.status != "capabilities")
+                    .unwrap_or(&frames[0]);
+                report_problem(
+                    "admin",
+                    true,
+                    &format!(
+                        "connected at {}; daemon status={} phase={}",
+                        admin_addr.display(),
+                        snapshot.status,
+                        if snapshot.phase.is_empty() {
+                            "-"
+                        } else {
+                            &snapshot.phase
+                        }
+                    ),
+                );
+                if let Some(c) = caps {
+                    let backend = c.backend.as_deref().unwrap_or("?");
+                    let accel = c.accelerator.as_deref().unwrap_or("?");
+                    let gpu_layers = c.gpu_layers.unwrap_or(0);
+                    let v2 = c.v2.unwrap_or(false);
+                    let vision = c.vision.unwrap_or(false);
+                    let audio = c.audio.unwrap_or(false);
+                    let tools = c.tools.unwrap_or(false);
+                    let thinking = c.thinking.unwrap_or(false);
+                    let embed = c.embed.unwrap_or(false);
+                    report_problem(
+                        "backend",
+                        true,
+                        &format!(
+                            "{backend} accelerator={accel} gpu_layers={gpu_layers} \
+                             v2={v2} vision={vision} audio={audio} tools={tools} \
+                             thinking={thinking} embed={embed}"
+                        ),
+                    );
+                }
             }
         }
         Ok(Err(e)) => report_problem(
@@ -385,6 +458,34 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(n) = event.n_ctx {
         obj.insert("n_ctx".into(), json!(n));
+    }
+    // capabilities frame (#77) — pass through every set field.
+    if let Some(s) = &event.backend {
+        obj.insert("backend".into(), Value::String(s.clone()));
+    }
+    if let Some(b) = event.v2 {
+        obj.insert("v2".into(), json!(b));
+    }
+    if let Some(b) = event.vision {
+        obj.insert("vision".into(), json!(b));
+    }
+    if let Some(b) = event.audio {
+        obj.insert("audio".into(), json!(b));
+    }
+    if let Some(b) = event.tools {
+        obj.insert("tools".into(), json!(b));
+    }
+    if let Some(b) = event.thinking {
+        obj.insert("thinking".into(), json!(b));
+    }
+    if let Some(b) = event.embed {
+        obj.insert("embed".into(), json!(b));
+    }
+    if let Some(s) = &event.accelerator {
+        obj.insert("accelerator".into(), Value::String(s.clone()));
+    }
+    if let Some(n) = event.gpu_layers {
+        obj.insert("gpu_layers".into(), json!(n));
     }
     serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
 }

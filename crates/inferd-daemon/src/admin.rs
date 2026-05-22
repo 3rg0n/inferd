@@ -49,6 +49,11 @@ pub struct StatusBroadcaster {
     /// `watch` carries the *most recent* event so newcomers don't
     /// need to wait for the next state change.
     snapshot: watch::Sender<StatusEvent>,
+    /// `watch` carries the most recent `Capabilities` event so
+    /// late-connecting one-shot subscribers (e.g. `inferdctl doctor`)
+    /// see capability info even though it was published once at boot.
+    /// `None` until the backend has been constructed.
+    capabilities: watch::Sender<Option<StatusEvent>>,
     /// `broadcast` carries the live event stream. Subscribers receive
     /// every event from the moment they subscribe.
     events: broadcast::Sender<StatusEvent>,
@@ -59,8 +64,13 @@ impl StatusBroadcaster {
     /// initial value is `StatusEvent::Starting`.
     pub fn new(initial: StatusEvent) -> Self {
         let (snapshot, _rx) = watch::channel(initial);
+        let (capabilities, _rx) = watch::channel(None);
         let (events, _rx) = broadcast::channel(ADMIN_BROADCAST_CAPACITY);
-        Self { snapshot, events }
+        Self {
+            snapshot,
+            capabilities,
+            events,
+        }
     }
 
     /// Publish a new state. Updates the snapshot (so subsequent
@@ -70,7 +80,11 @@ impl StatusBroadcaster {
         // of how many receivers are alive — `send` would silently
         // drop the value if no one is currently subscribed, which
         // is wrong for snapshot semantics.
-        let _ = self.snapshot.send_replace(event.clone());
+        if matches!(event, StatusEvent::Capabilities { .. }) {
+            let _ = self.capabilities.send_replace(Some(event.clone()));
+        } else {
+            let _ = self.snapshot.send_replace(event.clone());
+        }
         let _ = self.events.send(event);
     }
 
@@ -78,6 +92,13 @@ impl StatusBroadcaster {
     /// to write the first frame on connect.
     pub fn current(&self) -> StatusEvent {
         self.snapshot.borrow().clone()
+    }
+
+    /// Most recent capability advertisement, if any. The admin accept
+    /// loop writes this *before* the snapshot frame so one-shot
+    /// readers see capabilities even when they connect after Ready.
+    pub fn latest_capabilities(&self) -> Option<StatusEvent> {
+        self.capabilities.borrow().clone()
     }
 
     /// Subscribe to the live event stream. The receiver yields every
@@ -116,9 +137,15 @@ fn render_frame(event: &StatusEvent) -> Vec<u8> {
 async fn handle_admin_connection<W: AsyncWrite + Unpin>(
     mut writer: W,
     snapshot: StatusEvent,
+    capabilities: Option<StatusEvent>,
     mut rx: broadcast::Receiver<StatusEvent>,
 ) -> io::Result<()> {
-    // 1. Snapshot frame.
+    // 1a. Capability frame (if known) — written before the snapshot
+    // so one-shot subscribers see it.
+    if let Some(caps) = capabilities {
+        writer.write_all(&render_frame(&caps)).await?;
+    }
+    // 1b. Snapshot frame.
     writer.write_all(&render_frame(&snapshot)).await?;
     writer.flush().await?;
 
@@ -160,10 +187,11 @@ pub async fn serve_admin_uds(
             accept = listener.accept() => {
                 let (stream, _) = accept?;
                 let snapshot = broadcaster.current();
+                let capabilities = broadcaster.latest_capabilities();
                 let rx = broadcaster.subscribe();
                 debug!("admin uds accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_admin_connection(stream, snapshot, rx).await {
+                    if let Err(e) = handle_admin_connection(stream, snapshot, capabilities, rx).await {
                         debug!(error = ?e, "admin connection ended with error");
                     }
                 });
@@ -199,10 +227,11 @@ pub async fn serve_admin_pipe(
                 server = bind_admin_pipe(path, false)?;
 
                 let snapshot = broadcaster.current();
+                let capabilities = broadcaster.latest_capabilities();
                 let rx = broadcaster.subscribe();
                 debug!("admin pipe accept");
                 tokio::spawn(async move {
-                    if let Err(e) = handle_admin_connection(connected, snapshot, rx).await {
+                    if let Err(e) = handle_admin_connection(connected, snapshot, capabilities, rx).await {
                         debug!(error = ?e, "admin connection ended with error");
                     }
                 });
@@ -286,6 +315,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capabilities_publish_does_not_overwrite_lifecycle_snapshot() {
+        // The Capabilities event is stored in its own slot so that
+        // late-connecting subscribers still see the latest lifecycle
+        // state (Ready / Restarting / Draining) as their snapshot.
+        let b = StatusBroadcaster::new(StatusEvent::Starting);
+        b.publish(StatusEvent::Capabilities {
+            backend: "llamacpp".into(),
+            v2: true,
+            vision: true,
+            audio: false,
+            tools: true,
+            thinking: true,
+            embed: false,
+            accelerator: "cuda".into(),
+            gpu_layers: 99,
+        });
+        // Snapshot is still Starting — Capabilities lives outside it.
+        match b.current() {
+            StatusEvent::Starting => {}
+            other => panic!("expected Starting in snapshot, got {other:?}"),
+        }
+        // Capabilities is recorded for the connect prefix.
+        match b.latest_capabilities() {
+            Some(StatusEvent::Capabilities {
+                backend,
+                accelerator,
+                gpu_layers,
+                ..
+            }) => {
+                assert_eq!(backend, "llamacpp");
+                assert_eq!(accelerator, "cuda");
+                assert_eq!(gpu_layers, 99);
+            }
+            other => panic!("expected Capabilities, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_admin_connection_writes_capabilities_then_snapshot() {
+        let (server_side, mut client_side) = tokio::io::duplex(64 * 1024);
+        let b = StatusBroadcaster::new(StatusEvent::Starting);
+        b.publish(StatusEvent::Capabilities {
+            backend: "llamacpp".into(),
+            v2: true,
+            vision: false,
+            audio: false,
+            tools: true,
+            thinking: true,
+            embed: false,
+            accelerator: "cpu".into(),
+            gpu_layers: 0,
+        });
+        b.publish(StatusEvent::Ready);
+
+        let snapshot = b.current();
+        let capabilities = b.latest_capabilities();
+        let rx = b.subscribe();
+        let handle = tokio::spawn(async move {
+            let _ = handle_admin_connection(server_side, snapshot, capabilities, rx).await;
+        });
+
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(&mut client_side);
+
+        // First frame: capabilities.
+        let mut line = Vec::new();
+        let n = reader.read_until(b'\n', &mut line).await.unwrap();
+        assert!(n > 0);
+        let v = parse_admin_frame(&line);
+        assert_eq!(v["status"], "capabilities");
+        assert_eq!(v["backend"], "llamacpp");
+        assert_eq!(v["accelerator"], "cpu");
+        assert_eq!(v["gpu_layers"], 0);
+
+        // Second frame: snapshot (Ready).
+        let mut line2 = Vec::new();
+        let n2 = reader.read_until(b'\n', &mut line2).await.unwrap();
+        assert!(n2 > 0);
+        let v2 = parse_admin_frame(&line2);
+        assert_eq!(v2["status"], "ready");
+
+        drop(client_side);
+        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
+    }
+
+    #[tokio::test]
     async fn handle_admin_connection_writes_snapshot_first() {
         // Use a duplex pipe so we can read what the handler wrote
         // without binding a real socket.
@@ -298,9 +413,10 @@ mod tests {
         });
 
         let snapshot = b.current();
+        let capabilities = b.latest_capabilities();
         let rx = b.subscribe();
         let handle = tokio::spawn(async move {
-            let _ = handle_admin_connection(server_side, snapshot, rx).await;
+            let _ = handle_admin_connection(server_side, snapshot, capabilities, rx).await;
         });
 
         // Read the snapshot frame.

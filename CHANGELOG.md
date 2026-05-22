@@ -7,73 +7,794 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.14] - 2026-05-20
-
-Hotfix for issue #8 — `install-launchagent.sh` substituted
-`__HOME__` / `__TMPDIR__` / `__BIN__` into the plist but never
-wrote `--backend` or `--model-path` into `ProgramArguments`. The
-daemon defaulted to the mock backend even after `inferd pull`;
-every macOS user got canned tokens with no warning.
-
-Tarball-only ship; no wire-surface change. Crates on crates.io
-stay at 0.1.9.
+## [0.2.1] - 2026-05-22
 
 ### Fixed
 
-- **`packaging/launchd/io.inferd.daemon.plist`**: gains
-  `__BACKEND__` and `__MODEL_PATH__` placeholders in
-  `ProgramArguments` so the install script's substitution lands
-  in the running argv. Manual-install comment block now lists
-  the two extra `sed` substitutions and orders `launchctl
-  enable` before `launchctl bootstrap` to handle the disabled
-  state (matching what the script does).
-- **`packaging/launchd/install-launchagent.sh`**: accepts an
-  optional second argument for the model path; auto-detects the
-  CAS path from `~/.inferd/config.json` when omitted. Hardcodes
-  `BACKEND=llamacpp` — there is no path that writes a mock
-  plist by accident. Exits non-zero with a clear `run 'inferd
-  pull' first` message when no model can be found, instead of
-  registering a placeholder daemon that looks installed but
-  serves canned tokens. Echoes `Backend:` and `Model:` at the
-  end so the user sees exactly what was wired.
-
-## [0.1.13] - 2026-05-20
-
-Hotfix for issue #6 — llamacpp loader's TOCTOU mitigation made
-the daemon unusable on tmpfs-constrained hosts (WSL2 default
-tmpfs is half of allocated RAM; multi-GB Gemma models did not
-fit). The defensive temp-copy doubled disk usage during cold
-start; the gap it actually defended (sub-microsecond rewrite
-race within an already-compromised file-write threat) is not
-worth that cost.
+- **macOS LaunchAgent install fixes carried forward from v0.1.13/v0.1.14
+  on `main`** (cherry-picked from commits `486b392` and `2a6d19e`). The
+  `v0.2-dev` branch never picked up two real launchd bugs that landed
+  on `main` while v0.2 work was in flight:
+  (1) `launchctl bootstrap` on a previously bootout-ed agent returned
+  `EX_IO (5)` because launchd marks the agent disabled after bootout —
+  fix by calling `launchctl enable` before `bootstrap` in
+  `packaging/launchd/install-launchagent.sh`;
+  (2) `io.inferd.daemon.plist` had `__BACKEND__` / `__MODEL_PATH__`
+  placeholders that the install script never substituted, so the daemon
+  defaulted to the mock backend even after `inferdctl pull` — fix by
+  threading the values through the install script and failing loudly if
+  no model is provided. Without these, the v0.2.x tarball produced a
+  broken macOS install path. Closes #9.
 
 ### Changed
+
+- **CLI binary renamed `inferd` → `inferdctl`** (ADR 0018,
+  supersedes ADR 0014's name choice; ADR 0014's invariants are
+  preserved). The standalone `inferd` crate name on crates.io is
+  squatted, blocking `cargo publish` of the CLI; rather than
+  pursue an ownership dispute we land on a `*ctl`-suffixed name
+  that both publishes cleanly and disambiguates the CLI from
+  `inferd-daemon` for operators (cf. `systemctl`, `kubectl`).
+  The architectural posture is unchanged — the CLI is still a
+  peer reference-middleware client of every other consumer, with
+  no private daemon API. Touched: `crates/inferd/Cargo.toml`
+  (package + bin name), `crates/inferd/src/main.rs` (clap
+  `name = "inferdctl"` + doc-comments),
+  `.github/workflows/release.yml` (build + staging),
+  `INTEGRATING.md`, daemon source comments referencing the CLI.
+  The directory `crates/inferd/` did not move — only the
+  published crate name and binary basename. **Migration:**
+  shell scripts referencing `inferd status` / `inferd watch` /
+  `inferd pull` / `inferd doctor` need to be updated to
+  `inferdctl <subcommand>`. Closes #100.
+
+### Added
+
+- **Release pipeline hardening** (`.github/workflows/release.yml`,
+  `docs/RELEASING.md`). The v0.2.0 cut shipped with no platform tarballs
+  attached because the macOS build broke and the `Sign + publish` job
+  (`needs: [build, sbom]`) was skipped — exposing several latent
+  fragility points in the release pipeline. Five-part hardening so v0.2.1
+  can ship cleanly:
+  - **SHA256 sidecars.** Each platform job now generates a `*.sha256`
+    file next to its archive and uploads it alongside. Universal
+    "did this download corrupt" check; verify with `shasum -a 256 -c
+    <archive>.sha256`. Cosign bundles still ship for provenance.
+  - **Pinned third-party Actions.** Every `uses:` reference now pins
+    to a commit SHA with the upstream tag name as a comment
+    (`actions/checkout@de0fac2e... # v6`). Mitigates tag-rewrite
+    attacks on release pipelines, consistent with the supply-chain
+    posture in `~/.claude/security-scanners.md`.
+  - **CHANGELOG section as release body.** The `publish` job now
+    extracts the matching `## [X.Y.Z]` section from `CHANGELOG.md`
+    and uses it as the release body. Replaces the previous
+    auto-generated PR list. Falls back to auto-generation if the
+    section is missing.
+  - **Asset-completeness sanity check.** New step in `publish`
+    asserts: 4 archives, 4 sha256 sidecars, 4 cosign bundles, ≥1
+    SBOM, with archive/sha/bundle counts matching. Fails the
+    workflow loudly before creating a half-populated release page.
+  - **`docs/RELEASING.md`.** Human-readable release runbook: what a
+    release ships, how to cut one, what the trajectory looks like in
+    Actions, what to do when something goes wrong (mid-workflow
+    failure, missing assets, wrong release body, cosign signing
+    issues).
+
+### Fixed
+
+- **macOS aarch64 release build** (`crates/inferd-engine/cpp/CMakeLists.txt`):
+  the Phase 3A CMake wrapper used `add_subdirectory(... EXCLUDE_FROM_ALL)`,
+  which skips any upstream target not transitively depended on by an
+  `ALL`-attached target. `ggml-blas` was never in that transitive set, so it
+  was never built or installed on macOS — producing "cannot find native static
+  library `ggml-blas`" at link time. Fixed by:
+  (1) setting `GGML_BLAS=ON` / `GGML_BLAS_VENDOR=Apple` before
+  `add_subdirectory` so upstream's CMake defines the target at all;
+  (2) adding `add_dependencies(ggml ggml-blas)` after `add_subdirectory`
+  (guarded by `if(TARGET ggml-blas)`) so the EXCLUDE_FROM_ALL is
+  overridden by the explicit dependency chain;
+  (3) adding a matching `install(TARGETS ggml-blas ...)` so the archive
+  lands in `${CMAKE_INSTALL_PREFIX}/lib` where `build.rs`'s link-search
+  finds it. Validated locally on arm64 macOS: `libggml-blas.a` now
+  appears in `OUT_DIR/lib/` and the daemon binary links cleanly. Closes #12.
+
+## [0.2.0] - 2026-05-21
+
+### Fixed
+
+- **Phase 6B-7 part 8: `LlamaCpp::embed` reports the actual model
+  identifier on response frames.** Previously the adapter hard-coded
+  `model: "llamacpp"` on every `embeddings` frame — a duplicate of
+  `Backend::name()` and useless to operators trying to confirm which
+  GGUF served their request. The adapter now reads GGUF `general.name`
+  metadata via `llama_model_meta_val_str` at construction time and
+  caches the result on the adapter; if the key is absent it falls
+  back to the path file stem (e.g. `embeddinggemma-300m-Q8_0` from
+  `embeddinggemma-300m-Q8_0.gguf`), and as a last resort the constant
+  `"llamacpp"` for paths with no valid Unicode stem. Diagnostic-only
+  per ADR 0007 — apps must not branch on this — but accuracy here
+  matters for log correlation and `inferd doctor` parity.
+
+### Added
+
+- **Phase 6B-7 part 9: real-model embed integration test.** New
+  `crates/inferd-engine/tests/embed_llamacpp.rs` (gated behind
+  `llamacpp-integration`, skips when `INFERD_TEST_EMBED_MODEL_PATH`
+  is unset) drives the FFI path against a real EmbeddingGemma 300M
+  GGUF: capability advertisement, default-dim-768 unit-norm output,
+  in-order batching with cosine-distinct vectors, MRL truncation to
+  256 with re-normalisation, rejection of dimensions above `n_embd`,
+  task-prefix variation across `RetrievalQuery` / `RetrievalDocument`
+  / unprefixed, and a smoke pass through all eight EmbeddingGemma
+  task variants. No mocks anywhere on this path — same Tier-3 shape
+  as `tests/llamacpp.rs` and `tests/llamacpp_multimodal.rs`.
+
+- **Phase 6B-7 part 7: config-file embed fields on `LlamacppEntry`.**
+  `LlamacppEntry` (multi-backend `backends:` shape) gains `embed:
+  bool` (default `false`), `embed_pooling: Option<i32>` (default
+  `None`, treated as `LLAMA_POOLING_TYPE_MEAN` by the adapter),
+  and `embed_n_ctx: u32` (default `2048` — EmbeddingGemma 300M's
+  window). The daemon's `build_llamacpp_from_entry` plumbs these
+  three fields straight through to `LlamaCppConfig`, so an
+  operator who declares `embed: true` on a backend gets a
+  capability-advertising backend without further wiring. Legacy
+  single-`model:` configs predate ADR 0017 and stay generation-
+  only — the legacy promotion path explicitly sets `embed: false`
+  with the embed-context defaults so the field shape stays
+  consistent. Three new tests cover (1) default-off behaviour
+  when the operator omits the fields, (2) round-trip when all
+  three are set, and (3) the legacy promotion path still flips
+  embed off. Workspace clippy + tests stay green; this closes
+  out Phase 6B-7 (#97), unblocking #87 (v0.2.0 tag) for explicit
+  human go-ahead.
+
+- **Phase 6B-7 part 6: INTEGRATING.md embed section.**
+  Added an "Embeddings (v0.2)" section with the third-socket
+  endpoint table, capability-discovery / `inferd doctor` snippet,
+  config-file shape (`llamacpp` entry with `embed: true`,
+  `embed_pooling`, `embed_n_ctx`), Rust example, supported
+  request fields (`input` / `dimensions` / `task` with the
+  EmbeddingGemma task taxonomy), and the embed-specific error
+  contract. Bedrock-invoke also added to the "Backends in v0.2"
+  list (was missing). Versioning section now mentions the embed
+  wire as separate-socket-frozen-once-shipped per ADR 0017.
+
+- **Phase 6B-7 part 5: `inferd-client` embed surface.** New
+  `EmbedClient` (sibling to `Client` / `ClientV2`) ships
+  `dial_tcp` / `dial_uds` (Unix) / `dial_pipe` (Windows) and a
+  single `embed(req)` method that round-trips one terminal
+  `EmbedResponse` per `EmbedRequest`. The connection stays open
+  for the next call — long-lived semantics match v1 / v2.
+  Default endpoint resolution (`default_embed_addr`) mirrors the
+  daemon's `endpoint::default_embed_addr` (XDG → `~/.inferd/run`
+  → `/tmp` on Linux, `${TMPDIR}/inferd` on macOS, named pipe on
+  Windows). `dial_and_wait_ready` is generic over the client type
+  so the existing F-13 retry shape serves embed clients without
+  duplication. Embed wire types are re-exported (`EmbedRequest`,
+  `EmbedResponse`, `EmbedTask`, `EmbedErrorCode`, `EmbedUsage`,
+  `EmbedResolved`) so consumers don't need a separate
+  `inferd-proto` dep. Four new unit tests cover success-frame and
+  error-frame round-trips, EOF handling, and connection reuse
+  across multiple requests. INTEGRATING.md update lands in part 6.
+
+- **Phase 6B-7 part 4: daemon embed socket lifecycle.** Daemon now
+  binds a dedicated third inference socket (`/inferd-infer-embed`
+  UDS / `\\.\pipe\inferd-infer-embed` named pipe / `--embed-tcp`
+  loopback) per ADR 0017 when `--embed` is requested *and* at
+  least one registered backend advertises `capabilities().embed`.
+  The new `lifecycle_embed` module mirrors `lifecycle_v2` but
+  short-circuits to a single terminal frame per request
+  (`embeddings` or `error`) — no streaming. Admission, F-7
+  peer-cred (UDS / pipe), and F-8 first-frame TCP API-key gates
+  are reused from the existing accept context, and embed dispatch
+  shares the one warm-model admission slot with v1+v2 (one slot
+  is one slot per ADR 0012). Capability advertisement
+  (`StatusEvent::Capabilities { embed, .. }`) flows through to
+  the admin socket, the `inferd-client` `AdminEvent`, and the
+  `inferd doctor` / `inferd watch` surfaces so operators can see
+  whether the warm backend can serve embeddings. CLI gains
+  `--embed`, `--embed-addr`, `--embed-tcp` (with the same
+  conflicts-with shape as v2) and `listen.tcp_embed` joins the
+  config-file shape. CLI flag without a capable backend warns
+  and skips binding rather than failing — keeps the v0.2 cloud
+  adapters (which legitimately don't embed yet) running clean.
+  Workspace clippy + tests stay green; client surface lands in
+  part 5.
+
+- **Phase 6B-7 part 3: llamacpp embed adapter.** `LlamaCppConfig`
+  grows `embed: bool`, `embed_pooling: Option<i32>` (defaults to
+  `LLAMA_POOLING_TYPE_MEAN` — what EmbeddingGemma expects), and
+  `embed_n_ctx: u32` (defaults to 2048, the EmbeddingGemma 300M
+  context). When `embed = true` the adapter allocates a dedicated
+  second `llama_context` configured with `embeddings = true` so
+  `Backend::embed` doesn't have to toggle `llama_set_embeddings` on
+  the live generation context (which would race active generations).
+  `capabilities().embed` flips `true` accordingly. The new
+  `LlamaCpp::embed` impl applies EmbeddingGemma's task-prefix
+  convention before tokenisation (eight `EmbedTask` variants mapped
+  to the documented prefixes; `None` and `Other` pass through
+  unchanged), tokenises each input under the lock guard, runs
+  `llama_encode`, reads the pooled per-sequence vector via
+  `llama_get_embeddings_seq`, applies Matryoshka truncation when
+  `dimensions` is set (rejects values larger than the model's
+  `n_embd`), L2-renormalises the truncated vector, and returns one
+  `Vec<f32>` per input. The FFI work runs on `spawn_blocking` so it
+  doesn't stall the tokio runtime. `bedrock_invoke` and
+  `openai_compat` adapters keep `embed: false` per ADR 0017's
+  v0.2.0 scope. Workspace clippy + tests stay green; daemon
+  socket binding lands in part 4.
+
+- **Phase 6B-7 part 2: `Backend::embed` trait method + Mock impl.**
+  Engine crate gains `EmbedResult` (one vector per input + dimensions
+  + model name + `EmbedUsage`) and `EmbedError` (its own taxonomy:
+  `NotReady`, `Unsupported`, `InvalidRequest`, `Unavailable`,
+  `Internal` — distinct from `GenerateError` because the embed
+  surface has no streaming, no mid-stream concept, and adds the
+  not-an-embed-backend case). The `Backend` trait grows a default
+  `embed()` returning `EmbedError::Unsupported` so existing adapters
+  (`bedrock_invoke`, `openai_compat`) compile unchanged; opt-in is
+  via `capabilities().embed = true`. The Mock backend opts in and
+  returns deterministic vectors derived from input length so daemon
+  embed-socket dispatch can be exercised end-to-end without a real
+  engine. Five new mock-backend tests cover the cap advertisement,
+  vector-shape determinism, requested-dimensions honoring,
+  pre-stream-error mapping, and not-ready short-circuit. Workspace
+  clippy + tests stay green; `llamacpp` adapter wiring lands in part
+  3.
+
+- **Phase 6B-7 part 1: embed wire types in `inferd-proto`.** New
+  `embed` module (sibling to `v2`) ships `EmbedRequest` / `EmbedResolved`
+  / `EmbedTask` / `EmbedResponse` / `EmbedErrorCode` / `EmbedUsage`,
+  matching ADR 0017's locked envelope. Single-frame request: `id`
+  (correlation), `input` (non-empty array of non-empty strings),
+  optional `dimensions` (MRL truncation length, validated at the
+  backend layer), optional `task` (task-prefix hint with eight
+  EmbeddingGemma-shaped variants plus a forward-compatible `Other`
+  catchall that `resolve()` rejects). Single-frame response: either
+  `Embeddings { embeddings, dimensions, model, usage, backend }` or
+  `Error { code, message }` — no streaming, since an embedding is a
+  complete vector. Error taxonomy matches v1's plus `embed_unsupported`
+  for the belt-and-braces case where the embed socket somehow gets
+  bound on a generation-only daemon. Nine new tests cover empty-input
+  rejection, empty-inner-string rejection, full-JSON round-trip,
+  unknown-task forward-compat, and serializer field elision.
+
+- **ADR 0017: embeddings on a third socket.** Locks the v0.2.0 wire shape
+  for embedding requests before code lands. Embeddings ship on a
+  dedicated NDJSON-over-IPC socket (`infer.embed.sock` /
+  `\\.\pipe\inferd-infer-embed`) — same framing as v1 / v2, separate
+  path. HTTP `/v1/embeddings` stays an ecosystem-extension job per
+  ADR 0006. ADR 0012's "one warm model per process" rule stands:
+  operators who want both generation and embeddings run two inferd
+  processes. The capability frame on the admin socket gains an
+  `embed: bool` field; the daemon binds the embed socket only when
+  the active backend reports `supports().embed == true`. v0.2.0
+  scope is llamacpp + EmbeddingGemma 300M only — `openai-compat`
+  `/v1/embeddings` and Bedrock Titan Embed are explicitly deferred
+  to v0.2.1+.
+
+- **Phase 6B-5 part 2: bedrock-invoke wired into the daemon binary.**
+  New daemon-side `bedrock` cargo feature; `--backend bedrock-invoke`
+  CLI flag plus `--bedrock-region`, `--bedrock-model-id`,
+  `--bedrock-bearer-token` (env: `AWS_BEARER_TOKEN_BEDROCK`),
+  `--bedrock-endpoint`, and `--bedrock-timeout-secs` for the
+  CLI-only path; matching `kind: "bedrock-invoke"` config-file
+  entry with `region`, `model_id`, optional `bearer_token_env`
+  (env-var-by-name shape, mirroring openai-compat's
+  `api_key_env` so secrets stay out of the file), optional
+  `endpoint`, and `timeout_secs`. Auth resolves bearer-first
+  (CLI flag → named env var), then the standard
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional
+  `AWS_SESSION_TOKEN` chain via SigV4. Operators with no auth
+  configured get a clear startup error pointing at both options.
+  Five new tests cover the CLI-shape round-trip + defaults and
+  the config-file BedrockInvokeEntry round-trip + validation
+  (empty region / empty model_id rejected).
+- **Phase 6B-5 part 1: bedrock-invoke backend adapter (engine crate).**
+  New `bedrock_invoke` module behind the `bedrock` cargo feature
+  ships the AWS Bedrock-runtime
+  `InvokeModelWithResponseStream` plumbing: a hand-rolled SigV4 signer
+  (HMAC-SHA-256 chain, ~150 lines — avoids pulling in the AWS SDK
+  ecosystem), an AWS event-stream binary frame decoder
+  (`application/vnd.amazon.eventstream`, 1 MB safety cap, CRCs trusted
+  to TLS), an Anthropic-on-Bedrock body mapper for the locked
+  `anthropic_version: "bedrock-2023-05-31"` shape, and a
+  `StreamAccumulator` that absorbs the inner Anthropic SSE-shaped
+  events (`message_start` → `content_block_delta`* →
+  `content_block_stop` → `message_delta` → `message_stop`) and emits
+  `TokenEventV2`. Two auth modes, in order: bearer token
+  (`AWS_BEARER_TOKEN_BEDROCK`, sent as `Authorization: Bearer`, skips
+  SigV4) and the standard AWS access-key chain. v0.2.0 multimodal
+  gate is single-sided — image/audio/video content blocks are
+  rejected at request build time; tool-use is supported in both
+  directions. 35 unit tests cover the body mapper round-trips, the
+  event-stream decoder against partial feeds and exception frames,
+  the SigV4 signer's determinism + session-token handling, and the
+  adapter's URL/host/header construction. The adapter is built but
+  not yet wired into the daemon binary — that lands in part 2
+  (`BackendKind::BedrockInvoke` + `kind: "bedrock-invoke"` config-
+  file entry).
+- **Phase 6B-4: TCP transport as config opt-in (default off).** Closes
+  the v0.2.0-tagging gap that enabling TCP required a CLI flag, which
+  blocked operators who run inferd under a system service manager
+  (systemd, launchd, NSSM) where editing the unit file just to flip a
+  transport is friction. Config-file schema grows an optional `listen`
+  block with `tcp` (v1 inference socket bind address), `tcp_v2` (v2
+  inference socket bind address — only honoured when `--v2` is also
+  set), and `api_key_env` (env-var **name** carrying the pre-shared
+  TCP API key, mirroring the `openai-compat` env-var-by-name shape so
+  secrets stay out of the file). Default behaviour is unchanged: when
+  the operator passes `--tcp`/`--uds`/`--pipe`, the CLI flag wins and
+  the config block is ignored with a one-line info log; when no CLI
+  transport is set, `listen.tcp` is the fallback. Errors with a clear
+  punch-list when neither source supplies a transport (`pass
+  --tcp/--uds/--pipe on the CLI, or set listen.tcp in
+  ~/.inferd/config.json`). API-key resolution chain: CLI `--api-key`
+  → `config.listen.api_key_env` → `INFERD_API_KEY` env (already wired
+  via clap's `env=`). The "no api-key configured but TCP listener
+  bound" warning (THREAT_MODEL F-8) now fires for both CLI-driven and
+  config-driven TCP. Restart-time only — no config watcher; operators
+  changing `listen:` must restart the service. Targets WSL ↔ Windows
+  host and podman cross-VM boundary scenarios where Unix sockets and
+  named pipes don't cross the VM line cleanly. Three new
+  `config_file::tests` cover the listen-absent default, the full
+  `tcp` + `tcp_v2` + `api_key_env` round-trip, and empty-string
+  rejection.
+- **Phase 6B-3: multi-backend config shape.** Closes the v0.2.0-tagging
+  gap that `~/.inferd/config.json` only carried a single `model:` entry
+  even though the engine, router, and circuit breaker were already
+  designed for the multi-backend world. The schema grows a new
+  optional `backends:` array of `kind:`-tagged entries — `kind:
+  "llamacpp"` (with its own `model:` block, `n_ctx`, `n_gpu_layers`)
+  and `kind: "openai-compat"` (with `base_url`, `model`, optional
+  `api_key_env`, `timeout_secs`) — that the router walks in order per
+  ADR 0007. The legacy top-level `model:` field stays optional and
+  keeps working: when set without `backends:`, `resolved_backends()`
+  auto-promotes it to a one-element `[{kind: "llamacpp", ...}]` list,
+  so v0.1.x configs land unmodified. Setting both is a parse-time
+  validation error. API keys for `openai-compat` are referenced by
+  env-var **name** via `api_key_env: "<NAME>"` — never embedded
+  literally in the file — and the daemon resolves through
+  `api_key_env` → `INFERD_OPENAI_API_KEY` → `OPENAI_API_KEY` → empty
+  (skipping the `Authorization` header) so secrets stay in env, not
+  on disk. Daemon `build_backends` now returns
+  `Vec<Arc<dyn Backend>>` and feeds the router directly; one
+  `Capabilities` admin frame fires per backend so subscribers see
+  the full router shape. The `inferd doctor` and `inferd pull`
+  subcommands walk every llamacpp entry (each with its own blob /
+  manifest) and skip cloud entries. The `kind:` field is an
+  open-ended tagged union so future variants (`bedrock-invoke`, …)
+  slot in additively without a config break. Twelve new
+  `config_file::tests` cover the multi-backend happy path,
+  mutual-exclusion validation, duplicate-name rejection, scheme
+  validation (http/https only), unknown-kind parse error, and the
+  legacy-model auto-promotion path.
+- **Phase 6B-2: `BackendKind::OpenaiCompat` wired into the daemon
+  binary.** Closes the v0.2.0-tagging gap that the engine shipped an
+  OpenAI-compat adapter behind `--features openai` but the daemon
+  binary couldn't select it. New `BackendKind::OpenaiCompat` variant
+  (gated on the daemon's `openai` cargo feature, which feeds through
+  to `inferd-engine/openai`) registers as `--backend openai-compat`
+  via clap. Four new CLI flags carry the adapter's config:
+  `--openai-base-url` (env `INFERD_OPENAI_BASE_URL`),
+  `--openai-api-key` (env `INFERD_OPENAI_API_KEY`, `hide_env_values`
+  to keep the bearer out of `--help`), `--openai-model` (env
+  `INFERD_OPENAI_MODEL`), and `--openai-timeout-secs` (env
+  `INFERD_OPENAI_TIMEOUT_SECS`, default 300s). The API key
+  resolution chain is `--openai-api-key` → `INFERD_OPENAI_API_KEY` →
+  `OPENAI_API_KEY` (the de-facto env name most provider SDKs already
+  use); pass an empty string to skip the `Authorization` header
+  entirely for self-hosted endpoints (vLLM, LM Studio, LocalAI,
+  llama.cpp's HTTP server). The `build_openai_compat` builder
+  publishes a `LoadingModel{CheckingLocal}` status event tagged with
+  `(openai-compat: <base_url> / <model>)` so the admin status feed
+  surfaces *which* upstream the daemon is configured for.
+- **Phase 6B-1: `inferd-client` v2 surface.** New `ClientV2` mirrors
+  `Client`'s shape (`dial_tcp` / `dial_uds` / `dial_pipe`) but speaks
+  the v2 wire types (`RequestV2` / `ResponseV2`) per ADR 0015.
+  `generate(RequestV2)` returns a `FrameStreamV2` of `ResponseV2`
+  frames, terminating on `Done` / `Error` exactly like v1. Defaults
+  helper `default_v2_addr()` returns the same per-platform fallback
+  chain the daemon binds (`${XDG_RUNTIME_DIR}/inferd/infer.v2.sock`
+  on Linux, `${TMPDIR}/inferd/infer.v2.sock` on macOS,
+  `\\.\pipe\inferd-infer-v2` on Windows). `dial_and_wait_ready` is
+  now generic over the client type so the same retry helper serves
+  both v1 and v2 — existing callers infer the client type
+  unchanged. v2 wire types (`RequestV2`, `ResponseV2`,
+  `ContentBlock`, `MessageV2`, `RoleV2`, `Attachment`, `Tool`,
+  `ToolCallId`, `ToolUseInput`, `ResponseBlock`, `StopReasonV2`,
+  `ErrorCodeV2`, `UsageV2`, `ResolvedV2`) re-exported at the crate
+  root so consumers don't need a separate `inferd-proto` dep. Two
+  unit tests cover the streams-frame-then-done happy path and the
+  unexpected-EOF error path. Closes the v0.2.0-tagging gap that the
+  shipped daemon spoke v2 but the published client could not.
+- **Phase 6B: v0.2.0 release prep.** Workspace version bumped to
+  `0.2.0`. All intra-workspace pinned deps (`=0.1.13`) bumped in
+  lockstep to `=0.2.0` so each crate's published artefact resolves
+  consistently. INTEGRATING.md migrated from "v0.2 preview" framing
+  to v0.2 reality: the v2-wire section now documents the
+  default-bound socket paths (`infer.v2.sock` / `\\.\pipe\inferd-
+  infer-v2`), the raw-bytes attachment posture (ADR 0016 — the
+  daemon does not link image / audio codecs; consumers decode), the
+  tool-call lifecycle (`tool_use` content blocks in stream,
+  `tool_result` blocks back), the in-place migration shape
+  (`Message.content: String` → `Vec<ContentBlock>`), and the v0.2
+  backend matrix (`llamacpp` default + feature-gated `openai`
+  outbound HTTPS adapter). Versioning section updated to call out
+  that `inferd-client = "0.1"` consumers keep working unmodified
+  against the v1 socket of a v0.2 daemon.
+- **CI: v2 + openai-compat matrix coverage** (Phase 6A). New
+  `openai` job runs `cargo clippy --features inferd-engine/openai`
+  and `cargo test -p inferd-engine --features openai` on the same
+  three-OS matrix as the default suite, catching mapper / SSE
+  drift before it ships. The existing `systemd-unit` smoke job now
+  starts the daemon with `--v2` (sed-injected into the shipped
+  `inferd.service` unit at install time, leaving the canonical
+  v1-only file untouched), verifies `infer.v2.sock` exists with the
+  spec-mandated `0660` mode, and round-trips a v2 NDJSON request
+  (`messages[].content` typed blocks, `text` block) through the v2
+  UDS to a `done` frame from the mock backend. Catches regressions
+  in v2 socket binding, v1+v2 AcceptContext sharing, RequestV2
+  resolve, and the router's V2-capable check.
+- **inferd-daemon: real router policy** (Phase 5B, per ADR 0007).
+  `crates/inferd-daemon/src/router.rs` rewritten from the v0.1 single-
+  backend stub into a priority-ordered router with per-backend circuit
+  breaker. Public surface: `Router`, `Dispatch { backend, name }`,
+  `BreakerPolicy { failure_threshold, failure_window, cooldown }`,
+  `RouterError { NoBackends, NoneAvailable }`. Defaults: 3 failures in
+  60s opens the breaker; 30s cooldown; first dispatch after cooldown
+  enters half-open and one outcome (success closes / failure re-opens)
+  decides next state. `dispatch()` walks slots in priority order, skips
+  not-ready and open-breaker slots, returns `NoneAvailable` if every
+  registered backend is unfit. New name-keyed feedback methods
+  `record_success(name)` / `record_failure(name)` are O(1) via a
+  `name → index` map populated at construction (backends are static
+  in v0.2; no admin add/remove API). Lifecycle wiring in both
+  `lifecycle.rs` and `lifecycle_v2.rs`: pre-stream `GenerateError`
+  paths distinguish `is_backend_failure` (NotReady / Unavailable /
+  Internal trip the breaker; `InvalidRequest` does not — caller bug
+  is not a backend health signal); terminal `Done` calls
+  `record_success`; mid-stream silent termination calls
+  `record_failure`. No retry, no failover (ADR 0007). 8 unit tests
+  exercise empty-router rejection, ready-backend dispatch, unready
+  fallthrough, priority ordering, threshold-trip, success-resets-
+  count, post-cooldown half-open recovery, sliding-window pruning,
+  and unknown-backend feedback no-op. Dev-dep `async-trait` added
+  for the named-backend test harness.
+- **inferd-engine: OpenAI-compat HTTP backend adapter** (Phase 5A,
+  feature-gated behind `openai`). New `openai_compat` module
+  implementing `Backend` against any upstream that speaks the
+  OpenAI Chat Completions wire (OpenAI itself, vLLM, LM Studio,
+  LocalAI, llama.cpp's `server`, OpenRouter, …). The narrow
+  outbound-HTTPS carve-out lives behind the `Backend` trait per
+  ADR 0006 §"cloud backends" — the daemon never *serves* HTTP.
+  Public surface: `OpenAiCompat` (the adapter), `OpenAiCompatConfig`
+  (`base_url`, `api_key`, `model`, `timeout`), `OpenAiCompatError`.
+  Capabilities advertise `v2 + tools` only — multimodal stays off
+  in v0.2 (raw-bytes attachment shape from ADR 0016 doesn't map
+  cleanly to OpenAI's `image_url` data-URL form), and thinking
+  stays off (no public reasoning channel on Chat Completions).
+  v1 path is rejected with `Internal("openai-compat backend
+  supports v2 only")`. Wire shape:
+    - Request mapping (`mapper::request_from_resolved`): Text
+      blocks → `messages[].content`; assistant `ToolUse` blocks →
+      `messages[].tool_calls[]` (each `arguments` is `serde_json`-
+      stringified, as the wire requires); consumer `ToolResult`
+      blocks expand into separate `role: "tool"` messages
+      addressed by `tool_call_id`; `tools[]` → top-level
+      `tools[{type:"function", function:{name, description,
+      parameters}}]`. `stream: true` always; `stream_options.
+      include_usage: true` so the upstream emits a final usage
+      chunk.
+    - Response mapping (`mapper::ChunkAccumulator`): SSE chunks
+      parsed via `eventsource-stream`; text deltas pass through
+      as `TokenEventV2::Text`; tool-call deltas accumulate per
+      `index` slot until `finish_reason: tool_calls`, then emit
+      buffered call as `TokenEventV2::ToolUse`; trailing chunk's
+      `usage` populates the v2 `Done` frame. `finish_reason`
+      maps `stop` → `EndTurn`, `length` → `MaxTokens`,
+      `tool_calls` / `function_call` → `ToolUse`, missing →
+      `Error` (translated to `BackendUnavailable` daemon-side).
+    - Pre-stream errors (transport, non-2xx HTTP) surface as
+      `GenerateError::Unavailable` per ADR 0007; mid-stream
+      transport errors terminate the channel without `Done`
+      (lifecycle layer synthesises `error` frame). The reqwest
+      client is rustls-only (no OpenSSL on Windows). Default
+      timeout: 5 minutes.
+  Tests: 8 mapper unit tests (text round-trip, tool replay,
+  tool-result expansion, attachment rejection, accumulator
+  behaviour across single text deltas, tool calls split across
+  many chunks, missing-finish_reason error mapping). 5 wiremock-
+  based integration tests in `tests/openai_compat.rs` exercising
+  the full HTTP+SSE round-trip including the no-API-key path.
+  New optional deps: `reqwest 0.12` (rustls-tls + json + stream),
+  `eventsource-stream 0.2`, `futures-util 0.3`. Dev-dep:
+  `wiremock 0.6`. Wire selection between adapters lands in
+  Phase 5B (real router policy).
+- **inferd-proto: v2 type surface** under the new `v2::` module
+  (per ADR 0015). `RequestV2`, `MessageV2`, `ContentBlock` (with
+  `Text` / `Image` / `Audio` / `Video` / `ToolUse` / `ToolResult`
+  / forward-compat `Unknown` variants), `Attachment` /
+  `AttachmentKind`, `Tool` / `ToolCallId` / `ToolUseInput`,
+  `ResponseV2` / `ResponseBlock` / `StopReasonV2` / `ErrorCodeV2`
+  / `UsageV2`. `RequestV2::resolve()` validates structural
+  constraints (non-empty messages, non-empty content arrays,
+  unique attachment ids, unique tool names, all `attachment_id`
+  references resolve — including those nested inside
+  `ToolResult::content`). Sampling defaults are *not* applied at
+  the proto layer in v2 — they're backend-specific (ADR 0015).
+  19 tests cover round-trip serialisation of every variant, the
+  ADR 0015 JSON examples verbatim, validation negative cases, and
+  forward-compat parsing of unknown content-block types. v2 lives
+  on a separate socket; this commit ships *types only*, no daemon
+  binding yet (Phase 1B).
+- **inferd-daemon: v2 socket binding** (Phase 1B per ADR 0015).
+  New `lifecycle_v2` module with `serve_tcp_v2` / `serve_uds_v2`
+  / `serve_named_pipe_v2` mirroring v1's accept-loop shape but
+  parsing `RequestV2` / writing `ResponseV2`. New `--v2` /
+  `--v2-addr` / `--v2-tcp` CLI flags (and `INFERD_V2*` env vars).
+  When `--v2` is set the daemon binds the v2 endpoint alongside
+  v1 on its own socket / pipe path: `infer.v2.sock` on Unix,
+  `\\.\pipe\inferd-infer-v2` on Windows. `default_v2_addr()`
+  resolves the platform default. F-8 first-frame TCP auth is
+  reused identically to v1; admin socket stays shared. Shutdown
+  signal is now fan-out: the same Ctrl-C/SIGTERM closes both v1
+  and v2 listeners.
+- **inferd-engine: `Backend` trait grows v2 surface** (Phase 2A
+  per ADR 0015). New types `TokenEventV2` (with `Text` /
+  `Thinking` / `ToolUse` / `Done` variants) and `TokenStreamV2`.
+  New trait methods `generate_v2(ResolvedV2) -> Result<TokenStreamV2>`
+  with default impl returning `Internal("v2 not supported")` and
+  `capabilities() -> BackendCapabilities` (default-zero, advertises
+  text-only v1 — existing `mock` and `llamacpp` impls compile
+  unchanged). `BackendCapabilities` exposes `v2`, `vision`,
+  `audio`, `video`, `tools`, `thinking` flags. `mock` adapter
+  opts in to v2 + thinking and gains a `generate_v2` impl that
+  reuses the existing token tape, mid-stream-drop, and
+  pre-stream-error knobs but yields v2 frames. `llamacpp`
+  adapter stays at trait default for now — Phase 3+ wires
+  chat templating + mtmd before its v2 path can do anything
+  useful.
+- **inferd-daemon: v2 dispatch wired** (Phase 2A). The v2 socket
+  now dispatches validated requests through the shared `Router`
+  (one warm model serves both wire versions). Backends that
+  don't advertise `BackendCapabilities::v2 == true` see their
+  v2 requests rejected with `Error{Internal, "backend ... does
+  not advertise v2 capability"}`. Pre-stream errors map
+  `GenerateError` variants to the right `ErrorCodeV2`
+  (`InvalidRequest` / `BackendUnavailable` / `Internal`).
+  Mid-stream backend failure (no `Done` event) emits a synthetic
+  terminal `Error{BackendUnavailable, ...}` so clients never
+  hang on a half-stream. Admission gate is shared with v1 — a
+  v2 in-flight request occupies the same slot a v1 one would.
+  Eight integration tests in `crates/inferd-daemon/tests/v2_stub.rs`
+  pin: streaming text+done, multimodal dispatch, dangling
+  attachment, empty messages, malformed JSON, multi-request
+  pipelining, pre-stream `Unavailable`, and mid-stream drop.
+
+- **ADR 0016**: consumer decodes media before sending. Amends ADR
+  0015 §"v2 Attachment" — the daemon does not link image / audio
+  codec libraries (would have violated ADR 0006/0013). The wire
+  carries already-decoded forms: raw RGB octets + `width` /
+  `height` for images, float32 PCM samples + `sample_rate` for
+  audio. `Attachment` becomes a serde-tagged enum with one variant
+  per modality (Image / Audio / Video / Unknown for forward-
+  compat). `AttachmentKind` is removed (the discriminant is
+  implicit in the serde tag); `mime` field is removed (information
+  it carried is now in the variant). `RequestV2::resolve()`
+  tightens to verify *kind correspondence* — a `ContentBlock::Image`
+  must reference an `Attachment::Image`. Affected files: rewritten
+  `crates/inferd-proto/src/v2/attachment.rs`, request validation
+  in `crates/inferd-proto/src/v2/request.rs`, and downstream
+  consumers (chat-template renderer, integration tests).
+- **inferd-engine: libmtmd FFI bridge** (Phase 3A per ADR 0015 +
+  ADR 0016). New `crates/inferd-engine/cpp/CMakeLists.txt` wraps
+  `vendor/llama.cpp` and adds a `mtmd` static library target
+  (rebuilds the source list inline because tools/mtmd/CMakeLists.txt
+  also defines CLI executables we don't ship and that depend on
+  `llama-common`, which we don't build). `build.rs` drives the
+  wrapper, links `mtmd → llama → ggml → ggml-base → ggml-cpu` in
+  static order, and runs bindgen against `mtmd.h` (output:
+  `OUT_DIR/mtmd_bindings.rs`). New private module
+  `crates/inferd-engine/src/mtmd_ffi.rs` includes the generated
+  bindings and reuses shared types from `crate::ffi` via bindgen's
+  `blocklist_type` + `raw_line` directives so `llama_model` and
+  friends aren't redeclared.
+- **inferd-engine + inferd-daemon + inferd CLI: hardware-acceleration
+  detection and reporting** (#77). New `AcceleratorKind`
+  (`Cpu` / `Cuda` / `Metal` / `Vulkan` / `Rocm`) and `AcceleratorInfo`
+  (`{kind, gpu_layers}`) types on `inferd-engine`; added to
+  `BackendCapabilities`. The `llamacpp` adapter reports the
+  compile-time GGML backend (decided by the active cargo feature —
+  `cuda` / `metal` / `vulkan` / `rocm`, falling back to `cpu`)
+  plus the runtime `n_gpu_layers` it was constructed with. The
+  daemon publishes a new `Capabilities` admin status frame after
+  backend construction (`{"status":"capabilities","backend":"llamacpp",
+  "v2":...,"vision":...,"audio":...,"tools":...,"thinking":...,
+  "accelerator":"cuda","gpu_layers":99}`) so subscribers can
+  introspect posture without trial-and-error. `StatusBroadcaster`
+  caches the latest capability frame in its own slot so one-shot
+  subscribers (e.g. `inferd doctor`) receive it on connect even
+  after `Ready`. `inferd doctor` now reads up to two frames and
+  prints a `[ ok ] backend: ... accelerator=... gpu_layers=...`
+  line. `inferd-client::AdminEvent` grows seven backwards-additive
+  optional fields (`backend`, `v2`, `vision`, `audio`, `tools`,
+  `thinking`, `accelerator`, `gpu_layers`); older clients deserialise
+  unchanged. Detection is *compile-time only* in v0.2 — runtime
+  GPU enumeration (PCI / IOKit / SetupAPI) is out of scope; the
+  reported accelerator equals the cargo feature the binary was
+  built with. RTX 50-series Blackwell support requires CUDA
+  Toolkit 12.8+ at build time.
+- **inferd-engine: tool-result rendering pairs by `tool_call_id`**
+  (Phase 4B). The Gemma 4 chat-template renderer now walks the
+  full `messages[]` once at the top of `render` to build a
+  `tool_call_id -> tool_name` map across every prior `ToolUse`.
+  When a `ToolResult` block renders, it pairs to its originating
+  call via `tool_call_id` and emits
+  `<|tool_response>response:NAME{KEY:VALUE,...}<tool_response|>`
+  with the correct tool name even when `tools[]` has multiple
+  entries. The single-tool fallback is now a last-ditch heuristic
+  used only if `tool_call_id` is unknown *and* `tools.len() == 1`;
+  otherwise the renderer falls through to raw content (Gemma
+  treats it as freeform tool output) instead of guessing. 3 new
+  byte-exact tests in `chat_template_gemma4.rs`: pairing across
+  multiple tools (out-of-order results), full round-trip after
+  an assistant `ToolUse` (asserts both the original call and the
+  paired response survive in their respective turns), and the
+  unknown-tool_call_id fallback path.
+- **inferd-engine: streaming tool-use parser** (Phase 4A). New
+  `crates/inferd-engine/src/llamacpp/tool_parser.rs` is a pure-Rust
+  state machine that wraps the v2 generate token stream and
+  detects:
+    - `<|tool_call>call:NAME{KEY:<|"|>VALUE<|"|>,...}<tool_call|>`
+      sequences → `Output::ToolUse{tool_call_id, name, input}`.
+      Generated tool_call_ids are `tc-{N}` per generation; the
+      counter ensures uniqueness across multiple calls in the
+      same stream.
+    - `<|think|>...<|/think|>` sequences (per
+      `docs/thinking.mode.in.gemma.md`) →
+      `Output::Thinking(delta)`. Daemon forwards as
+      `ResponseBlock::Thinking { delta }`.
+    - Everything else → `Output::Text(delta)`.
+    - Malformed payloads (opener but body doesn't parse) →
+      `Output::Malformed(reason)`. The adapter terminates the
+      stream; the daemon's lifecycle_v2 will surface that as a
+      terminal error frame.
+  The parser handles split-across-token-boundary sentinels by
+  holding any pending bytes that match a strict prefix of an
+  opener or closer, so a tokenizer that emits `<|tool_` then
+  `call>` is parsed correctly. 11 unit tests pin every state
+  transition (synthetic streams; no real model needed).
+  `LlamaCpp::generate_v2`'s sampler loop now feeds each piece
+  through the parser and emits `TokenEventV2::Text` /
+  `Thinking` / `ToolUse` per its decisions. When any `ToolUse`
+  was emitted, the terminal Done has
+  `stop_reason: StopReasonV2::ToolUse` (per ADR 0015).
+- **inferd-engine: Tier 3 v2 multimodal smoke** (Phase 3B). New
+  `crates/inferd-engine/tests/llamacpp_multimodal.rs` exercises the
+  v2 generate_v2 path against a real Gemma 4 GGUF + mmproj. Two
+  tests:
+    - `v2_text_only_streams_to_done` — confirms the v2 dispatch
+      path works against a multimodal-capable backend with a
+      text-only request. Asserts capabilities advertise v2 and
+      Done is `EndTurn` or `MaxTokens` with non-zero usage counts.
+    - `v2_image_attachment_round_trips` — decodes a JPEG/PNG to
+      raw RGB via the `image` crate (consumer-side, per ADR
+      0016), wraps it in `Attachment::Image` with width/height,
+      sends through the v2 wire, asserts the multimodal prompt
+      results in input_tokens > 50 (vs ~10 for text-only).
+  Both tests gated behind the existing `llamacpp-integration`
+  feature; skip with explanatory message when
+  `INFERD_TEST_MODEL_PATH` / `INFERD_TEST_MMPROJ_PATH` /
+  `INFERD_TEST_MULTIMODAL_IMAGE` are unset. Skip-on-vision-cap
+  branch handles the case where the loaded mmproj is
+  audio-only. `image` 0.25 (jpeg + png features only) added as
+  a dev-dependency. Tests are deliberately not asserting on
+  generated text content — that's fragile across quants and
+  seeds; the contract under test is "wire round-trip survives
+  end to end."
+- **inferd-engine: `LlamaCpp::generate_v2`** (Phase 3A part 2).
+  The llamacpp adapter now serves v2 requests end-to-end when
+  configured with an `mmproj_path`:
+    - `LlamaCppConfig` gains `mmproj_path` + `mmproj_sha256`.
+    - `State` holds an `Option<Mtmd>` plus a cached capability
+      snapshot (vision / audio / audio_sample_rate, probed at
+      construction).
+    - `Backend::capabilities()` advertises v2 + tools + thinking
+      (Gemma 4 baseline) when an mmproj is loaded; vision and
+      audio reflect what the mmproj's projector actually
+      supports. No mmproj => default-zero caps (text-only).
+    - `Backend::generate_v2()`: renders prompt + ordered
+      attachments via `Gemma4Renderer`, base64-decodes each
+      attachment's bytes into a `Bitmap` (raw RGB or f32 PCM per
+      ADR 0016), runs `Mtmd::tokenize` + `mtmd_helper_eval_chunks`
+      to fill the KV cache from the multimodal prompt, then runs
+      a token sampler loop emitting `TokenEventV2::Text` deltas
+      and a terminal `Done` (EndTurn or MaxTokens) with `UsageV2`
+      input/output token counts. Pre-stream errors from any of
+      these stages map to `GenerateError`; mid-stream backend
+      failures terminate the channel without `Done` so the
+      lifecycle layer can synthesise a terminal `Error` per ADR
+      0007.
+    - `mtmd::Mtmd::eval_chunks` (new): safe wrapper over
+      `mtmd_helper_eval_chunks`. Picks up upstream's gemma-3
+      non-causal mask handling, per-chunk batching, and decode
+      error forwarding.
+    - bindgen now also generates `mtmd-helper.h` bindings (the
+      output file is unchanged at `OUT_DIR/mtmd_bindings.rs` —
+      bindgen merges both headers into one generated module).
+    - `inferd-engine` gains `base64` (~10 KB) and `serde_json`
+      dependencies for the v2 path.
+    - `crates/inferd-engine/src/llamacpp/chat_template/` is the
+      new home of the Gemma 4 renderer + tests (moved from
+      `crates/inferd-daemon/src/chat_template/`). The renderer
+      is an engine-level concern: it shapes prompts for a
+      specific engine, not gateway logic. The integration test
+      `crates/inferd-engine/tests/chat_template_gemma4.rs` is
+      gated behind `#![cfg(feature = "llamacpp")]` so default-
+      feature builds (which don't link the engine) skip it.
+    - The daemon's `lifecycle_v2` already dispatches v2 to the
+      backend's `generate_v2`; this commit just makes that
+      backend-side path actually do something instead of
+      returning `Internal("not supported")`.
+- **inferd-engine: safe Rust mtmd wrapper**. New
+  `crates/inferd-engine/src/llamacpp/mtmd.rs` exposes:
+  `Mtmd` (owning `mtmd_context`, supports `tokenize` plus
+  `supports_vision` / `supports_audio` /
+  `audio_sample_rate` capability probes), `Bitmap` (image RGB or
+  audio f32 PCM, owning `mtmd_bitmap`, with id-set helper for
+  upstream's KV-cache de-duplication), `InputChunks` (owning
+  collection populated by `tokenize`), `InputChunk<'_>` (borrow,
+  `kind`/`n_tokens`/`n_pos`/`id`), `MmprojCaps` +
+  `probe_mmproj_caps` (capability probe without instantiating a
+  full context), `default_media_marker` (the `<__media__>`
+  literal mtmd injects fences around). All types `Send + Sync`,
+  Drop calls the matching mtmd_*_free. Safe wrapper does not yet
+  call mtmd_encode_chunk — that lives in the `LlamaCpp` adapter's
+  Phase 3A-followup work where `generate_v2` actually splices
+  encoded embeddings into `llama_decode`. The bridge is the
+  testable boundary; the adapter's encode loop is the next
+  commit.
+- **inferd-daemon: chat-template renderer** (Phase 2B per ADR
+  0013/0015). New `chat_template` module with a `Gemma4Renderer`
+  that translates a `ResolvedV2` into the byte-exact Gemma 4
+  prompt format (`<|turn>system\n...<turn|>`,
+  `<|tool>declaration:...<tool|>`,
+  `<|tool_call>call:NAME{...}<tool_call|>`,
+  `<|tool_response>response:NAME{...}<tool_response|>`) plus an
+  ordered list of attachments referenced by `<__media__>` markers
+  in the rendered text — exactly the shape libmtmd's
+  `mtmd_tokenize` consumes. Phase 3A wires it into the
+  `LlamaCpp` adapter; until then, the renderer ships standalone
+  and is exercised by 9 byte-exact integration tests in
+  `crates/inferd-daemon/tests/chat_template_gemma4.rs` against
+  the canonical examples from
+  `docs/text.function.calling.with.gemma.4.md`. Tools without a
+  system message synthesise an empty system turn (matching
+  upstream); ToolResult content blocks render inside the model
+  turn (matching upstream's `<|tool_response>...<tool_response|>`
+  inline form, not as a separate turn). Schema and inline
+  argument rendering replaces JSON `"..."` quoting with Gemma's
+  `<|"|>...<|"|>` special-token form so the tokenizer routes
+  string literals correctly.
+
+### Changed (cherry-picked from v0.1.13 on main, 2026-05-20)
 
 - **`crates/inferd-engine/src/llamacpp/loader.rs`**: when an
   `expected_sha256` is supplied, stream-hash the model file
   in place at its original path and hand that same path to
   `llama_model_load_from_file`. No more daemon-owned tempdir
-  copy. The residual TOCTOU window between hash and mmap is
-  microseconds; an attacker who can rewrite the user's model
-  file in that window has write access to the model file in
-  general, which is already a threat that exceeds what
-  hashing can defend against — same justification F-6
-  already applied to the no-hash path.
-- **`THREAT_MODEL.md` F-6**: status changed from "mitigated"
-  to "accepted" with the rationale above. Earlier mitigation
-  documented in a "removed (issue #6, 2026-05-20)" subsection
-  so the intent stays discoverable in `git blame` and the
-  doc.
-- **`crates/inferd-engine/Cargo.toml`**: dropped runtime
-  `tempfile` dependency (no longer needed; only the
-  dev-dependencies entry for tests remains).
-
-### Fixed
-
-- WSL2 / tmpfs-constrained hosts can now load multi-GB GGUFs
-  on first boot without exceeding the temp-FS cap. Previously
-  failed with `os error 28: No space left on device` and
-  crash-looped to systemd's `StartLimitBurst`.
+  copy. Closes issue #6 — WSL2 / tmpfs-constrained hosts could
+  not load multi-GB GGUFs on cold start because the defensive
+  temp-copy doubled disk usage. F-6 status flipped from
+  "mitigated" to "accepted" with the rationale that an attacker
+  with write access to the user's model file in the
+  microseconds between hash and mmap has a strictly larger
+  threat than hashing can defend against — same justification
+  F-6 already applied to the no-hash path.
+- **`THREAT_MODEL.md` F-6** updated to reflect the new posture.
+- **`crates/inferd-engine/Cargo.toml`** drops runtime `tempfile`
+  dependency.
 
 ## [0.1.12] - 2026-05-20
 

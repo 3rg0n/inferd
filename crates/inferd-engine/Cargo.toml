@@ -25,9 +25,20 @@ cuda                 = ["llamacpp"]
 metal                = ["llamacpp"]
 vulkan               = ["llamacpp"]
 rocm                 = ["llamacpp"]
+# OpenAI-compat outbound HTTP backend (Phase 5A). Pulls in reqwest +
+# eventsource_stream. The daemon never *serves* HTTP — this is the
+# narrow outbound carve-out wrapped behind the Backend trait
+# (ADR 0006 §"cloud backends").
+openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util"]
+# AWS Bedrock-runtime InvokeModelWithResponseStream backend (Phase
+# 6B-5). Anthropic-on-Bedrock body shape only in v0.2.0; SigV4 +
+# AWS_BEARER_TOKEN_BEDROCK auth; AWS event-stream framing parser.
+# Same lean-core posture as `openai`: outbound HTTPS only, no extra
+# inbound surface in the daemon.
+bedrock              = ["dep:reqwest", "dep:futures-util", "dep:hmac", "dep:hex", "dep:url"]
 
 [dependencies]
-inferd-proto = { path = "../inferd-proto", version = "=0.1.14" }
+inferd-proto = { path = "../inferd-proto", version = "=0.2.1" }
 async-trait  = { workspace = true }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
@@ -38,6 +49,29 @@ tracing      = { workspace = true }
 sha2         = { workspace = true }
 subtle       = { workspace = true }   # Constant-time hash compare (THREAT_MODEL F-5).
 bytes        = { workspace = true }
+# v2 multimodal: base64-decode the wire-shape RGB / PCM bytes before
+# handing them to libmtmd. Pulled in unconditionally; tiny crate
+# (no_std-compatible, ~10 KB binary growth).
+base64       = "0.22"
+# Used by the chat_template module to render tool-use input objects
+# and tool-result content into Gemma 4's wire format. Already pulled
+# in transitively via `inferd-proto`'s v2 ToolUseInput type alias.
+serde_json   = { workspace = true }
+
+# --- Optional: OpenAI-compat HTTP backend (Phase 5A). Pulled in only
+# when the `openai` feature is on. rustls-only to avoid OpenSSL on
+# Windows.
+reqwest             = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"], optional = true }
+eventsource-stream  = { version = "0.2", optional = true }
+futures-util        = { version = "0.3", optional = true }
+
+# --- Optional: Bedrock-invoke backend (Phase 6B-5). SigV4 needs HMAC-
+# SHA-256 (hmac+sha2 — sha2 is already a workspace dep) and lowercase
+# hex for the canonical request hash. `url` parses the configured
+# endpoint into host/path/query for the canonical request shape.
+hmac                = { version = "0.12", optional = true }
+hex                 = { version = "0.4", optional = true }
+url                 = { version = "2", optional = true }
 
 [build-dependencies]
 # Only invoked when the `llamacpp` feature is enabled; the build.rs
@@ -48,3 +82,11 @@ bindgen = "0.71"
 [dev-dependencies]
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+# Tier 3 multimodal smoke tests act as a consumer: decode JPEG/PNG
+# inputs to raw RGB before sending through the v2 wire shape (per
+# ADR 0016, decoding lives consumer-side; the daemon never links a
+# codec). image is dev-only.
+image    = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64   = "0.22"
+# Mock HTTP server for the openai-compat adapter unit tests.
+wiremock = "0.6"

@@ -1,16 +1,21 @@
 //! Build script for `inferd-engine`.
 //!
-//! Two paths:
+//! Two paths.
 //!
-//! - **Feature `llamacpp` off (default)**: no-op. The crate ships only the
-//!   `mock` backend, which needs no native build steps. Default `cargo
-//!   build` works without a C++ toolchain or `libclang`.
+//! Feature `llamacpp` off (default): no-op. The crate ships only the
+//! `mock` backend, which needs no native build steps. Default `cargo
+//! build` works without a C++ toolchain or `libclang`.
 //!
-//! - **Feature `llamacpp` on**: build `libllama` + `libggml` from the
-//!   vendored submodule at `vendor/llama.cpp`, statically link them, and
-//!   generate Rust bindings from `vendor/llama.cpp/include/llama.h` into
-//!   `OUT_DIR/llama_bindings.rs`. ADR 0005 + ADR 0006 require building
-//!   ONLY the inference library — server / CLI / examples are disabled.
+//! Feature `llamacpp` on: drives `crates/inferd-engine/cpp/CMakeLists.txt`
+//! (the wrapper around `vendor/llama.cpp`) to build `libllama`,
+//! `libggml`, `libggml-base`, `libggml-cpu`, plus `libmtmd` for
+//! multimodal Gemma 4 (ADR 0016 makes multimodal part of the
+//! baseline `llamacpp` adapter shape). Then generates Rust bindings
+//! from `vendor/llama.cpp/include/llama.h` into
+//! `OUT_DIR/llama_bindings.rs` and from
+//! `vendor/llama.cpp/tools/mtmd/mtmd.h` into `OUT_DIR/mtmd_bindings.rs`.
+//! ADR 0005 + ADR 0006 require building ONLY the inference library
+//! + mtmd; server, CLIs, examples are disabled.
 //!
 //! See `vendor/llama.cpp.PIN.md` for the pinned commit.
 
@@ -32,12 +37,12 @@ fn build_llamacpp() {
     use std::path::{Path, PathBuf};
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let llama_src = manifest_dir
+    let workspace_root = manifest_dir
         .parent()
         .and_then(Path::parent)
-        .expect("workspace root resolvable")
-        .join("vendor")
-        .join("llama.cpp");
+        .expect("workspace root resolvable");
+    let llama_src = workspace_root.join("vendor").join("llama.cpp");
+    let cpp_wrapper = manifest_dir.join("cpp");
 
     if !llama_src.join("CMakeLists.txt").exists() {
         panic!(
@@ -46,7 +51,18 @@ fn build_llamacpp() {
             llama_src.display()
         );
     }
+    if !cpp_wrapper.join("CMakeLists.txt").exists() {
+        panic!(
+            "inferd-engine cpp wrapper not found at {}. The crate is \
+             out of tree?",
+            cpp_wrapper.display()
+        );
+    }
 
+    println!(
+        "cargo:rerun-if-changed={}",
+        cpp_wrapper.join("CMakeLists.txt").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         llama_src.join("CMakeLists.txt").display()
@@ -55,19 +71,30 @@ fn build_llamacpp() {
         "cargo:rerun-if-changed={}",
         llama_src.join("include/llama.h").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        llama_src.join("tools/mtmd/mtmd.h").display()
+    );
 
-    // CMake build. Strip every component inferd does not consume:
+    // CMake build via the cpp/ wrapper. Strip every llama.cpp component
+    // inferd does not consume:
     //   - LLAMA_BUILD_SERVER (we ship our own NDJSON server in inferd-daemon)
     //   - LLAMA_BUILD_EXAMPLES (CLIs and demos not needed)
     //   - LLAMA_BUILD_TESTS (upstream test binaries not needed)
+    //   - LLAMA_BUILD_TOOLS (CLIs we don't ship; we add tools/mtmd's
+    //     library target back via the cpp/ wrapper without the CLIs)
     //   - LLAMA_CURL (curl-based model fetch not needed; inferd does its
     //     own SHA-256-verified download)
-    let dst = cmake::Config::new(&llama_src)
+    //
+    // INFERD_BUILD_MTMD is set ON unconditionally for the llamacpp
+    // feature — ADR 0016 commits multimodal as part of the baseline.
+    let dst = cmake::Config::new(&cpp_wrapper)
         .define("LLAMA_BUILD_SERVER", "OFF")
         .define("LLAMA_BUILD_EXAMPLES", "OFF")
         .define("LLAMA_BUILD_TESTS", "OFF")
         .define("LLAMA_BUILD_TOOLS", "OFF")
         .define("LLAMA_CURL", "OFF")
+        .define("INFERD_BUILD_MTMD", "ON")
         // Static libraries to keep our final binary self-contained.
         .define("BUILD_SHARED_LIBS", "OFF")
         // Always Release on the C++ side so the CRT matches Rust's
@@ -110,7 +137,9 @@ fn build_llamacpp() {
         dst.join("build").display()
     );
 
-    // Static link order matters: llama -> ggml -> ggml-blas (if present).
+    // Static link order matters. mtmd depends on llama + ggml so it
+    // goes first; then llama; then ggml.
+    println!("cargo:rustc-link-lib=static=mtmd");
     println!("cargo:rustc-link-lib=static=llama");
     println!("cargo:rustc-link-lib=static=ggml");
     println!("cargo:rustc-link-lib=static=ggml-base");
@@ -137,18 +166,16 @@ fn build_llamacpp() {
         println!("cargo:rustc-link-lib=Advapi32");
     }
 
-    // bindgen — generate Rust bindings for the public C API.
-    let header = llama_src.join("include").join("llama.h");
-    let bindings = bindgen::Builder::default()
-        .header(header.to_string_lossy())
+    // bindgen for libllama's public C API.
+    let llama_header = llama_src.join("include").join("llama.h");
+    let llama_bindings = bindgen::Builder::default()
+        .header(llama_header.to_string_lossy())
         .clang_arg(format!("-I{}", llama_src.join("include").display()))
         .clang_arg(format!(
             "-I{}",
             llama_src.join("ggml").join("include").display()
         ))
-        // Only generate items reachable from the llama_* surface; avoids
-        // pulling in every C standard library type and keeps the binding
-        // file small and reviewable.
+        // Only generate items reachable from the llama_* surface.
         .allowlist_function("llama_.*")
         .allowlist_type("llama_.*")
         .allowlist_var("LLAMA_.*")
@@ -156,11 +183,56 @@ fn build_llamacpp() {
         .derive_default(true)
         .layout_tests(false)
         .generate()
-        .expect("bindgen generate");
+        .expect("bindgen generate llama.h");
 
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("llama_bindings.rs");
-    bindings.write_to_file(&out).expect("write bindgen output");
-    println!("cargo:rerun-if-changed={}", header.display());
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    llama_bindings
+        .write_to_file(out_dir.join("llama_bindings.rs"))
+        .expect("write llama bindgen output");
+    println!("cargo:rerun-if-changed={}", llama_header.display());
+
+    // bindgen for libmtmd's public C API. mtmd.h includes ggml.h and
+    // llama.h transitively, so add both include dirs. We allowlist
+    // mtmd_* (the rest is already exposed via the llama bindings).
+    // The same binding generation also picks up mtmd_helper_* by
+    // including mtmd-helper.h alongside mtmd.h — both headers share
+    // type definitions, and producing one combined output keeps the
+    // module simple.
+    let mtmd_header = llama_src.join("tools").join("mtmd").join("mtmd.h");
+    let mtmd_helper_header = llama_src.join("tools").join("mtmd").join("mtmd-helper.h");
+    let mtmd_bindings = bindgen::Builder::default()
+        .header(mtmd_header.to_string_lossy())
+        .header(mtmd_helper_header.to_string_lossy())
+        .clang_arg(format!(
+            "-I{}",
+            llama_src.join("tools").join("mtmd").display()
+        ))
+        .clang_arg(format!("-I{}", llama_src.join("include").display()))
+        .clang_arg(format!(
+            "-I{}",
+            llama_src.join("ggml").join("include").display()
+        ))
+        .allowlist_function("mtmd_.*")
+        .allowlist_type("mtmd_.*")
+        .allowlist_var("MTMD_.*")
+        // Block the llama_* / ggml_* types so they don't redefine
+        // symbols that already came from `llama_bindings.rs`.
+        .blocklist_type("llama_.*")
+        .blocklist_type("ggml_.*")
+        .blocklist_function("llama_.*")
+        .blocklist_function("ggml_.*")
+        .raw_line("use crate::ffi::{llama_context, llama_model, llama_pos, llama_seq_id, llama_token, llama_flash_attn_type, ggml_log_callback, ggml_backend_sched_eval_callback};")
+        .prepend_enum_name(false)
+        .derive_default(true)
+        .layout_tests(false)
+        .generate()
+        .expect("bindgen generate mtmd.h + mtmd-helper.h");
+
+    mtmd_bindings
+        .write_to_file(out_dir.join("mtmd_bindings.rs"))
+        .expect("write mtmd bindgen output");
+    println!("cargo:rerun-if-changed={}", mtmd_header.display());
+    println!("cargo:rerun-if-changed={}", mtmd_helper_header.display());
 }
 
 #[cfg(not(feature = "llamacpp"))]

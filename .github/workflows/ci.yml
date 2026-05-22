@@ -13,9 +13,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, v0.2-dev]
   pull_request:
-    branches: [main]
+    branches: [main, v0.2-dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,6 +39,26 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+
+  openai:
+    name: ${{ matrix.os }} / openai-compat feature
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `openai` enables the rustls-backed reqwest client and the
+      # eventsource-stream / futures-util deps; wiremock is dev-only.
+      # No system libraries needed (rustls, no OpenSSL).
+      - run: cargo clippy --all-targets --features inferd-engine/openai -- -D warnings
+      - run: cargo test -p inferd-engine --features openai
 
   llamacpp:
     name: ${{ matrix.os }} / llamacpp feature
@@ -176,6 +196,13 @@ jobs:
           mkdir -p ~/.local/bin ~/.config/systemd/user
           install -m 755 target/release/inferd-daemon ~/.local/bin/inferd-daemon
           install -m 644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
+          # Enable v2 alongside v1 for this CI run. The shipped unit
+          # is v1-only by design (gateway posture, ADR 0015 — operators
+          # opt in); the smoke flips it on so we exercise both sockets
+          # with the same warm model + admission gate.
+          sed -i \
+            's|--admin-addr %t/inferd/admin.sock|--admin-addr %t/inferd/admin.sock --v2|' \
+            ~/.config/systemd/user/inferd.service
 
       - name: Start inferd via systemctl --user
         run: |
@@ -193,14 +220,17 @@ jobs:
         run: |
           ls -la "${XDG_RUNTIME_DIR}/inferd/"
           # Sockets must exist and have the spec-mandated modes:
-          #   admin.sock   srw------- (0600)
-          #   infer.sock   srw-rw---- (0660)
+          #   admin.sock      srw------- (0600)
+          #   infer.sock      srw-rw---- (0660)
+          #   infer.v2.sock   srw-rw---- (0660)  (with --v2)
           test -S "${XDG_RUNTIME_DIR}/inferd/admin.sock"
           test -S "${XDG_RUNTIME_DIR}/inferd/infer.sock"
+          test -S "${XDG_RUNTIME_DIR}/inferd/infer.v2.sock"
           test -f "${XDG_RUNTIME_DIR}/inferd/inferd.lock"
           # `stat -c %a` prints octal mode; check exact bytes.
           [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/admin.sock")" = "600" ]
           [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/infer.sock")" = "660" ]
+          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/infer.v2.sock")" = "660" ]
 
       - name: Smoke an NDJSON request through the inference UDS
         run: |
@@ -227,6 +257,45 @@ jobs:
                       break
                   if b'"type":"error"' in line:
                       print("daemon returned error frame", file=sys.stderr); sys.exit(1)
+          PY
+
+      - name: Smoke a v2 NDJSON request through the v2 UDS
+        # Mock backend advertises v2 + thinking; v2 dispatch must
+        # route to it via the router and stream a Done frame back.
+        # This catches regressions in: v2 socket binding, AcceptContext
+        # sharing between v1+v2 listeners, RequestV2 resolve, the
+        # router's V2-capable check, and the v2 wire shape itself.
+        run: |
+          python3 - <<PY
+          import socket, json, os, sys
+          sock_path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "inferd", "infer.v2.sock")
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.connect(sock_path)
+          req = {
+              "id": "ci-systemd-v2",
+              "messages": [{
+                  "role": "user",
+                  "content": [{"type": "text", "text": "hello"}],
+              }],
+              "max_tokens": 4,
+          }
+          s.sendall((json.dumps(req)+"\n").encode())
+          buf = b""
+          done = False
+          while not done:
+              chunk = s.recv(4096)
+              if not chunk:
+                  print("EOF", file=sys.stderr); sys.exit(1)
+              buf += chunk
+              while b"\n" in buf:
+                  line, buf = buf.split(b"\n", 1)
+                  if not line: continue
+                  print("<-", line.decode())
+                  if b'"type":"done"' in line:
+                      done = True
+                      break
+                  if b'"type":"error"' in line:
+                      print("daemon returned v2 error frame", file=sys.stderr); sys.exit(1)
           PY
 
       - name: Verify journal does not show start-loop containment trips

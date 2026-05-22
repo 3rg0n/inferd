@@ -211,8 +211,8 @@ pub async fn handle_connection<C: Connection + 'static>(
         };
 
         // Dispatch through the router.
-        let backend = match router.dispatch() {
-            Ok(b) => b,
+        let dispatch = match router.dispatch() {
+            Ok(d) => d,
             Err(RouterError::NoBackends) | Err(RouterError::NoneAvailable) => {
                 let resp = Response::Error {
                     id: resolved.id.clone(),
@@ -223,22 +223,29 @@ pub async fn handle_connection<C: Connection + 'static>(
                 continue;
             }
         };
-
-        let backend_name = backend.name().to_string();
+        let backend_name = dispatch.name.clone();
+        let backend = dispatch.backend;
         let req_id = resolved.id.clone();
 
-        // Generate.
+        // Generate. Pre-stream errors count toward the breaker per
+        // ADR 0007 — InvalidRequest does not (it's a caller bug, not
+        // a backend health signal).
         let mut stream = match backend.generate(resolved).await {
             Ok(s) => s,
             Err(e) => {
-                let (code, message) = match e {
-                    GenerateError::InvalidRequest(m) => (ErrorCode::InvalidRequest, m),
-                    GenerateError::NotReady => {
-                        (ErrorCode::BackendUnavailable, "backend not ready".into())
-                    }
-                    GenerateError::Unavailable(m) => (ErrorCode::BackendUnavailable, m),
-                    GenerateError::Internal(m) => (ErrorCode::Internal, m),
+                let (code, message, is_backend_failure) = match e {
+                    GenerateError::InvalidRequest(m) => (ErrorCode::InvalidRequest, m, false),
+                    GenerateError::NotReady => (
+                        ErrorCode::BackendUnavailable,
+                        "backend not ready".into(),
+                        true,
+                    ),
+                    GenerateError::Unavailable(m) => (ErrorCode::BackendUnavailable, m, true),
+                    GenerateError::Internal(m) => (ErrorCode::Internal, m, true),
                 };
+                if is_backend_failure {
+                    router.record_failure(&backend_name);
+                }
                 let resp = Response::Error {
                     id: req_id,
                     code,
@@ -281,6 +288,7 @@ pub async fn handle_connection<C: Connection + 'static>(
                         completion_tokens = usage.completion_tokens,
                         "request_done"
                     );
+                    router.record_success(&backend_name);
                     terminal_emitted = true;
                     break;
                 }
@@ -289,13 +297,15 @@ pub async fn handle_connection<C: Connection + 'static>(
 
         if !terminal_emitted {
             // Mid-stream backend failure (no Done event). Report and move
-            // to next request on the same connection.
+            // to next request on the same connection. Counts toward the
+            // breaker per ADR 0007.
             warn!(
                 target: "inferd_daemon::activity",
                 req_id = %req_id,
                 backend = %backend_name,
                 "request_error_mid_stream"
             );
+            router.record_failure(&backend_name);
             let frame = Response::Error {
                 id: req_id,
                 code: ErrorCode::BackendUnavailable,

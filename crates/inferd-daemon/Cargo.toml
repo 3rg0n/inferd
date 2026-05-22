@@ -24,12 +24,22 @@ cuda     = ["inferd-engine/cuda"]
 metal    = ["inferd-engine/metal"]
 vulkan   = ["inferd-engine/vulkan"]
 rocm     = ["inferd-engine/rocm"]
+# OpenAI-compat outbound HTTPS adapter (Phase 5A). Daemon-side
+# enables `--backend openai-compat` plus the matching `--openai-*`
+# CLI flags. Pulls in the engine's `openai` feature.
+openai   = ["inferd-engine/openai"]
+# AWS Bedrock-runtime InvokeModelWithResponseStream adapter (Phase
+# 6B-5). Daemon-side enables `--backend bedrock-invoke` plus the
+# matching `--bedrock-*` CLI flags and the
+# `kind: "bedrock-invoke"` config-file entry. Pulls in the engine's
+# `bedrock` feature.
+bedrock  = ["inferd-engine/bedrock"]
 # Tier 5 security regression tests live behind this feature.
 security = []
 
 [dependencies]
-inferd-proto  = { path = "../inferd-proto", version = "=0.1.14" }
-inferd-engine = { path = "../inferd-engine", version = "=0.1.14" }
+inferd-proto  = { path = "../inferd-proto", version = "=0.2.1" }
+inferd-engine = { path = "../inferd-engine", version = "=0.2.1" }
 tokio               = { workspace = true }
 tokio-stream        = "0.1"
 serde               = { workspace = true }
@@ -67,3 +77,4 @@ windows-sys = { version = "0.52", features = [
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
+async-trait = { workspace = true }
