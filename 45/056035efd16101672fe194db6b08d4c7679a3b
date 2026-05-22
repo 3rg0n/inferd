@@ -1,0 +1,28 @@
+packaging/windows/uninstall.ps1
+  s_126aec4081f728::t_df209a70a6ac74 1-63
+packaging/README.md
+  s_126aec4081f728::t_95988516f7445a 17-20
+  s_126aec4081f728::t_cade059fd5aa54 28,30-32,34,38-46
+.github/workflows/release.yml
+  s_126aec4081f728::t_57b679ed094dc4 154
+packaging/windows/install.ps1
+  s_126aec4081f728::t_a17694935c9f66 1,3,6-10,12-29,33-35,37-40,45-50,52-57,59-66,71-77,79-84,86-89,91-95,97-99,101,103-113,115-124,126-135,137-141,144-157
+CHANGELOG.md
+  s_126aec4081f728::t_b6bc1d69ea0247 10-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "45056035efd16101672fe194db6b08d4c7679a3b",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
