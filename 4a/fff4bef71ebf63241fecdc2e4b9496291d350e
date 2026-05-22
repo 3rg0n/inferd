@@ -1,0 +1,25 @@
+packaging/windows/cleanup-legacy-service.ps1
+  s_126aec4081f728::t_bdf259d851853c 1-131
+CHANGELOG.md
+  s_126aec4081f728::t_50bdb93dfe5126 10-26
+packaging/windows/install.ps1
+  s_126aec4081f728::t_f7d7e13dee5d83 89-91,93-97
+.github/workflows/release.yml
+  s_126aec4081f728::t_9bc4a3a206825c 155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "4afff4bef71ebf63241fecdc2e4b9496291d350e",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
