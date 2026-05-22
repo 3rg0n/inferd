@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ureq` TLS: switch to `native-tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).
+  The previous `features = ["tls"]` used rustls with its own bundled root store, which
+  does not see system-installed CA certificates (corporate proxies, internal CAs). Switched
+  to `native-tls` + `native-certs` so the model-fetch path uses the OS trust store — same
+  behaviour as `curl` — and honours any locally installed CA without requiring operators to
+  side-step the daemon's fetcher.
+
 ## [0.2.1] - 2026-05-22
 
 ### Fixed
