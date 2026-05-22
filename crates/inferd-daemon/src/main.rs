@@ -946,7 +946,7 @@ async fn build_llamacpp_entry(
         if !blob_path.exists() {
             anyhow::bail!(
                 "model {} not present in store at {} and auto_pull is disabled. \
-                 Run `inferd pull` or set auto_pull: true in config.",
+                 Run `inferdctl pull` or set auto_pull: true in config.",
                 entry.name,
                 blob_path.display()
             );

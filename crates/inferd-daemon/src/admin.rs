@@ -50,7 +50,7 @@ pub struct StatusBroadcaster {
     /// need to wait for the next state change.
     snapshot: watch::Sender<StatusEvent>,
     /// `watch` carries the most recent `Capabilities` event so
-    /// late-connecting one-shot subscribers (e.g. `inferd doctor`)
+    /// late-connecting one-shot subscribers (e.g. `inferdctl doctor`)
     /// see capability info even though it was published once at boot.
     /// `None` until the backend has been constructed.
     capabilities: watch::Sender<Option<StatusEvent>>,

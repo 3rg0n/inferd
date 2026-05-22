@@ -300,9 +300,9 @@ finding pointer.
 | Item | Finding | Notes |
 |---|---|---|
 | FFI crash isolation (sandboxed worker) | F-9 | Accepted risk for v0.1; v0.3+ if recurring crashes show |
-| `inferd -p "..."` prompt mode | plan §"crate layout" | Default subcommand of the `inferd` CLI. Replaces the previously-scaffolded `inferd-stdio` crate (retired in v0.1.10 — one binary, many shapes). |
+| `inferdctl -p "..."` prompt mode | plan §"crate layout" | Default subcommand of the `inferdctl` CLI. Replaces the previously-scaffolded `inferd-stdio` crate (retired in v0.1.10 — one binary, many shapes). |
 | Python + TypeScript clients | `clients/{py,ts}/` | Stubs only; out of v0.1 scope |
-| Model installer / `inferd pull` | shipping in v0.1.9+ | Subcommand of the `inferd` CLI to pre-warm the shared CAS store (ADR 0011) without booting the daemon. v0.1 also still supports the daemon's first-boot fetch path (ADR 0010). |
+| Model installer / `inferdctl pull` | shipping in v0.1.9+ | Subcommand of the `inferdctl` CLI to pre-warm the shared CAS store (ADR 0011) without booting the daemon. v0.1 also still supports the daemon's first-boot fetch path (ADR 0010). |
 
 **Closed in alpha.2** (2026-05-16): F-7 peer credentials,
 F-8 TCP API-key auth, F-16 Linux + macOS hardening manifests

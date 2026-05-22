@@ -346,14 +346,14 @@ The default embed-capable backend is `llamacpp` configured with `embed: true` an
 | macOS | `${TMPDIR}/inferd/infer.embed.sock` |
 | Windows | `\\.\pipe\inferd-infer-embed` |
 
-The daemon must be started with `--embed` (or with `INFERD_EMBED=1`) **and** at least one configured backend must advertise `capabilities().embed = true`. Otherwise the embed socket isn't bound — `inferd doctor` reports `embed=false` in the capabilities line and the third socket simply isn't present.
+The daemon must be started with `--embed` (or with `INFERD_EMBED=1`) **and** at least one configured backend must advertise `capabilities().embed = true`. Otherwise the embed socket isn't bound — `inferdctl doctor` reports `embed=false` in the capabilities line and the third socket simply isn't present.
 
 ### Capability discovery
 
-Subscribe to the admin socket; the daemon emits a `capabilities` frame after backend construction with `embed: true|false` along with `vision`, `audio`, `tools`, `thinking`. `inferd doctor` surfaces the same flags so operators can verify before pointing a consumer at the embed path:
+Subscribe to the admin socket; the daemon emits a `capabilities` frame after backend construction with `embed: true|false` along with `vision`, `audio`, `tools`, `thinking`. `inferdctl doctor` surfaces the same flags so operators can verify before pointing a consumer at the embed path:
 
 ```sh
-inferd doctor
+inferdctl doctor
 # [ ok ] backend: llamacpp accelerator=cuda gpu_layers=99 v2=true vision=true audio=false tools=true thinking=true embed=true
 ```
 

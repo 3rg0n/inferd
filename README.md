@@ -72,7 +72,7 @@ inferd/
 │   ├── inferd-proto/       # wire format, published to crates.io
 │   ├── inferd-engine/      # backend trait + adapters
 │   ├── inferd-client/      # Rust client, published to crates.io
-│   └── inferd/             # CLI binary: status / watch / pull / doctor
+│   └── inferd/             # `inferdctl` CLI binary: status / watch / pull / doctor
 ├── clients/
 │   └── go/                 # hand-written Go client
 ├── docs/

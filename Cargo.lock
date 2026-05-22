@@ -942,22 +942,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inferd"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "clap",
- "inferd-client",
- "inferd-daemon",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "inferd-client"
 version = "0.2.0"
 dependencies = [
@@ -1037,6 +1021,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "inferdctl"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "inferd-client",
+ "inferd-daemon",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

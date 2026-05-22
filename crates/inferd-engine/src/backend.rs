@@ -97,7 +97,7 @@ pub enum AcceleratorKind {
 
 impl AcceleratorKind {
     /// Stable wire-form name: `"cpu"`, `"cuda"`, `"metal"`, `"vulkan"`,
-    /// `"rocm"`. Used in admin status frames and `inferd doctor`.
+    /// `"rocm"`. Used in admin status frames and `inferdctl doctor`.
     pub fn as_str(self) -> &'static str {
         match self {
             AcceleratorKind::Cpu => "cpu",
@@ -169,7 +169,7 @@ pub struct BackendCapabilities {
     /// trait impl; `mock` keeps the default; `llamacpp` reports the
     /// compile-time GGML backend + the configured `n_gpu_layers`.
     /// Reported on admin `status: capabilities` frames and in
-    /// `inferd doctor` (#77).
+    /// `inferdctl doctor` (#77).
     pub accelerator: AcceleratorInfo,
 }
 

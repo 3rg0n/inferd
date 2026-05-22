@@ -39,7 +39,7 @@ pub enum StatusEvent {
     },
     /// Backend capability snapshot — emitted once after the backend is
     /// constructed and before `Ready`. Lets admin subscribers (e.g.
-    /// `inferd doctor`, IDE plugins) discover hardware-acceleration
+    /// `inferdctl doctor`, IDE plugins) discover hardware-acceleration
     /// posture, multimodal support, and tools / thinking support
     /// without trial-and-error. Backwards-additive on the admin wire
     /// (older subscribers ignore unknown `status` values).

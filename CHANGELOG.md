@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CLI binary renamed `inferd` → `inferdctl`** (ADR 0018,
+  supersedes ADR 0014's name choice; ADR 0014's invariants are
+  preserved). The standalone `inferd` crate name on crates.io is
+  squatted, blocking `cargo publish` of the CLI; rather than
+  pursue an ownership dispute we land on a `*ctl`-suffixed name
+  that both publishes cleanly and disambiguates the CLI from
+  `inferd-daemon` for operators (cf. `systemctl`, `kubectl`).
+  The architectural posture is unchanged — the CLI is still a
+  peer reference-middleware client of every other consumer, with
+  no private daemon API. Touched: `crates/inferd/Cargo.toml`
+  (package + bin name), `crates/inferd/src/main.rs` (clap
+  `name = "inferdctl"` + doc-comments),
+  `.github/workflows/release.yml` (build + staging),
+  `INTEGRATING.md`, daemon source comments referencing the CLI.
+  The directory `crates/inferd/` did not move — only the
+  published crate name and binary basename. **Migration:**
+  shell scripts referencing `inferd status` / `inferd watch` /
+  `inferd pull` / `inferd doctor` need to be updated to
+  `inferdctl <subcommand>`. Closes #100.
+
 ### Added
 
 - **Release pipeline hardening** (`.github/workflows/release.yml`,

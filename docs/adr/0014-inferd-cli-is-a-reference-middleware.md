@@ -1,6 +1,6 @@
 # 0014. The inferd CLI is a reference middleware, not a privileged surface
 
-- Status: accepted
+- Status: superseded by [0018](0018-cli-renamed-to-inferdctl.md) (rename only — invariants preserved)
 - Date: 2026-05-20
 
 ## Context
