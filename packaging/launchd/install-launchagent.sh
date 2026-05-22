@@ -2,19 +2,21 @@
 # install-launchagent.sh — install the inferd-daemon LaunchAgent for the current user.
 #
 # Usage:
-#   ./packaging/launchd/install-launchagent.sh [/path/to/inferd-daemon] [/path/to/model.gguf]
+#   ./packaging/launchd/install-launchagent.sh [/path/to/inferd-daemon]
 #
 # If the binary path is omitted, /usr/local/bin/inferd-daemon is used.
-# If the model path is omitted, the script reads ~/.inferd/config.json and
-# resolves the CAS path automatically. If no model is found the script exits
-# non-zero — run `inferd pull` first.
 # Run from the repository root or any subdirectory — the script locates
 # the plist template relative to itself.
+#
+# The daemon reads ~/.inferd/config.json on startup. On first boot the
+# daemon writes a pinned multi-backend default config (real llamacpp
+# generate + embed, both with auto_pull = true) — no `inferd pull`
+# precondition, no `--backend` / `--model-path` argument substitution
+# required from this script.
 
 set -euo pipefail
 
 BIN="${1:-/usr/local/bin/inferd-daemon}"
-MODEL_PATH="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$SCRIPT_DIR/io.inferd.daemon.plist"
 DEST="$HOME/Library/LaunchAgents/io.inferd.daemon.plist"
@@ -36,54 +38,14 @@ if [[ ! -f "$BIN" ]]; then
     exit 1
 fi
 
-# Resolve model path from ~/.inferd/config.json when not supplied explicitly.
-# The CAS layout is:
-#   ~/.local/share/inferd/models/blobs/sha256/<aa>/<full-sha>/data  (Linux)
-#   ~/Library/Application Support/models/blobs/sha256/<aa>/<full-sha>/data (macOS)
-if [[ -z "$MODEL_PATH" ]]; then
-    CONFIG="$HOME/.inferd/config.json"
-    if [[ -f "$CONFIG" ]] && command -v python3 >/dev/null 2>&1; then
-        SHA=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('$CONFIG'))
-    print(d.get('model', {}).get('sha256', ''))
-except Exception:
-    pass
-" 2>/dev/null || true)
-        if [[ -n "$SHA" ]]; then
-            PREFIX="${SHA:0:2}"
-            CAS="$HOME/Library/Application Support/models/blobs/sha256/$PREFIX/$SHA/data"
-            if [[ -f "$CAS" ]]; then
-                MODEL_PATH="$CAS"
-                echo "Auto-detected model at: $MODEL_PATH"
-            fi
-        fi
-    fi
-fi
-
-if [[ -z "$MODEL_PATH" ]]; then
-    echo "error: no model found; run 'inferd pull' first, then re-run $0" >&2
-    exit 1
-fi
-
-if [[ ! -f "$MODEL_PATH" ]]; then
-    echo "error: model file not found at $MODEL_PATH" >&2
-    exit 1
-fi
-
-BACKEND="llamacpp"
-
 mkdir -p "$AGENTS_DIR"
 mkdir -p "$LOG_DIR"
 
-# Substitute placeholders: __HOME__, __TMPDIR__, __BIN__, __BACKEND__, __MODEL_PATH__.
+# Substitute placeholders: __HOME__, __TMPDIR__, __BIN__.
 sed \
     -e "s|__HOME__|${HOME}|g" \
     -e "s|__TMPDIR__|${TMPDIR_REAL}|g" \
     -e "s|__BIN__|${BIN}|g" \
-    -e "s|__BACKEND__|${BACKEND}|g" \
-    -e "s|__MODEL_PATH__|${MODEL_PATH}|g" \
     "$TEMPLATE" > "$DEST"
 
 echo "Installed plist → $DEST"
@@ -105,10 +67,12 @@ launchctl bootstrap "gui/$UID_VAL" "$DEST"
 
 echo "Agent bootstrapped and enabled."
 echo
-echo "Backend:  $BACKEND"
-echo "Model:    $MODEL_PATH"
 echo "Sockets and lock live under: ${TMPDIR_REAL}inferd/"
 echo "Logs: $LOG_DIR/"
+echo
+echo "On first boot the daemon will write ~/.inferd/config.json (if absent)"
+echo "and pull the configured generate + embed models into the CAS store."
+echo "Watch progress with:  inferdctl watch"
 echo
 echo "Status:"
 launchctl list "$LABEL" 2>/dev/null || echo "(list not available)"

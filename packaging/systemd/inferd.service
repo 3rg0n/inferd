@@ -10,8 +10,12 @@
 # documented in the threat model. Anything off this baseline weakens
 # the security posture; change deliberately.
 #
-# v0.1 ships only the `mock` backend by default; for real inference
-# set --backend llamacpp, --model-path, and the model SHA-256 below.
+# Backend selection: this unit deliberately omits `--backend`. With
+# no `--backend` flag the daemon defers to `~/.inferd/config.json`,
+# which is auto-written on first boot and declares real generate +
+# embed llamacpp backends with `auto_pull = true`. Operators who want
+# a different posture (mock for tests, openai-compat, etc.) can either
+# edit the config file or append `--backend <kind>` to ExecStart below.
 
 [Unit]
 Description=inferd local inference daemon
@@ -40,7 +44,6 @@ Type=simple
 # shares the daemon) `groupadd inferd-users` first and append
 # `--group inferd-users` to the ExecStart line below.
 ExecStart=%h/.local/bin/inferd-daemon \
-    --backend mock \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
     --admin-addr %t/inferd/admin.sock

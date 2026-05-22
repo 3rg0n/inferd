@@ -27,8 +27,7 @@ param(
     [string]$BinaryPath = "$env:LOCALAPPDATA\inferd\inferd-daemon.exe",
     [string]$LockPath = "$env:LOCALAPPDATA\inferd\inferd.lock",
     [string]$PipePath = "\\.\pipe\inferd-infer",
-    [string]$LogDir = "$env:LOCALAPPDATA\inferd\logs",
-    [string]$Backend = "mock"
+    [string]$LogDir = "$env:LOCALAPPDATA\inferd\logs"
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,9 +46,15 @@ if (-not (Test-Path $LogDir)) {
 
 # Build the BinPath argument. sc.exe requires the entire command in one
 # quoted string with embedded quotes around paths that contain spaces.
-$bin = '"' + $BinaryPath + '"' + " --backend $Backend " +
-       "--lock `"$LockPath`" " +
-       "--pipe `"$PipePath`""
+#
+# We deliberately do NOT pass --backend here. With no --backend flag the
+# daemon defers to %USERPROFILE%\.inferd\config.json (auto-written on
+# first boot), which declares the real llamacpp generate + embed
+# backends. Hard-coding --backend mock here previously masked that
+# default and shipped a dev-mode echo daemon to operators.
+$bin = '"' + $BinaryPath + '"' +
+       " --lock `"$LockPath`"" +
+       " --pipe `"$PipePath`""
 
 Write-Host "Installing service '$ServiceName' from $BinaryPath..."
 
