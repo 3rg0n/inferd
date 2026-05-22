@@ -46,6 +46,16 @@ endif()
 # host toolchains for upstream code we don't control.
 set(LLAMA_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
 
+# macOS: enable the Accelerate-backed BLAS backend before pulling in
+# llama.cpp. With EXCLUDE_FROM_ALL, ggml-blas won't build unless
+# something depends on it — we wire that dependency below after the
+# add_subdirectory, using if(TARGET) so this is a no-op on other
+# platforms even if the variable is ignored.
+if (APPLE)
+    set(GGML_BLAS ON CACHE BOOL "" FORCE)
+    set(GGML_BLAS_VENDOR "Apple" CACHE STRING "" FORCE)
+endif()
+
 # Pull in llama.cpp's targets. EXCLUDE_FROM_ALL means anything we
 # don't directly link doesn't get built into our staging dir.
 add_subdirectory("${LLAMA_CPP_DIR}" llama.cpp EXCLUDE_FROM_ALL)
@@ -118,9 +128,26 @@ if (INFERD_BUILD_MTMD)
     install(TARGETS mtmd ARCHIVE DESTINATION lib)
 endif()
 
+# macOS: ggml-blas is defined by the add_subdirectory above when
+# GGML_BLAS=ON, but EXCLUDE_FROM_ALL means it won't compile unless
+# something with a build dependency pulls it in. Wire it to ggml so
+# any target that links ggml also triggers ggml-blas's build.
+if (TARGET ggml-blas)
+    add_dependencies(ggml ggml-blas)
+endif()
+
 # llama.cpp's CMake doesn't always install ggml's archives in the
 # location cmake-rs expects; force them into ${CMAKE_INSTALL_PREFIX}/lib
 # so build.rs's link-search picks them up uniformly.
 install(TARGETS llama ggml ggml-base ggml-cpu
     ARCHIVE DESTINATION lib
     OPTIONAL)
+
+# Install ggml-blas when it was built (macOS with Accelerate).
+# if(TARGET) is used defensively so this install() is a no-op on
+# platforms where ggml-blas doesn't exist.
+if (TARGET ggml-blas)
+    install(TARGETS ggml-blas
+        ARCHIVE DESTINATION lib
+        OPTIONAL)
+endif()

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS aarch64 release build** (`crates/inferd-engine/cpp/CMakeLists.txt`):
+  the Phase 3A CMake wrapper used `add_subdirectory(... EXCLUDE_FROM_ALL)`,
+  which skips any upstream target not transitively depended on by an
+  `ALL`-attached target. `ggml-blas` was never in that transitive set, so it
+  was never built or installed on macOS — producing "cannot find native static
+  library `ggml-blas`" at link time. Fixed by:
+  (1) setting `GGML_BLAS=ON` / `GGML_BLAS_VENDOR=Apple` before
+  `add_subdirectory` so upstream's CMake defines the target at all;
+  (2) adding `add_dependencies(ggml ggml-blas)` after `add_subdirectory`
+  (guarded by `if(TARGET ggml-blas)`) so the EXCLUDE_FROM_ALL is
+  overridden by the explicit dependency chain;
+  (3) adding a matching `install(TARGETS ggml-blas ...)` so the archive
+  lands in `${CMAKE_INSTALL_PREFIX}/lib` where `build.rs`'s link-search
+  finds it. Validated locally on arm64 macOS: `libggml-blas.a` now
+  appears in `OUT_DIR/lib/` and the daemon binary links cleanly. Closes #12.
+
 ## [0.2.0] - 2026-05-21
 
 ### Fixed
