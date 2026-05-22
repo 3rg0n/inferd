@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.1] - 2026-05-22
 
+### Fixed
+
+- **macOS LaunchAgent install fixes carried forward from v0.1.13/v0.1.14
+  on `main`** (cherry-picked from commits `486b392` and `2a6d19e`). The
+  `v0.2-dev` branch never picked up two real launchd bugs that landed
+  on `main` while v0.2 work was in flight:
+  (1) `launchctl bootstrap` on a previously bootout-ed agent returned
+  `EX_IO (5)` because launchd marks the agent disabled after bootout —
+  fix by calling `launchctl enable` before `bootstrap` in
+  `packaging/launchd/install-launchagent.sh`;
+  (2) `io.inferd.daemon.plist` had `__BACKEND__` / `__MODEL_PATH__`
+  placeholders that the install script never substituted, so the daemon
+  defaulted to the mock backend even after `inferdctl pull` — fix by
+  threading the values through the install script and failing loudly if
+  no model is provided. Without these, the v0.2.x tarball produced a
+  broken macOS install path. Closes #9.
+
 ### Changed
 
 - **CLI binary renamed `inferd` → `inferdctl`** (ADR 0018,
