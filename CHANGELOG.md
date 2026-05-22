@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`packaging/windows/cleanup-legacy-service.ps1`** — one-shot cleanup
+  helper for operators upgrading from a v0.2.1 install whose SCM
+  service was registered with the hardened SDDL that strips
+  `DELETE`/`WRITE_DAC`/`WRITE_OWNER` from Administrators. The script
+  self-elevates via UAC, takes ownership of the
+  `HKLM:\SYSTEM\CurrentControlSet\Services\inferd-daemon` registry
+  key, grants Administrators `FullControl`, deletes the key, and
+  prints the reboot-to-flush-SCM-cache instruction. Required because
+  the bad SDDL blocks `sc.exe delete` even when run elevated, so
+  there is no in-band way for an operator to remove the legacy
+  registration without registry-level surgery. Pair with the new
+  `install.ps1` (Startup-folder shortcut) which surfaces a warning
+  pointing at this script when it detects a legacy registration
+  during install.
+
 ### Changed
 
 - **Windows install: drop SCM service, use Startup-folder shortcut**

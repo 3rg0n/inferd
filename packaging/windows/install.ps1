@@ -86,11 +86,15 @@ if ($LASTEXITCODE -eq 0) {
     Write-Warning @"
 A legacy 'inferd-daemon' Windows service is registered. The new install
 runs the daemon as a per-user Startup process and does NOT use SCM.
-The legacy service will collide with the named pipes.
+The legacy service does not own the named-pipe paths so the install
+will succeed, but you will see a stale 'STOPPED' entry in 'sc.exe query'
+until you remove it.
 
-Remove it (elevated) before continuing:
-    sc.exe stop inferd-daemon
-    sc.exe delete inferd-daemon
+The v0.2.1 service SDDL strips DELETE/WRITE_DAC from Administrators,
+so 'sc.exe delete' is blocked even when elevated. Use the included
+helper instead — it self-elevates and rewrites the registry-key DACL:
+    powershell -ExecutionPolicy Bypass -File cleanup-legacy-service.ps1
+Then reboot to flush the SCM cache.
 "@
 }
 
