@@ -518,21 +518,63 @@ async fn spawn_admin_listener(
     }
 }
 
-/// Try to load the operator config file. Returns `None` (and logs at
-/// info level) if the file doesn't exist — that's dev mode against
-/// CLI flags. Returns `Err` only on I/O / parse / validation failure
-/// of an existing file.
+/// Try to load the operator config file.
+///
+/// Behaviour:
+/// - File present → load + validate; log on parse error and return None.
+/// - File absent + `cli_path` was set explicitly → log and return None
+///   (operator pointed at a path that doesn't exist; honour their
+///   intent, don't surprise them by writing a default elsewhere).
+/// - File absent + default path → write the shipped first-boot
+///   default (gemma-4 generate + embeddinggemma-300m embed, both
+///   `auto_pull: true`) and return the loaded result. This is what
+///   makes the install-equals-work contract hold: a fresh user runs
+///   the platform installer and the daemon fetches both blobs and
+///   binds the inference + embed sockets without any hand-editing.
 fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
     let path = cli_path
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(inferd_daemon::config_file::default_config_path);
+    let was_default_path = cli_path.is_none();
+
     match ConfigFile::load(&path) {
         Ok(cfg) => {
             info!(path = %path.display(), "loaded config file");
             Some(cfg)
         }
+        Err(inferd_daemon::config_file::ConfigError::NotFound(_)) if was_default_path => {
+            match inferd_daemon::config_file::write_default_if_missing(&path) {
+                Ok(true) => {
+                    info!(
+                        path = %path.display(),
+                        "no config file at default path; wrote first-boot default \
+                         (gemma-4-e4b + embeddinggemma-300m, auto_pull=true)"
+                    );
+                    match ConfigFile::load(&path) {
+                        Ok(cfg) => Some(cfg),
+                        Err(e) => {
+                            error!(error = %e, "wrote default config but failed to reload");
+                            None
+                        }
+                    }
+                }
+                Ok(false) => {
+                    // Race: another process wrote the file between
+                    // our load attempt and the write. Reload.
+                    ConfigFile::load(&path).ok()
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        path = %path.display(),
+                        "could not write default config; falling back to dev mode"
+                    );
+                    None
+                }
+            }
+        }
         Err(inferd_daemon::config_file::ConfigError::NotFound(_)) => {
-            info!(path = %path.display(), "no config file; using CLI flags only");
+            info!(path = %path.display(), "no config file at explicit path; using CLI flags only");
             None
         }
         Err(e) => {
@@ -584,12 +626,16 @@ fn resolve_v1_transport(
 /// phase events as it goes.
 ///
 /// Dispatch:
-/// - `--backend mock` ignores the config (dev-mode echo daemon).
-/// - When the config file declares `backends:` (or legacy `model:`,
-///   which auto-promotes to a one-element llamacpp list), every entry
-///   is built and the router walks them in order per ADR 0007.
-/// - When no config is present, the CLI-flag path builds a single
-///   backend matching `--backend <kind>` for v0.1.x compatibility.
+/// - No `--backend` flag + config present → use `backends:` from the
+///   config file (or legacy `model:` block, auto-promoted to a single
+///   llamacpp entry). Router walks them in order per ADR 0007.
+/// - No `--backend` flag + no config → fall back to the in-memory
+///   `mock` backend so the daemon still boots in dev mode.
+/// - Explicit `--backend mock` → mock (config ignored; useful in test
+///   rigs that have an unrelated config file on disk).
+/// - Explicit `--backend <kind>` (any non-mock value) → CLI-flag-only
+///   path; config `backends:` are ignored so the operator gets exactly
+///   what they asked for.
 async fn build_backends(
     cli: &Cli,
     #[cfg_attr(
@@ -599,19 +645,15 @@ async fn build_backends(
     config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
 ) -> anyhow::Result<Vec<Arc<dyn Backend>>> {
-    match cli.backend {
-        BackendKind::Mock => {
-            broadcaster.publish(StatusEvent::LoadingModel {
-                phase: LoadPhase::CheckingLocal {
-                    path: PathBuf::from("(mock)"),
-                },
-            });
-            Ok(vec![Arc::new(Mock::new())])
-        }
+    // Default path (no --backend): defer to the config file when
+    // present, otherwise fall back to mock. This is the change that
+    // fixes #15 — previously the unset CLI flag silently defaulted to
+    // mock and short-circuited config loading.
+    if cli.backend.is_none() {
         #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
-        _ => {
-            if let Some(cfg) = config {
-                let entries = cfg.resolved_backends();
+        if let Some(cfg) = config {
+            let entries = cfg.resolved_backends();
+            if !entries.is_empty() {
                 let auto_pull = cfg.auto_pull;
                 let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
                 for entry in entries {
@@ -620,27 +662,39 @@ async fn build_backends(
                 }
                 return Ok(out);
             }
+        }
 
-            // No config file: CLI-flag-only path. Single backend
-            // matching `--backend <kind>`.
-            match cli.backend {
-                BackendKind::Mock => unreachable!("handled above"),
-                #[cfg(feature = "llamacpp")]
-                BackendKind::Llamacpp => {
-                    let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
-                    Ok(vec![b])
-                }
-                #[cfg(feature = "openai")]
-                BackendKind::OpenaiCompat => {
-                    let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
-                    Ok(vec![b])
-                }
-                #[cfg(feature = "bedrock")]
-                BackendKind::BedrockInvoke => {
-                    let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
-                    Ok(vec![b])
-                }
-            }
+        broadcaster.publish(StatusEvent::LoadingModel {
+            phase: LoadPhase::CheckingLocal {
+                path: PathBuf::from("(mock)"),
+            },
+        });
+        return Ok(vec![Arc::new(Mock::new())]);
+    }
+
+    match cli.backend.expect("checked is_none above") {
+        BackendKind::Mock => {
+            broadcaster.publish(StatusEvent::LoadingModel {
+                phase: LoadPhase::CheckingLocal {
+                    path: PathBuf::from("(mock)"),
+                },
+            });
+            Ok(vec![Arc::new(Mock::new())])
+        }
+        #[cfg(feature = "llamacpp")]
+        BackendKind::Llamacpp => {
+            let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
+            Ok(vec![b])
+        }
+        #[cfg(feature = "openai")]
+        BackendKind::OpenaiCompat => {
+            let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
+            Ok(vec![b])
+        }
+        #[cfg(feature = "bedrock")]
+        BackendKind::BedrockInvoke => {
+            let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
+            Ok(vec![b])
         }
     }
 }

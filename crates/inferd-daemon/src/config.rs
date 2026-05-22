@@ -49,8 +49,20 @@ pub enum BackendKind {
 #[command(name = "inferd-daemon", version, about = "Local inference daemon")]
 pub struct Cli {
     /// Backend to load at startup.
-    #[arg(long, value_enum, default_value_t = BackendKind::Mock, env = "INFERD_BACKEND")]
-    pub backend: BackendKind,
+    ///
+    /// When omitted: defer to the config file's `backends:` (or legacy
+    /// `model:` block) if one is present; otherwise fall back to the
+    /// in-memory `mock` backend so `--lock + --tcp/--uds/--pipe` alone
+    /// still boots a dev-mode echo daemon.
+    ///
+    /// When explicit: honour the CLI choice. Passing `--backend mock`
+    /// short-circuits config loading (useful for forcing mock in test
+    /// rigs even when a config file is on disk); any other explicit
+    /// kind is built from CLI flags only — config-file `backends:` are
+    /// ignored in that case so operators get exactly what they asked
+    /// for.
+    #[arg(long, value_enum, env = "INFERD_BACKEND")]
+    pub backend: Option<BackendKind>,
 
     /// Path to the single-instance lock file. The lock is held for the
     /// lifetime of the daemon process.
@@ -454,7 +466,7 @@ mod tests {
             "--openai-timeout-secs",
             "30",
         ]);
-        assert_eq!(cli.backend, BackendKind::OpenaiCompat);
+        assert_eq!(cli.backend, Some(BackendKind::OpenaiCompat));
         assert_eq!(
             cli.openai_base_url.as_deref(),
             Some("http://localhost:11434")
@@ -484,7 +496,7 @@ mod tests {
             "--bedrock-timeout-secs",
             "60",
         ]);
-        assert_eq!(cli.backend, BackendKind::BedrockInvoke);
+        assert_eq!(cli.backend, Some(BackendKind::BedrockInvoke));
         assert_eq!(cli.bedrock_region.as_deref(), Some("us-east-1"));
         assert_eq!(
             cli.bedrock_model_id.as_deref(),
