@@ -1,0 +1,59 @@
+docs/plan-v0.1.md
+  s_126aec4081f728::t_1512c3ddbcfbff 303
+  s_126aec4081f728::t_11f18dfe817adb 305
+crates/inferd-daemon/src/admin.rs
+  s_126aec4081f728::t_3b54c3e6196d1a 53
+.github/workflows/release.yml
+  s_126aec4081f728::t_7294291a3e86d9 101,108-112
+  s_126aec4081f728::t_eac52cc81de0e9 151,157
+crates/inferd-engine/src/backend.rs
+  s_126aec4081f728::t_134dd1118ebe3d 172
+  s_126aec4081f728::t_6edfa825240dd1 100
+crates/inferd/Cargo.toml
+  s_126aec4081f728::t_44953d66e7e39a 13
+  s_126aec4081f728::t_f997204a7dcb6f 2
+  s_126aec4081f728::t_b78b1ff300348a 17-18
+docs/adr/0014-inferd-cli-is-a-reference-middleware.md
+  s_126aec4081f728::t_5cd59453df49a6 3
+CHANGELOG.md
+  s_126aec4081f728::t_48349c07574a06 10-31
+crates/inferd-daemon/src/status.rs
+  s_126aec4081f728::t_d5077550006bc1 42
+crates/inferd/src/main.rs
+  s_126aec4081f728::t_5ea1817cc16a0b 204
+  s_126aec4081f728::t_02a819ea1eda7c 220
+  s_126aec4081f728::t_8aeefb02a18ebb 294
+  s_126aec4081f728::t_268257ac542c7a 1,4,9,12,14,19,23
+  s_126aec4081f728::t_2d3901c31c8168 115
+  s_126aec4081f728::t_948cc698b936af 195
+  s_126aec4081f728::t_94d7a5d53b8326 44
+README.md
+  s_126aec4081f728::t_6078d9dc25dd4a 75
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_6e8bb4db9f9655 949
+docs/adr/README.md
+  s_126aec4081f728::t_a92d34e43cd74b 21,25
+INTEGRATING.md
+  s_126aec4081f728::t_2648f23270a07c 349
+  s_126aec4081f728::t_729c7c22c8c68d 353,356
+docs/RELEASING.md
+  s_126aec4081f728::t_abcd468562bb4c 161-162
+docs/adr/0018-cli-renamed-to-inferdctl.md
+  s_126aec4081f728::t_233e946dc6e57f 1-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "f668ee88bb25cdeac258277151d270f466fa8fc4",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
