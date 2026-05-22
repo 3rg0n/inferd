@@ -413,6 +413,99 @@ pub fn default_config_path() -> PathBuf {
     home.join(".inferd").join("config.json")
 }
 
+/// Default `ConfigFile` shipped with first-boot installs. Two
+/// llamacpp backends — `gemma-4-e4b` for generation and
+/// `embeddinggemma-300m` for embeddings — both with `auto_pull: true`
+/// so a clean machine fetches the blobs into the CAS on first boot.
+///
+/// SHAs are pinned against `x-linked-etag` from HuggingFace's resolve
+/// endpoint at the time this default was authored; the daemon's
+/// fetch path verifies them with a constant-time compare per the
+/// invariant in `context.md`.
+///
+/// Operators who want to customise (different model, GPU offload,
+/// extra cloud entries, …) edit the file after first boot — the
+/// daemon never overwrites an existing config.
+pub fn default_first_boot_config() -> ConfigFile {
+    ConfigFile {
+        auto_pull: true,
+        models_home: None,
+        model: None,
+        n_ctx: default_n_ctx(),
+        n_gpu_layers: 0,
+        admin_addr: None,
+        backends: Some(vec![
+            BackendEntry::Llamacpp(LlamacppEntry {
+                name: "gemma-4-e4b".into(),
+                model: ModelConfig {
+                    name: "gemma-4-e4b".into(),
+                    sha256: "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36"
+                        .into(),
+                    size_bytes: Some(5_126_304_928),
+                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
+                         gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+                        .into(),
+                    license: Some("gemma".into()),
+                },
+                n_ctx: default_n_ctx(),
+                n_gpu_layers: 0,
+                embed: false,
+                embed_pooling: None,
+                embed_n_ctx: default_embed_n_ctx(),
+            }),
+            BackendEntry::Llamacpp(LlamacppEntry {
+                name: "embeddinggemma-300m".into(),
+                model: ModelConfig {
+                    name: "embeddinggemma-300m".into(),
+                    sha256: "a0f7b4e13c397a6e1b32c2de75b1f65a14c92ec524d5f674d94a4290a1c4969b"
+                        .into(),
+                    size_bytes: Some(328_577_056),
+                    source_url:
+                        "https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/resolve/main/\
+                         embeddinggemma-300M-Q8_0.gguf"
+                            .into(),
+                    license: Some("gemma".into()),
+                },
+                n_ctx: default_embed_n_ctx(),
+                n_gpu_layers: 0,
+                embed: true,
+                embed_pooling: None,
+                embed_n_ctx: default_embed_n_ctx(),
+            }),
+        ]),
+        listen: None,
+    }
+}
+
+/// Write the default config to `path` if `path` does not already
+/// exist. Creates the parent directory if needed. **Never** overwrites
+/// an existing file — operator customisations win.
+///
+/// Returns `Ok(true)` if a default was written, `Ok(false)` if the
+/// path already had a file. I/O errors propagate so callers can log
+/// them; they are not fatal — the daemon proceeds to load whatever
+/// was on disk (or fall back to CLI flags + mock if nothing was).
+pub fn write_default_if_missing(path: &Path) -> io::Result<bool> {
+    if path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let cfg = default_first_boot_config();
+    let tmp = path.with_extension("json.tmp");
+    {
+        let file = File::create(&tmp)?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, &cfg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, b"\n")?;
+        std::io::Write::flush(&mut writer)?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(true)
+}
+
 /// Errors produced by `ConfigFile::load`.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -1203,5 +1296,84 @@ mod tests {
             ConfigError::Invalid(msg) => assert!(msg.contains("listen.tcp")),
             other => panic!("expected Invalid, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_first_boot_config_has_generate_and_embed() {
+        let cfg = default_first_boot_config();
+        assert!(cfg.auto_pull, "first-boot default must auto-pull");
+        let list = cfg.backends.as_ref().expect("backends present");
+        assert_eq!(list.len(), 2, "default ships generate + embed");
+
+        let mut saw_generate = false;
+        let mut saw_embed = false;
+        for entry in list {
+            if let BackendEntry::Llamacpp(e) = entry {
+                if e.embed {
+                    saw_embed = true;
+                    assert_eq!(e.model.name, "embeddinggemma-300m");
+                } else {
+                    saw_generate = true;
+                    assert_eq!(e.model.name, "gemma-4-e4b");
+                }
+            }
+        }
+        assert!(saw_generate, "default must include a generate backend");
+        assert!(saw_embed, "default must include an embed backend");
+    }
+
+    #[test]
+    fn default_first_boot_config_validates() {
+        // Round-trip the embedded default through the full
+        // load+validate pipeline so we catch any drift between the
+        // hard-coded literal and the validation rules.
+        let cfg = default_first_boot_config();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let f = write_config(&json);
+        ConfigFile::load(f.path()).expect("default config validates");
+    }
+
+    #[test]
+    fn write_default_if_missing_writes_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        assert!(!path.exists());
+
+        let wrote = write_default_if_missing(&path).unwrap();
+        assert!(wrote, "should report wrote=true on first call");
+        assert!(path.exists(), "default config now on disk");
+
+        let cfg = ConfigFile::load(&path).unwrap();
+        assert!(cfg.backends.is_some());
+        assert!(cfg.auto_pull);
+    }
+
+    #[test]
+    fn write_default_if_missing_does_not_overwrite() {
+        // Operator customisation must win — the daemon never clobbers
+        // an existing file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, "{ \"i_am_user_data\": true }").unwrap();
+
+        let wrote = write_default_if_missing(&path).unwrap();
+        assert!(!wrote, "should report wrote=false when file exists");
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("i_am_user_data"),
+            "operator file preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn write_default_if_missing_creates_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("subdir").join("config.json");
+        assert!(!path.parent().unwrap().exists());
+
+        let wrote = write_default_if_missing(&path).unwrap();
+        assert!(wrote);
+        assert!(path.exists());
     }
 }
