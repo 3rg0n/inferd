@@ -200,6 +200,24 @@ impl Router {
     /// for them either closes the breaker (`record_success`) or
     /// re-opens it (`record_failure`).
     pub fn dispatch(&self) -> Result<Dispatch, RouterError> {
+        self.dispatch_filtered(|_| true)
+    }
+
+    /// Pick a backend for an embed request — same priority + breaker
+    /// rules as `dispatch`, but skip slots whose backend doesn't
+    /// advertise `capabilities().embed`. Without this filter, a
+    /// multi-backend config that puts a generate-only backend ahead
+    /// of an embed-capable one in the priority list would always
+    /// land embed requests on the generate slot and yield
+    /// `EmbedUnsupported`.
+    pub fn dispatch_embed(&self) -> Result<Dispatch, RouterError> {
+        self.dispatch_filtered(|backend| backend.capabilities().embed)
+    }
+
+    fn dispatch_filtered<F>(&self, predicate: F) -> Result<Dispatch, RouterError>
+    where
+        F: Fn(&Arc<dyn Backend>) -> bool,
+    {
         let now = Instant::now();
         let mut guard = self.slots.write().expect("router rwlock poisoned");
         if guard.is_empty() {
@@ -212,6 +230,10 @@ impl Router {
             slot.state.prune(now, self.policy.failure_window);
 
             if !slot.backend.ready() {
+                continue;
+            }
+
+            if !predicate(&slot.backend) {
                 continue;
             }
 
@@ -435,5 +457,90 @@ mod tests {
         router.record_failure("does-not-exist"); // should not panic
         router.record_success("does-not-exist");
         assert!(!router.breaker_open("does-not-exist"));
+    }
+
+    #[test]
+    fn dispatch_embed_skips_non_embed_backends() {
+        // Wrapper that overrides `capabilities().embed` to false but
+        // delegates everything else to Mock. Models the multi-backend
+        // shape inferd ships in its first-boot default config: a
+        // generate-only backend ahead of an embed-capable one in the
+        // priority list.
+        struct GenerateOnly {
+            inner: Mock,
+            name: &'static str,
+        }
+        #[async_trait::async_trait]
+        impl Backend for GenerateOnly {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn ready(&self) -> bool {
+                self.inner.ready()
+            }
+            fn capabilities(&self) -> inferd_engine::BackendCapabilities {
+                inferd_engine::BackendCapabilities {
+                    embed: false,
+                    ..self.inner.capabilities()
+                }
+            }
+            async fn generate(
+                &self,
+                req: inferd_proto::Resolved,
+            ) -> Result<inferd_engine::TokenStream, inferd_engine::GenerateError> {
+                self.inner.generate(req).await
+            }
+        }
+
+        let generate_only = Arc::new(GenerateOnly {
+            inner: Mock::new(),
+            name: "generate-only",
+        });
+        let embed_capable = Arc::new(Mock::new()); // mock advertises embed=true
+        let router = Router::new(vec![generate_only.clone(), embed_capable.clone()]);
+
+        // Plain dispatch picks the first ready backend regardless of
+        // capability — that's the existing generate-path semantics.
+        assert_eq!(router.dispatch().unwrap().name, "generate-only");
+
+        // dispatch_embed must skip generate-only and land on the
+        // embed-capable backend.
+        let chosen = router.dispatch_embed().expect("embed dispatch ok");
+        assert_eq!(chosen.name, "mock");
+        assert!(chosen.backend.capabilities().embed);
+    }
+
+    #[test]
+    fn dispatch_embed_returns_none_available_when_no_backend_supports_embed() {
+        struct GenerateOnly {
+            inner: Mock,
+        }
+        #[async_trait::async_trait]
+        impl Backend for GenerateOnly {
+            fn name(&self) -> &str {
+                "generate-only"
+            }
+            fn ready(&self) -> bool {
+                self.inner.ready()
+            }
+            fn capabilities(&self) -> inferd_engine::BackendCapabilities {
+                inferd_engine::BackendCapabilities {
+                    embed: false,
+                    ..self.inner.capabilities()
+                }
+            }
+            async fn generate(
+                &self,
+                req: inferd_proto::Resolved,
+            ) -> Result<inferd_engine::TokenStream, inferd_engine::GenerateError> {
+                self.inner.generate(req).await
+            }
+        }
+
+        let router = Router::new(vec![Arc::new(GenerateOnly { inner: Mock::new() })]);
+        assert_eq!(
+            router.dispatch_embed().err(),
+            Some(RouterError::NoneAvailable)
+        );
     }
 }

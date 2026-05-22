@@ -137,14 +137,17 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
             }
         };
 
-        // Dispatch through the router.
-        let dispatch = match router.dispatch() {
+        // Dispatch through the router. `dispatch_embed` filters out
+        // slots whose backend doesn't advertise `capabilities().embed`
+        // so multi-backend configs that put a generate-only backend
+        // ahead of an embed-capable one route embed requests correctly.
+        let dispatch = match router.dispatch_embed() {
             Ok(d) => d,
             Err(RouterError::NoBackends) | Err(RouterError::NoneAvailable) => {
                 let resp = EmbedResponse::Error {
                     id: resolved.id.clone(),
                     code: EmbedErrorCode::BackendUnavailable,
-                    message: "no backend available".into(),
+                    message: "no embed-capable backend available".into(),
                 };
                 write_response_embed(&writer, &resp).await?;
                 continue;
@@ -152,19 +155,6 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
         };
         let backend_name = dispatch.name.clone();
         let backend = dispatch.backend;
-
-        // Belt-and-braces check: the embed socket is only bound when
-        // the active backend's capability is `true`, but a router
-        // serving multiple backends could land on a non-embed slot.
-        if !backend.capabilities().embed {
-            let resp = EmbedResponse::Error {
-                id: resolved.id.clone(),
-                code: EmbedErrorCode::EmbedUnsupported,
-                message: format!("backend {backend_name:?} does not support embeddings"),
-            };
-            write_response_embed(&writer, &resp).await?;
-            continue;
-        }
 
         let req_id = resolved.id.clone();
         let n_inputs = resolved.input.len();
