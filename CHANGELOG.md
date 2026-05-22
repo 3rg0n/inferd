@@ -9,12 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`ureq` TLS: switch to `native-tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).
-  The previous `features = ["tls"]` used rustls with its own bundled root store, which
-  does not see system-installed CA certificates (corporate proxies, internal CAs). Switched
-  to `native-tls` + `native-certs` so the model-fetch path uses the OS trust store — same
-  behaviour as `curl` — and honours any locally installed CA without requiring operators to
-  side-step the daemon's fetcher.
+- **`ureq` TLS: load OS trust store via `tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).
+  The previous `features = ["tls"]` used rustls with the bundled `webpki-roots` only, which
+  does not see system-installed CA certificates (corporate proxies with TLS interception, internal
+  CAs). First attempt swapped to `native-tls` + `native-certs`, but ureq 2.x's `native-tls` feature
+  requires explicit `.tls_connector(Arc<TlsConnector>)` glue on `AgentBuilder` that we don't have —
+  Windows builds errored at fetch time with `Unknown Scheme: cannot make HTTPS request because no
+  TLS backend is configured`. Final shape pairs ureq's `tls` (rustls, auto-initialized) with
+  `native-certs` (rustls-native-certs feeds the OS trust roots into rustls). Works across all three
+  platforms with no glue code, same observable behaviour as `curl` for system-trusted CAs.
 
 ## [0.2.1] - 2026-05-22
 

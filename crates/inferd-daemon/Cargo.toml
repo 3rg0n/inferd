@@ -58,7 +58,7 @@ sha2                = { workspace = true }
 # Narrow scope: one URL, one SHA, one file. Operators wanting fancier
 # transports (proxies, custom DNS) wget the file themselves and drop
 # it in models_dir.
-ureq                = { version = "2", default-features = false, features = ["native-tls", "native-certs"] }
+ureq                = { version = "2", default-features = false, features = ["tls", "native-certs"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["fs", "user", "socket"] }
