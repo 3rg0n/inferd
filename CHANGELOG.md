@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release pipeline hardening** (`.github/workflows/release.yml`,
+  `docs/RELEASING.md`). The v0.2.0 cut shipped with no platform tarballs
+  attached because the macOS build broke and the `Sign + publish` job
+  (`needs: [build, sbom]`) was skipped — exposing several latent
+  fragility points in the release pipeline. Five-part hardening so v0.2.1
+  can ship cleanly:
+  - **SHA256 sidecars.** Each platform job now generates a `*.sha256`
+    file next to its archive and uploads it alongside. Universal
+    "did this download corrupt" check; verify with `shasum -a 256 -c
+    <archive>.sha256`. Cosign bundles still ship for provenance.
+  - **Pinned third-party Actions.** Every `uses:` reference now pins
+    to a commit SHA with the upstream tag name as a comment
+    (`actions/checkout@de0fac2e... # v6`). Mitigates tag-rewrite
+    attacks on release pipelines, consistent with the supply-chain
+    posture in `~/.claude/security-scanners.md`.
+  - **CHANGELOG section as release body.** The `publish` job now
+    extracts the matching `## [X.Y.Z]` section from `CHANGELOG.md`
+    and uses it as the release body. Replaces the previous
+    auto-generated PR list. Falls back to auto-generation if the
+    section is missing.
+  - **Asset-completeness sanity check.** New step in `publish`
+    asserts: 4 archives, 4 sha256 sidecars, 4 cosign bundles, ≥1
+    SBOM, with archive/sha/bundle counts matching. Fails the
+    workflow loudly before creating a half-populated release page.
+  - **`docs/RELEASING.md`.** Human-readable release runbook: what a
+    release ships, how to cut one, what the trajectory looks like in
+    Actions, what to do when something goes wrong (mid-workflow
+    failure, missing assets, wrong release body, cosign signing
+    issues).
+
 ### Fixed
 
 - **macOS aarch64 release build** (`crates/inferd-engine/cpp/CMakeLists.txt`):

@@ -60,13 +60,13 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           # llamacpp feature builds need the vendored llama.cpp submodule.
           submodules: recursive
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -184,11 +184,28 @@ jobs:
           $stage = "staging/inferd-$env:GITHUB_REF_NAME-${{ matrix.target }}"
           Compress-Archive -Path $stage -DestinationPath $archive
 
-      - uses: actions/upload-artifact@v7
+      # Belt-and-braces verification: anyone who downloads a tarball can
+      # compute `shasum -a 256 -c <archive>.sha256` without any tooling
+      # beyond coreutils. Cosign bundles cover provenance; SHA256
+      # sidecars cover transit/storage corruption.
+      - name: Generate SHA256 sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="inferd-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          cat "$archive.sha256"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: inferd-${{ github.ref_name }}-${{ matrix.target }}
           path: |
             inferd-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+            inferd-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -196,9 +213,9 @@ jobs:
     name: CycloneDX SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
       - name: Generate SBOM
@@ -208,7 +225,7 @@ jobs:
           mv crates/*/*.cdx.json sbom-out/ 2>/dev/null || true
           mv *.cdx.json sbom-out/ 2>/dev/null || true
           ls -la sbom-out
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: sbom
           path: sbom-out/
@@ -218,7 +235,11 @@ jobs:
     needs: [build, sbom]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
+      # Need the repo on disk so we can extract the CHANGELOG section
+      # for the release body.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
         with:
           path: dist/
 
@@ -226,14 +247,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Each `dist/inferd-...-<target>/` dir holds one archive; SBOMs
-          # live under `dist/sbom/`. Move everything to release-assets/.
-          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) \
+          # Each `dist/inferd-...-<target>/` dir holds one archive +
+          # one .sha256 sidecar; SBOMs live under `dist/sbom/`.
+          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \
+                              -o -name '*.sha256' -o -name '*.cdx.json' \) \
             -exec mv {} release-assets/ \;
           ls -la release-assets
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
       - name: Sign artefacts (keyless OIDC)
         run: |
@@ -247,13 +269,72 @@ jobs:
           done
           ls -la
 
+      # Asset-completeness sanity check. The matrix builds 4 platforms,
+      # each producing 1 archive + 1 SHA256 sidecar + (after signing) 1
+      # cosign bundle. SBOMs are 5 .cdx.json files (one per workspace
+      # crate). If any are missing the workflow fails LOUDLY before
+      # publishing rather than shipping a half-populated release page.
+      - name: Verify asset completeness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          archives=$(ls -1 *.tar.gz *.zip 2>/dev/null | wc -l)
+          shas=$(ls -1 *.sha256 2>/dev/null | wc -l)
+          bundles=$(ls -1 *.cosign.bundle 2>/dev/null | wc -l)
+          sboms=$(ls -1 *.cdx.json 2>/dev/null | wc -l)
+          echo "archives=$archives shas=$shas bundles=$bundles sboms=$sboms"
+          fail=0
+          if [ "$archives" -lt 4 ]; then echo "FAIL: expected 4 archives, got $archives" >&2; fail=1; fi
+          if [ "$shas"     -lt 4 ]; then echo "FAIL: expected 4 sha256 sidecars, got $shas" >&2; fail=1; fi
+          if [ "$bundles"  -lt 4 ]; then echo "FAIL: expected 4 cosign bundles, got $bundles" >&2; fail=1; fi
+          if [ "$sboms"    -lt 1 ]; then echo "FAIL: expected at least one SBOM, got $sboms" >&2; fail=1; fi
+          if [ "$archives" -ne "$shas" ] || [ "$archives" -ne "$bundles" ]; then
+            echo "FAIL: archive/sha/bundle counts do not match" >&2
+            fail=1
+          fi
+          [ "$fail" -eq 0 ]
+
+      # Carve the matching `## [x.y.z]` section out of CHANGELOG.md and
+      # use it as the release body. Falls back to auto-generated notes
+      # if the section can't be found (so a release that pre-dated the
+      # carving still publishes cleanly).
+      - name: Extract CHANGELOG section
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Print lines from the matching `## [x.y.z]` heading up to
+          # (but not including) the next `## ` heading. Uses index()
+          # for the heading match so the brackets stay literal across
+          # gawk / mawk / busybox awk dialects.
+          body=$(awk -v marker="## [${version}]" '
+            !found && index($0, marker) == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$body" | tr -d '[:space:]')" ]; then
+            echo "no-section=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::No CHANGELOG section for $version; falling back to auto-generated notes."
+          else
+            echo "no-section=false" >> "$GITHUB_OUTPUT"
+            {
+              echo 'body<<__EOF__'
+              echo "$body"
+              echo '__EOF__'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: |
             release-assets/*.tar.gz
             release-assets/*.zip
+            release-assets/*.sha256
             release-assets/*.cdx.json
             release-assets/*.cosign.bundle
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
+          generate_release_notes: ${{ steps.changelog.outputs.no-section == 'true' }}
           fail_on_unmatched_files: true
