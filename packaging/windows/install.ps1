@@ -27,6 +27,7 @@ param(
     [string]$BinaryPath = "$env:LOCALAPPDATA\inferd\inferd-daemon.exe",
     [string]$LockPath = "$env:LOCALAPPDATA\inferd\inferd.lock",
     [string]$PipePath = "\\.\pipe\inferd-infer",
+    [string]$EmbedPipePath = "\\.\pipe\inferd-infer-embed",
     [string]$LogDir = "$env:LOCALAPPDATA\inferd\logs"
 )
 
@@ -54,7 +55,9 @@ if (-not (Test-Path $LogDir)) {
 # default and shipped a dev-mode echo daemon to operators.
 $bin = '"' + $BinaryPath + '"' +
        " --lock `"$LockPath`"" +
-       " --pipe `"$PipePath`""
+       " --pipe `"$PipePath`"" +
+       " --embed" +
+       " --embed-addr `"$EmbedPipePath`""
 
 Write-Host "Installing service '$ServiceName' from $BinaryPath..."
 

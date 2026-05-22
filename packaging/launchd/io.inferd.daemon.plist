@@ -52,6 +52,9 @@
         <string>__TMPDIR__inferd/infer.sock</string>
         <string>--admin-addr</string>
         <string>__TMPDIR__inferd/admin.sock</string>
+        <string>--embed</string>
+        <string>--embed-addr</string>
+        <string>__TMPDIR__inferd/infer.embed.sock</string>
     </array>
 
     <key>EnvironmentVariables</key>

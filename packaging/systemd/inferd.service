@@ -46,7 +46,9 @@ Type=simple
 ExecStart=%h/.local/bin/inferd-daemon \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
-    --admin-addr %t/inferd/admin.sock
+    --admin-addr %t/inferd/admin.sock \
+    --embed \
+    --embed-addr %t/inferd/infer.embed.sock
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=10s
