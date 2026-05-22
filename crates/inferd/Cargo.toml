@@ -1,5 +1,5 @@
 [package]
-name = "inferd"
+name = "inferdctl"
 description = "Single CLI binary for inferd: status / watch / pull / doctor today; -p prompt mode in a future release. Same gh / kubectl shape — one tool, many subcommands."
 version.workspace      = true
 edition.workspace      = true
@@ -10,12 +10,12 @@ homepage.workspace     = true
 authors.workspace      = true
 
 [[bin]]
-name = "inferd"
+name = "inferdctl"
 path = "src/main.rs"
 
 [dependencies]
-# Reuses the daemon's internals on purpose: `inferd pull` writes
-# into the same CAS store the daemon reads from, and `inferd
+# Reuses the daemon's internals on purpose: `inferdctl pull` writes
+# into the same CAS store the daemon reads from, and `inferdctl
 # status` consumes the admin protocol the daemon publishes.
 # Sharing the type definitions avoids drift.
 inferd-client = { path = "../inferd-client", version = "=0.2.0" }

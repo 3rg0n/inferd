@@ -158,4 +158,5 @@ logs and re-run that job.
 - [release.yml](../.github/workflows/release.yml) — the workflow.
 - [CHANGELOG.md](../CHANGELOG.md) — release notes source of truth.
 - [ADR 0014](adr/0014-inferd-cli-is-a-reference-middleware.md) and
-  successor — CLI binary naming.
+  [ADR 0018](adr/0018-cli-renamed-to-inferdctl.md) — CLI binary
+  naming. Current published name is `inferdctl`.

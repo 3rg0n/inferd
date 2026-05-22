@@ -18,10 +18,11 @@ implementation choices aren't.
 | [0011](0011-shared-content-addressable-model-store.md) | Shared content-addressable model store | Accepted |
 | [0012](0012-one-warm-model-per-inferd-process.md) | One warm model per inferd process (no in-daemon multi-model pool) | Accepted |
 | [0013](0013-inferd-is-the-gateway-not-the-pipe.md) | inferd is the gateway, not the pipe (daemon owns model-specific shaping) | Accepted |
-| [0014](0014-inferd-cli-is-a-reference-middleware.md) | The inferd CLI is a reference middleware, not a privileged surface | Accepted |
+| [0014](0014-inferd-cli-is-a-reference-middleware.md) | The inferd CLI is a reference middleware, not a privileged surface | Superseded by 0018 (rename only) |
 | [0015](0015-v2-wire-protocol-typed-content-blocks.md) | v2 wire protocol — typed content blocks, attachments, tools | Accepted (§"v2 Attachment" amended by 0016) |
 | [0016](0016-consumer-decodes-media-before-sending.md) | Consumer decodes media before sending — daemon stays codec-free | Accepted |
 | [0017](0017-embeddings-on-a-third-socket.md) | Embeddings on a third socket — NDJSON, not HTTP | Accepted |
+| [0018](0018-cli-renamed-to-inferdctl.md) | CLI binary renamed back to `inferdctl` (crates.io squat + operator disambiguation) | Accepted |
 
 ## Writing a new ADR
 

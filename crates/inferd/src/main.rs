@@ -1,26 +1,26 @@
-//! `inferd` — single CLI binary in the gh / kubectl shape.
+//! `inferdctl` — single CLI binary in the gh / kubectl shape.
 //!
 //! Distinct from `inferd-daemon` (the long-running service). The
-//! `inferd` binary is what operators and consumers run from a
+//! `inferdctl` binary is what operators and consumers run from a
 //! shell.
 //!
 //! v0.1 subcommand surface:
 //!
-//! - `inferd status`  — one-shot admin snapshot (the current
+//! - `inferdctl status`  — one-shot admin snapshot (the current
 //!   lifecycle state) as JSON. Exits 0 on `ready`, non-zero
 //!   otherwise. Useful for shell scripts.
-//! - `inferd watch`   — stream admin events forever. Useful
+//! - `inferdctl watch`   — stream admin events forever. Useful
 //!   during the first-boot model download.
-//! - `inferd pull`    — read `~/.inferd/config.json`, fetch
+//! - `inferdctl pull`    — read `~/.inferd/config.json`, fetch
 //!   the configured model into the CAS store
 //!   (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-
 //!   256 with constant-time compare, write the manifest. Bypasses
 //!   the daemon — operates directly on the store.
-//! - `inferd doctor`  — diagnose connectivity. Prints a punch
+//! - `inferdctl doctor`  — diagnose connectivity. Prints a punch
 //!   list of "what's there / what's missing" so consumers can
 //!   debug install issues.
 //!
-//! Planned but not in v0.1: `inferd -p "hello world"` — connect
+//! Planned but not in v0.1: `inferdctl -p "hello world"` — connect
 //! to the running daemon, send a one-shot prompt, stream tokens
 //! to stdout. Replaces the previously-scaffolded `inferd-stdio`
 //! crate (one binary, many shapes — gh / kubectl pattern).
@@ -41,7 +41,7 @@ use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "inferd",
+    name = "inferdctl",
     about = "Single CLI binary for inferd. Subcommands: status, watch, pull, doctor.",
     version,
     arg_required_else_help = true
@@ -112,7 +112,7 @@ async fn main() -> ExitCode {
 
 /// Plain stderr tracing; the CLI's stdout is for machine-readable
 /// output (status JSON, watch events). Anything chatty goes to
-/// stderr so `inferd status | jq` stays clean.
+/// stderr so `inferdctl status | jq` stays clean.
 fn install_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -192,7 +192,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
 
     if llamacpp_entries.is_empty() {
         eprintln!(
-            "inferd: no llamacpp backends in {}; nothing to pull",
+            "inferdctl: no llamacpp backends in {}; nothing to pull",
             config_path.display()
         );
         return Ok(ExitCode::SUCCESS);
@@ -201,7 +201,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
     for entry in &llamacpp_entries {
         let spec: ModelSpec = (&entry.model).into();
         eprintln!(
-            "inferd: pulling {} -> {}",
+            "inferdctl: pulling {} -> {}",
             spec.name,
             store.root().display()
         );
@@ -217,7 +217,7 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
                 .context("fetch task join")?
                 .context("fetch failed")?;
 
-        eprintln!("inferd: blob ready at {}", blob_path.display());
+        eprintln!("inferdctl: blob ready at {}", blob_path.display());
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -291,7 +291,7 @@ async fn cmd_doctor(
                         &label,
                         false,
                         &format!(
-                            "blob missing at {}; run `inferd pull` or set auto_pull=true",
+                            "blob missing at {}; run `inferdctl pull` or set auto_pull=true",
                             blob_path.display()
                         ),
                     );
