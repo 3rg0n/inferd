@@ -11,7 +11,9 @@ use std::path::PathBuf;
 ///
 /// `LlamaCpp` is gated behind the `llamacpp` cargo feature — default
 /// daemon builds only ship the mock adapter (per ADR 0006: lean core,
-/// extensions are separate concerns).
+/// extensions are separate concerns). `OpenAiCompat` is gated behind
+/// the `openai` cargo feature — pulled in only when the operator
+/// wants the outbound HTTPS adapter (ADR 0006 cloud carve-out).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BackendKind {
     /// Deterministic test double — used by integration tests and the
@@ -20,6 +22,26 @@ pub enum BackendKind {
     /// Local llama.cpp backend via FFI (M2). Requires `--model-path`.
     #[cfg(feature = "llamacpp")]
     Llamacpp,
+    /// OpenAI-compatible outbound HTTPS adapter (Phase 5A). Reaches
+    /// any provider speaking the `/v1/chat/completions` wire (OpenAI,
+    /// vLLM, LM Studio, LocalAI, OpenRouter, llama.cpp's HTTP server).
+    /// Requires `--openai-base-url` + `--openai-model`. The API key
+    /// is read from `--openai-api-key` or env (`INFERD_OPENAI_API_KEY`
+    /// then `OPENAI_API_KEY`); pass an empty string to skip the
+    /// `Authorization` header for self-hosted endpoints.
+    #[cfg(feature = "openai")]
+    OpenaiCompat,
+    /// AWS Bedrock-runtime `InvokeModelWithResponseStream` adapter
+    /// (Phase 6B-5). v0.2.0 ships only the Anthropic-on-Bedrock body
+    /// shape — Claude models invoked via Bedrock's pinned
+    /// `anthropic_version: "bedrock-2023-05-31"` payload. Requires
+    /// `--bedrock-region` + `--bedrock-model-id`. Auth resolves from
+    /// `--bedrock-bearer-token` / `AWS_BEARER_TOKEN_BEDROCK` first,
+    /// then the standard `AWS_ACCESS_KEY_ID` /
+    /// `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`)
+    /// chain.
+    #[cfg(feature = "bedrock")]
+    BedrockInvoke,
 }
 
 /// Top-level CLI for `inferd-daemon`.
@@ -87,6 +109,69 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, env = "INFERD_N_GPU_LAYERS")]
     pub n_gpu_layers: i32,
 
+    /// Base URL of the upstream OpenAI-compat endpoint, no trailing
+    /// slash and no path (the adapter appends `/v1/chat/completions`).
+    /// Required when `--backend openai-compat`. Examples:
+    /// `https://api.openai.com`, `http://localhost:11434`,
+    /// `https://openrouter.ai`.
+    #[arg(long, env = "INFERD_OPENAI_BASE_URL")]
+    pub openai_base_url: Option<String>,
+
+    /// Bearer token for the OpenAI-compat upstream. Sent as
+    /// `Authorization: Bearer <value>`. Pass an empty string to skip
+    /// the header entirely for self-hosted endpoints. Resolves from
+    /// `--openai-api-key`, then `INFERD_OPENAI_API_KEY`, then
+    /// `OPENAI_API_KEY` (the de-facto env name most providers' SDKs
+    /// already use).
+    #[arg(long, env = "INFERD_OPENAI_API_KEY", hide_env_values = true)]
+    pub openai_api_key: Option<String>,
+
+    /// Upstream model identifier echoed in the request `model` field
+    /// — provider-specific (e.g. `gpt-4o-mini`, `llama3.1:8b`,
+    /// `meta-llama/Meta-Llama-3-70B-Instruct`). Required when
+    /// `--backend openai-compat`.
+    #[arg(long, env = "INFERD_OPENAI_MODEL")]
+    pub openai_model: Option<String>,
+
+    /// Total request timeout for OpenAI-compat calls, in seconds.
+    /// Default 300 (5 minutes) — long enough for a slow first-token
+    /// from a cold cloud model, short enough to surface stuck
+    /// requests rather than hang forever.
+    #[arg(long, default_value_t = 300, env = "INFERD_OPENAI_TIMEOUT_SECS")]
+    pub openai_timeout_secs: u64,
+
+    /// AWS region the Bedrock endpoint lives in, e.g. `us-east-1`,
+    /// `eu-central-1`. Required when `--backend bedrock-invoke`.
+    /// Used for both the endpoint host and SigV4 signing scope.
+    #[arg(long, env = "INFERD_BEDROCK_REGION")]
+    pub bedrock_region: Option<String>,
+
+    /// Bedrock model id (URL-encoded by the adapter), e.g.
+    /// `anthropic.claude-3-5-sonnet-20241022-v2:0`. Required when
+    /// `--backend bedrock-invoke`.
+    #[arg(long, env = "INFERD_BEDROCK_MODEL_ID")]
+    pub bedrock_model_id: Option<String>,
+
+    /// Pre-issued Bedrock bearer token (`AWS_BEARER_TOKEN_BEDROCK`
+    /// shape, AWS rolled this out in 2025-06). When set, the adapter
+    /// sends `Authorization: Bearer <value>` and skips SigV4. When
+    /// unset, the adapter falls back to the standard
+    /// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional
+    /// `AWS_SESSION_TOKEN`) chain via SigV4 signing.
+    #[arg(long, env = "AWS_BEARER_TOKEN_BEDROCK", hide_env_values = true)]
+    pub bedrock_bearer_token: Option<String>,
+
+    /// Override the Bedrock endpoint host. Empty/absent → default
+    /// `bedrock-runtime.<region>.amazonaws.com`. Useful for VPC
+    /// endpoints / integration tests.
+    #[arg(long, env = "INFERD_BEDROCK_ENDPOINT")]
+    pub bedrock_endpoint: Option<String>,
+
+    /// Total request timeout for Bedrock calls, in seconds. Default
+    /// 300 (5 minutes).
+    #[arg(long, default_value_t = 300, env = "INFERD_BEDROCK_TIMEOUT_SECS")]
+    pub bedrock_timeout_secs: u64,
+
     /// Optional pre-shared API key. When set, TCP clients MUST send
     /// `{"type":"auth","key":"<this value>"}` as their first NDJSON
     /// frame on the connection or the daemon closes the connection.
@@ -112,6 +197,54 @@ pub struct Cli {
     /// Windows. Override for tests / non-default deployments.
     #[arg(long, env = "INFERD_ADMIN_ADDR")]
     pub admin_addr: Option<PathBuf>,
+
+    /// Enable the v2 inference endpoint per ADR 0015. v2 binds on a
+    /// *separate* socket from v1: `infer.v2.sock` on Unix /
+    /// `\\.\pipe\inferd-infer-v2` on Windows. v1 stays on its own
+    /// socket and is unaffected.
+    ///
+    /// Phase 1B: the v2 endpoint accepts and validates v2 requests
+    /// but returns `Error{code:internal, message:"v2 generation not
+    /// implemented"}` because the Backend trait does not yet expose
+    /// `generate_v2`. Use this to integration-test middleware that
+    /// will speak v2 once Phase 2A lands.
+    #[arg(long, env = "INFERD_V2")]
+    pub v2: bool,
+
+    /// Override the default v2 inference endpoint path.
+    /// Mirrors `--uds` / `--pipe` for v2; on Linux/macOS this is a
+    /// UDS path, on Windows a named-pipe path. Has no effect unless
+    /// `--v2` is also set.
+    #[arg(long, env = "INFERD_V2_ADDR")]
+    pub v2_addr: Option<PathBuf>,
+
+    /// Loopback TCP bind address for the v2 endpoint. Mutually
+    /// exclusive with `--v2-addr`. Useful for tests that don't want
+    /// the platform default (UDS / named pipe). Has no effect
+    /// unless `--v2` is also set.
+    #[arg(long, env = "INFERD_V2_TCP", conflicts_with = "v2_addr")]
+    pub v2_tcp: Option<String>,
+
+    /// Enable the embed inference endpoint per ADR 0017. The embed
+    /// endpoint binds on a *separate* socket from v1/v2:
+    /// `infer.embed.sock` on Unix / `\\.\pipe\inferd-infer-embed`
+    /// on Windows. Has no effect unless the active backend's
+    /// `capabilities().embed` is true (capability-driven binding).
+    #[arg(long, env = "INFERD_EMBED")]
+    pub embed: bool,
+
+    /// Override the default embed inference endpoint path.
+    /// Mirrors `--uds` / `--pipe` for embed; on Linux/macOS this is
+    /// a UDS path, on Windows a named-pipe path. Has no effect
+    /// unless `--embed` is also set.
+    #[arg(long, env = "INFERD_EMBED_ADDR")]
+    pub embed_addr: Option<PathBuf>,
+
+    /// Loopback TCP bind address for the embed endpoint. Mutually
+    /// exclusive with `--embed-addr`. Has no effect unless `--embed`
+    /// is also set.
+    #[arg(long, env = "INFERD_EMBED_TCP", conflicts_with = "embed_addr")]
+    pub embed_tcp: Option<String>,
 }
 
 impl Cli {
@@ -207,5 +340,198 @@ mod tests {
         // Ensures clap's `#[command]` derives don't conflict; cheap smoke
         // test that catches lots of misconfigurations.
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn cli_accepts_v2_flag() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--v2",
+            "--v2-tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(cli.v2);
+        assert!(cli.v2_tcp.is_some());
+        assert!(cli.v2_addr.is_none());
+    }
+
+    #[test]
+    fn cli_rejects_v2_addr_with_v2_tcp() {
+        let result = Cli::try_parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--v2",
+            "--v2-tcp",
+            "127.0.0.1:0",
+            "--v2-addr",
+            "/tmp/inferd-v2.sock",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_v2_disabled_by_default() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(!cli.v2);
+    }
+
+    #[test]
+    fn cli_accepts_embed_flag() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--embed",
+            "--embed-tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(cli.embed);
+        assert!(cli.embed_tcp.is_some());
+        assert!(cli.embed_addr.is_none());
+    }
+
+    #[test]
+    fn cli_rejects_embed_addr_with_embed_tcp() {
+        let result = Cli::try_parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--embed",
+            "--embed-tcp",
+            "127.0.0.1:0",
+            "--embed-addr",
+            "/tmp/inferd-embed.sock",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_embed_disabled_by_default() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(!cli.embed);
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn cli_accepts_openai_compat_backend() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "openai-compat",
+            "--openai-base-url",
+            "http://localhost:11434",
+            "--openai-model",
+            "llama3.1:8b",
+            "--openai-api-key",
+            "sk-x",
+            "--openai-timeout-secs",
+            "30",
+        ]);
+        assert_eq!(cli.backend, BackendKind::OpenaiCompat);
+        assert_eq!(
+            cli.openai_base_url.as_deref(),
+            Some("http://localhost:11434")
+        );
+        assert_eq!(cli.openai_model.as_deref(), Some("llama3.1:8b"));
+        assert_eq!(cli.openai_api_key.as_deref(), Some("sk-x"));
+        assert_eq!(cli.openai_timeout_secs, 30);
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn cli_accepts_bedrock_invoke_backend() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "bedrock-invoke",
+            "--bedrock-region",
+            "us-east-1",
+            "--bedrock-model-id",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "--bedrock-bearer-token",
+            "abc123",
+            "--bedrock-timeout-secs",
+            "60",
+        ]);
+        assert_eq!(cli.backend, BackendKind::BedrockInvoke);
+        assert_eq!(cli.bedrock_region.as_deref(), Some("us-east-1"));
+        assert_eq!(
+            cli.bedrock_model_id.as_deref(),
+            Some("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        );
+        assert_eq!(cli.bedrock_bearer_token.as_deref(), Some("abc123"));
+        assert_eq!(cli.bedrock_timeout_secs, 60);
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn cli_bedrock_timeout_defaults_to_300() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "bedrock-invoke",
+            "--bedrock-region",
+            "us-east-1",
+            "--bedrock-model-id",
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+        ]);
+        assert_eq!(cli.bedrock_timeout_secs, 300);
+        assert!(cli.bedrock_bearer_token.is_none());
+        assert!(cli.bedrock_endpoint.is_none());
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn cli_openai_timeout_defaults_to_300() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--backend",
+            "openai-compat",
+            "--openai-base-url",
+            "https://api.openai.com",
+            "--openai-model",
+            "gpt-4o-mini",
+        ]);
+        assert_eq!(cli.openai_timeout_secs, 300);
+        assert!(cli.openai_api_key.is_none());
     }
 }

@@ -20,7 +20,7 @@
 //!   wants to display download progress during first-boot
 //!   bootstrap.
 //!
-//! ## Quickstart
+//! ## Quickstart (v1)
 //!
 //! ```no_run
 //! use inferd_client::{Client, Request, Message, Role, Response};
@@ -58,23 +58,127 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## Quickstart (v2 — typed content blocks, attachments, tools)
+//!
+//! v2 lives on a *separate* socket from v1 per ADR 0015. Use
+//! [`ClientV2`] with `dial_v2_*` instead of `dial_tcp`/`dial_uds` and
+//! the v2 wire types (`RequestV2`, `ContentBlock`, …).
+//!
+//! ```no_run
+//! use inferd_client::{ClientV2, RequestV2, MessageV2, RoleV2, ContentBlock, ResponseV2, ResponseBlock};
+//! use tokio_stream::StreamExt;
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut client = inferd_client::dial_and_wait_ready(
+//!     std::time::Duration::from_secs(30),
+//!     || ClientV2::dial_tcp("127.0.0.1:47322"),
+//! )
+//! .await?;
+//!
+//! let mut stream = client.generate(RequestV2 {
+//!     id: "demo-1".into(),
+//!     messages: vec![MessageV2 {
+//!         role: RoleV2::User,
+//!         content: vec![ContentBlock::Text { text: "hello".into() }],
+//!     }],
+//!     ..Default::default()
+//! })
+//! .await?;
+//!
+//! while let Some(frame) = stream.next().await {
+//!     match frame? {
+//!         ResponseV2::Frame { block: ResponseBlock::Text { delta }, .. } => print!("{delta}"),
+//!         ResponseV2::Frame { block: ResponseBlock::Thinking { .. }, .. } => {}
+//!         ResponseV2::Frame { block: ResponseBlock::ToolUse { name, .. }, .. } => {
+//!             println!("\n[tool_use: {name}]");
+//!         }
+//!         ResponseV2::Done { stop_reason, backend, .. } => {
+//!             println!("\n[done; backend={backend}, stop={stop_reason:?}]");
+//!         }
+//!         ResponseV2::Error { code, message, .. } => {
+//!             eprintln!("[error {code:?}: {message}]");
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Quickstart (embed — single-frame request/response)
+//!
+//! Embed lives on a *third* socket separate from v1 and v2 per ADR
+//! 0017. Use [`EmbedClient`] with `dial_embed_*` and the embed wire
+//! types (`EmbedRequest`, `EmbedResponse`, `EmbedTask`, …). The call
+//! is a single round-trip — no streaming, since an embedding is a
+//! complete vector.
+//!
+//! ```no_run
+//! use inferd_client::{EmbedClient, EmbedRequest, EmbedResponse, EmbedTask};
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut client = inferd_client::dial_and_wait_ready(
+//!     std::time::Duration::from_secs(30),
+//!     || EmbedClient::dial_tcp("127.0.0.1:47323"),
+//! )
+//! .await?;
+//!
+//! let resp = client.embed(EmbedRequest {
+//!     id: "demo-1".into(),
+//!     input: vec!["the quick brown fox".into()],
+//!     dimensions: Some(256),
+//!     task: Some(EmbedTask::RetrievalDocument),
+//! })
+//! .await?;
+//!
+//! match resp {
+//!     EmbedResponse::Embeddings { embeddings, dimensions, .. } => {
+//!         println!("got {} vectors of dim {dimensions}", embeddings.len());
+//!     }
+//!     EmbedResponse::Error { code, message, .. } => {
+//!         eprintln!("[embed error {code:?}: {message}]");
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
 mod admin;
 mod client;
+mod embed_client;
+mod v2_client;
 mod wait;
 
 pub use admin::{AdminClient, AdminEvent};
 pub use client::{Client, ClientError, FrameStream};
+pub use embed_client::{EmbedClient, default_embed_addr};
+pub use v2_client::{ClientV2, FrameStreamV2, default_v2_addr};
 pub use wait::{WaitError, default_admin_addr, dial_and_wait_ready, is_transient_dial_error};
 
 /// Re-exports from `inferd-proto` so consumers don't need a separate
 /// `inferd-proto` dep for the wire types. The proto crate IS the
 /// version-pin contract for protocol compatibility — `inferd-client
-/// 0.1` always uses `inferd-proto 0.1`.
+/// 0.2` always uses `inferd-proto 0.2`.
 pub use inferd_proto::{
     ErrorCode, ImageTokenBudget, MAX_FRAME_BYTES, Message, ProtoError, Request, Resolved, Response,
     Role, StopReason, Usage, VALID_IMAGE_TOKEN_BUDGETS,
+};
+
+/// Re-exports of the v2 wire types per ADR 0015. v2 is shipped as
+/// part of `inferd-client 0.2` so consumers building against v2 can
+/// reach the proto types without a separate `inferd-proto` dep.
+pub use inferd_proto::v2::{
+    Attachment, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResolvedV2, ResponseBlock,
+    ResponseV2, RoleV2, StopReasonV2, Tool, ToolCallId, ToolUseInput, UsageV2,
+};
+
+/// Re-exports of the embed wire types per ADR 0017. Embed lives on
+/// the *third* inferd socket (separate from v1 and v2); the
+/// proto types are re-exported here so consumers don't need a separate
+/// `inferd-proto` dep.
+pub use inferd_proto::embed::{
+    EmbedErrorCode, EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask, EmbedUsage,
 };
