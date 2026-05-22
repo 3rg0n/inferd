@@ -1,0 +1,26 @@
+packaging/windows/install.ps1
+  s_126aec4081f728::t_4e00a44b308d29 49-57
+  s_126aec4081f728::t_855664306a913b 30
+packaging/launchd/install-launchagent.sh
+  s_126aec4081f728::t_19555b0013faf5 5,10-15,44,73-75
+packaging/launchd/io.inferd.daemon.plist
+  s_126aec4081f728::t_1c45e727d929ad 9,11-15
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_05ad86a870cdf4 13-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "acff8dc7a55a4b653dda588579edb8f62166558b",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
