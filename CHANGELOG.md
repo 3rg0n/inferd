@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Windows install: drop SCM service, use Startup-folder shortcut**
+  (`packaging/windows/install.ps1`, new `packaging/windows/uninstall.ps1`,
+  `packaging/README.md`, `.github/workflows/release.yml`). The previous
+  installer registered an SCM service via `sc.exe create`. That path
+  can't work as written: the daemon binary is a foreground console
+  app with no `StartServiceCtrlDispatcher` registration, so SCM
+  killed it after the 30-second start timeout (Event 7000/7009).
+  Beyond the structural mismatch, the install required elevation,
+  the staged binary lived in `%LOCALAPPDATA%` (NetworkService can't
+  read it without an `icacls` grant), and the SDDL stripped
+  `DELETE`/`WRITE_DAC`/`WRITE_OWNER` from Administrators — locking
+  operators out of `sc.exe delete inferd-daemon` even when elevated.
+  The new installer creates a `.lnk` in `shell:startup` pointing at
+  `%LOCALAPPDATA%\inferd\inferd-daemon.exe`, so the daemon launches
+  on every login as the current user. **No elevation required.**
+  Matches the macOS LaunchAgent and Linux systemd --user posture:
+  per-user, no SCM, stops at logout. The new `uninstall.ps1` removes
+  the shortcut, stops the running daemon, and (with `-Purge`)
+  deletes the staged binary, lock, logs, and config. The hardening
+  table in `packaging/README.md` is updated to drop the `sc.exe sdset`
+  service-ACL row that no longer applies.
+
 ### Fixed
 
 - **`ureq` TLS: load OS trust store via `tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).

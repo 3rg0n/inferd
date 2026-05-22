@@ -151,6 +151,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/windows/install.ps1 "$stage/packaging/"
+            cp packaging/windows/uninstall.ps1 "$stage/packaging/"
             cp packaging/README.md "$stage/packaging/"
           else
             cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"

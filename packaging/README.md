@@ -14,7 +14,10 @@ manifests themselves rather than duplicated here.
   to install — the script substitutes per-user paths (HOME and TMPDIR)
   that launchd does not expand in plist values, then bootstraps the
   agent. `packaging/launchd/uninstall-launchagent.sh` reverses it.
-- `windows/install.ps1` — Windows service installer. Run elevated.
+- `windows/install.ps1` — Windows per-user installer. Adds a
+  Startup-folder shortcut to `%LOCALAPPDATA%\inferd\inferd-daemon.exe`
+  so the daemon runs as the logged-in user on every login. **No
+  elevation required.** Pair with `windows/uninstall.ps1` to remove.
 
 The release workflow (`.github/workflows/release.yml`) bundles each
 manifest into the matching platform's archive (M4 packaging
@@ -22,22 +25,25 @@ follow-up, tracked separately from the alpha tag).
 
 ## What hardening is and isn't applied
 
-| Layer | Linux (systemd) | macOS (launchd) | Windows (sc.exe) |
+| Layer | Linux (systemd --user) | macOS (launchd LaunchAgent) | Windows (Startup shortcut) |
 |---|---|---|---|
-| Privilege drop | `CapabilityBoundingSet=` (empty) | LaunchAgent (per-user) | `obj= NT AUTHORITY\NetworkService` |
-| Filesystem isolation | `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` | macOS app sandbox when signed | none |
-| Service-control ACL | (kernel-enforced unit ownership) | (LaunchAgent per-user) | `sc.exe sdset` denies non-admins stop/start/pause/config |
+| Privilege drop | `CapabilityBoundingSet=` (empty) | LaunchAgent (per-user) | per-user (logged-in user only) |
+| Filesystem isolation | `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` | macOS app sandbox when signed | none (per-user profile only) |
+| Service-control ACL | kernel-enforced unit ownership | LaunchAgent per-user | n/a — no SCM service registered |
 | Syscall filter | `SystemCallFilter=@system-service` | n/a | n/a |
-| Restart on crash | `Restart=on-failure` | `KeepAlive` + `ThrottleInterval` | `sc.exe failure restart/2000` |
+| Restart on crash | `Restart=on-failure` | `KeepAlive` + `ThrottleInterval` | re-launched on next login |
 | Memory write+exec | `MemoryDenyWriteExecute=yes` | n/a | n/a |
 | Namespace isolation | `RestrictNamespaces=yes` | n/a | n/a |
 
-The Windows posture is still the weakest of the three (no syscall
-filter, no namespace isolation), but the service-ACL hardening
-applied via `sc.exe sdset` in `install.ps1` closes the most
-practical attack vector: a non-admin local user
-`sc.exe stop inferd-daemon` to displace the daemon and bind the
-named-pipe path themselves.
+All three install paths are per-user, no-elevation. The Windows
+posture is structurally simpler than the v0.2.1 SCM-service shape:
+no `sc.exe`, no NetworkService, no SDDL hardening. The daemon binds
+named pipes with the standard creator-owned DACL. A second user on
+the same machine cannot displace the running daemon because they
+cannot terminate processes in another user's session without admin
+rights. If two users on the same box both install inferd, they each
+get their own daemon and their own pipes — same isolation model as
+the macOS LaunchAgent.
 
 ## After install
 
