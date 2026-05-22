@@ -140,9 +140,26 @@ fn default_admin_addr() -> PathBuf {
 
 async fn cmd_status(admin_addr: &std::path::Path) -> anyhow::Result<ExitCode> {
     let mut admin = dial_admin(admin_addr).await?;
-    let event = admin.recv().await?;
-    println!("{}", admin_event_to_json(&event));
-    let code = if event.status == "ready" {
+    // The daemon emits a capabilities frame before the lifecycle
+    // snapshot when backend construction has completed. Read up to
+    // two frames and use the non-capabilities frame for the
+    // readiness check; fall back to whatever we got otherwise.
+    let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
+            Ok(Ok(event)) => frames.push(event),
+            _ => break,
+        }
+    }
+    let snapshot = match frames.iter().find(|e| e.status != "capabilities") {
+        Some(e) => e,
+        None => match frames.first() {
+            Some(e) => e,
+            None => anyhow::bail!("no admin frame received within 1s"),
+        },
+    };
+    println!("{}", admin_event_to_json(snapshot));
+    let code = if snapshot.status == "ready" {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
