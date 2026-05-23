@@ -7,11 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-23
+
+The "install = work" release. v0.2.0 / v0.2.1 shipped binaries that
+required hand-editing `~/.inferd/config.json`, running `inferdctl pull`
+before first boot, or passing `--backend llamacpp` on the command line
+to actually do real inference. v0.2.2 makes a fresh install
+(installer → real generate **and** real embed work) the contract:
+no mock, no manual config, no pull-first preconditions, no flag
+dance. Validated end-to-end on Linux (WSL), macOS Apple Silicon, and
+Windows 11 before tag.
+
 ### Added
 
-- **`packaging/windows/cleanup-legacy-service.ps1`** — one-shot cleanup
-  helper for operators upgrading from a v0.2.1 install whose SCM
-  service was registered with the hardened SDDL that strips
+- **First-boot default multi-backend config**
+  (`crates/inferd-daemon/src/config.rs`,
+  `crates/inferd-daemon/src/main.rs`). When the daemon starts and no
+  config file exists, it atomically writes a pinned default at
+  `~/.inferd/config.json` declaring two real llamacpp backends:
+  `gemma-4-e4b` (generate, ~5.1 GB) and `embeddinggemma-300m`
+  (embed, ~313 MiB), both with `auto_pull = true` and pinned
+  SHA-256s. Operators no longer have to author a config by hand to
+  get inference; the next daemon boot sees the file, fetches both
+  blobs into the CAS store, and brings up both backends. Closes
+  the install-time DX gap that made every prior v0.2.x cut feel
+  like a developer build.
+
+- **Capability-aware embed routing**
+  (`crates/inferd-daemon/src/router.rs`,
+  `crates/inferd-daemon/src/lifecycle_embed.rs`). The router now
+  exposes `dispatch_embed()` which filters registered backends by
+  `capabilities().embed` so embed requests skip generate-only
+  backends entirely, instead of the previous "first registered
+  backend wins, embed errors out at the backend layer" path. Two
+  new tests use a `GenerateOnly` mock wrapper that overrides
+  `capabilities().embed = false` to exercise the dispatch filter.
+
+- **`packaging/windows/uninstall.ps1`** (new). Removes the Startup
+  shortcut, stops the running daemon, and (with `-Purge`) deletes
+  the staged binary, lock, logs, and `~/.inferd/config.json`. Models
+  in the CAS store at `%LOCALAPPDATA%\models\` are intentionally
+  left intact — re-pulling multi-GB blobs is slow and the operator
+  can wipe the directory themselves.
+
+- **`packaging/windows/cleanup-legacy-service.ps1`** (new) — one-shot
+  cleanup helper for operators upgrading from a v0.2.1 install whose
+  SCM service was registered with the hardened SDDL that strips
   `DELETE`/`WRITE_DAC`/`WRITE_OWNER` from Administrators. The script
   self-elevates via UAC, takes ownership of the
   `HKLM:\SYSTEM\CurrentControlSet\Services\inferd-daemon` registry
@@ -19,12 +60,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prints the reboot-to-flush-SCM-cache instruction. Required because
   the bad SDDL blocks `sc.exe delete` even when run elevated, so
   there is no in-band way for an operator to remove the legacy
-  registration without registry-level surgery. Pair with the new
-  `install.ps1` (Startup-folder shortcut) which surfaces a warning
-  pointing at this script when it detects a legacy registration
-  during install.
+  registration without registry-level surgery. The new `install.ps1`
+  surfaces a warning pointing at this script when it detects a
+  legacy registration during install.
 
 ### Changed
+
+- **`--backend` is now `Option<BackendKind>`**
+  (`crates/inferd-daemon/src/main.rs`). Previously the clap derive
+  defaulted to `BackendKind::Mock` when the flag was unset, which
+  silently short-circuited config-file backend loading and shipped
+  a mock daemon to operators who thought they had llamacpp wired up.
+  Now: omitted flag → defer to `~/.inferd/config.json`; explicit
+  `--backend mock` → mock (useful in test rigs where an unrelated
+  config file is on disk); explicit non-mock → CLI-flag-only path,
+  config `backends:` ignored. This is the change that lets the
+  default-config + Startup-shortcut combo actually serve real
+  inference on first boot.
+
+- **Drop `--backend mock` and pull-first precondition from all 3
+  install manifests** (`packaging/launchd/io.inferd.daemon.plist`,
+  `packaging/launchd/install-launchagent.sh`,
+  `packaging/systemd/inferd.service`,
+  `packaging/windows/install.ps1`). The macOS LaunchAgent template
+  previously had `__BACKEND__` / `__MODEL_PATH__` placeholders the
+  install script never substituted, so the daemon defaulted to the
+  mock backend even after `inferdctl pull` (#9 root cause carried
+  into v0.2). The macOS install script also required `inferdctl
+  pull` to have run first as a precondition, breaking the install =
+  work contract. Both gone in v0.2.2 — installer just runs the
+  daemon with the default config.
+
+- **`--embed` enabled by default in all 3 install manifests**
+  (`packaging/launchd/io.inferd.daemon.plist`,
+  `packaging/systemd/inferd.service`,
+  `packaging/windows/install.ps1`). The embed socket bind is gated
+  on `--embed` per ADR 0017; without it a fresh install never binds
+  the embed pipe and operators see "no embed-capable backend
+  available" on first embed call. Each manifest now passes `--embed`
+  + an explicit `--embed-addr` matching the platform default.
 
 - **Windows install: drop SCM service, use Startup-folder shortcut**
   (`packaging/windows/install.ps1`, new `packaging/windows/uninstall.ps1`,
@@ -49,6 +123,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service-ACL row that no longer applies.
 
 ### Fixed
+
+- **`inferdctl status` tolerates v0.2 capabilities frame; surfaces
+  manifest path on parse error** (`crates/inferd/src/main.rs`). The
+  v0.2.0 daemon began emitting a `capabilities` admin frame before
+  the existing `status` frame; the v0.1 CLI parser treated unknown
+  frames as fatal and exited non-zero. Now the CLI ignores
+  forward-compatible frame types and prints which manifest path
+  failed parsing when it does encounter a malformed frame, instead
+  of a bare serde error.
 
 - **`ureq` TLS: load OS trust store via `tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).
   The previous `features = ["tls"]` used rustls with the bundled `webpki-roots` only, which
