@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-23
+
+Linux post-v0.2.2 follow-up: the v0.2.2 systemd `--user` unit set
+`ProtectHome=read-only`, which blocked the daemon's first-boot
+auto-pull path on Linux (the GGUF blobs and the default-config
+write both live under `$HOME`). Plus a small DX fix that closes the
+last of the v0.2.1 validation findings.
+
+### Added
+
+- **`--llamacpp-embed` / `--llamacpp-embed-pooling` /
+  `--llamacpp-embed-n-ctx` CLI flags**
+  (`crates/inferd-daemon/src/config.rs`,
+  `crates/inferd-daemon/src/main.rs`). Closes #16. The legacy
+  single-model config shape (`{ "model": {...} }`) and dev-mode
+  (no config file) had no path to enable embed: `resolved_backends()`
+  hard-coded `embed: false` when promoting the legacy shape, and the
+  CLI-only llamacpp builder did the same. The new flags mirror the
+  existing `--n-ctx` / `--n-gpu-layers` pattern: when set, they flow
+  into both the legacy promotion path (overriding the hard-coded
+  `embed: false`) and the dev-mode path. Multi-backend configs
+  (`backends:`) keep full per-entry control — the CLI override only
+  fires when the config used the legacy `model:` shape.
+
+### Fixed
+
+- **systemd `--user` unit: carve out CAS store + config dir under
+  `ProtectHome=read-only`** (`packaging/systemd/inferd.service`,
+  closes #18, PR #19). The v0.2.2 unit set
+  `ProtectHome=read-only`, which blocked the daemon's first-boot
+  auto-pull path: the CAS store under `~/.local/share/models/`
+  (and the default config write to `~/.inferd/config.json`) sit
+  inside `$HOME`, and read-only home blocks both. The directive
+  defeated the v0.2.2 "install = work" contract on Linux. Replaces
+  the read-only lock with a `ReadWritePaths=` carve-out for the
+  two paths the daemon legitimately writes — keeps `ProtectHome=`
+  blast-radius reduction across the rest of `$HOME` (ssh keys,
+  browser data, shell history) where it actually matters. Also
+  corrects an incorrect comment: `ReadWritePaths=` is honoured
+  under `ProtectHome=` alone on systemd >= 232; it does **not**
+  require `ProtectSystem=strict`.
+
 ## [0.2.2] - 2026-05-23
 
 The "install = work" release. v0.2.0 / v0.2.1 shipped binaries that
