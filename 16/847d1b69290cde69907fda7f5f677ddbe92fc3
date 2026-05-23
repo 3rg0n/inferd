@@ -1,0 +1,14 @@
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_69ae94fd16b597 25-31,34-37
+  s_126aec4081f728::t_f7153b46d3f655 65-67,69-77,79-83
+  s_126aec4081f728::t_8a9ed567bdabbc 68,78
+  s_5811b7f24eccc0::t_c9042a1a3cf192 86-95
+  s_126aec4081f728::t_5f7865e4fdb884 38-45,49
+  s_126aec4081f728::t_59d02cdbd84256 1-24,32-33,46-48,52-64,84-85,96-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "16847d1b69290cde69907fda7f5f677ddbe92fc3",
+  "prompts": {}
+}
