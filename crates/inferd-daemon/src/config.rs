@@ -121,6 +121,36 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, env = "INFERD_N_GPU_LAYERS")]
     pub n_gpu_layers: i32,
 
+    /// Enable embed capability on the active llamacpp backend. Same
+    /// flag plumbing as `--n-ctx` / `--n-gpu-layers`: when set, this
+    /// CLI value flips `LlamacppEntry::embed = true` for both the
+    /// legacy single-model promotion path (config has `model:`) AND
+    /// the dev-mode path (no config file at all). When unset, the
+    /// effective embed flag comes from the multi-backend
+    /// `backends[].embed` field; legacy single-model and dev-mode
+    /// stay generation-only.
+    ///
+    /// Mirrors the `--embed` flag's posture: this enables the
+    /// *capability*; `--embed` separately decides whether to bind
+    /// the embed socket. Both flags are needed to actually serve
+    /// embed requests.
+    #[arg(long, env = "INFERD_LLAMACPP_EMBED")]
+    pub llamacpp_embed: bool,
+
+    /// Pooling strategy for llamacpp embeddings. Maps to llama.cpp's
+    /// `LLAMA_POOLING_TYPE_*`: 0 = NONE (per-token vectors), 1 = MEAN,
+    /// 2 = CLS, 3 = LAST. When omitted, the model's metadata pooling
+    /// default applies. Has no effect unless `--llamacpp-embed` is
+    /// also set.
+    #[arg(long, env = "INFERD_LLAMACPP_EMBED_POOLING")]
+    pub llamacpp_embed_pooling: Option<i32>,
+
+    /// Llama.cpp embed-side context window in tokens. Default 2048.
+    /// Embed requests are bounded by this; generation is unaffected.
+    /// Has no effect unless `--llamacpp-embed` is also set.
+    #[arg(long, default_value_t = 2048, env = "INFERD_LLAMACPP_EMBED_N_CTX")]
+    pub llamacpp_embed_n_ctx: u32,
+
     /// Base URL of the upstream OpenAI-compat endpoint, no trailing
     /// slash and no path (the adapter appends `/v1/chat/completions`).
     /// Required when `--backend openai-compat`. Examples:
@@ -444,6 +474,41 @@ mod tests {
             "127.0.0.1:0",
         ]);
         assert!(!cli.embed);
+    }
+
+    #[test]
+    fn cli_llamacpp_embed_flags_default_off() {
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+        ]);
+        assert!(!cli.llamacpp_embed);
+        assert!(cli.llamacpp_embed_pooling.is_none());
+        assert_eq!(cli.llamacpp_embed_n_ctx, 2048);
+    }
+
+    #[test]
+    fn cli_accepts_llamacpp_embed_flags() {
+        // Issue #16: dev-mode + legacy single-model configs need a
+        // CLI route to flip embed on without rewriting the config.
+        let cli = Cli::parse_from([
+            "inferd-daemon",
+            "--lock",
+            "/tmp/inferd.lock",
+            "--tcp",
+            "127.0.0.1:0",
+            "--llamacpp-embed",
+            "--llamacpp-embed-pooling",
+            "1",
+            "--llamacpp-embed-n-ctx",
+            "1024",
+        ]);
+        assert!(cli.llamacpp_embed);
+        assert_eq!(cli.llamacpp_embed_pooling, Some(1));
+        assert_eq!(cli.llamacpp_embed_n_ctx, 1024);
     }
 
     #[cfg(feature = "openai")]

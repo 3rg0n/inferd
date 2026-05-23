@@ -652,7 +652,26 @@ async fn build_backends(
     if cli.backend.is_none() {
         #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
         if let Some(cfg) = config {
-            let entries = cfg.resolved_backends();
+            let mut entries = cfg.resolved_backends();
+            // Issue #16: when the config is the legacy single-model
+            // shape (`model:` at top level, not `backends:`),
+            // resolved_backends() promotes it to a one-element list
+            // with embed=false hard-coded. The --llamacpp-embed CLI
+            // flag opts that one entry into embed without forcing the
+            // operator to migrate to the multi-backend `backends:`
+            // shape. We only override on the legacy promotion path
+            // (cfg.model.is_some() && cfg.backends.is_none()) so an
+            // explicit multi-backend config keeps full control.
+            #[cfg(feature = "llamacpp")]
+            if cli.llamacpp_embed
+                && cfg.model.is_some()
+                && cfg.backends.is_none()
+                && let Some(BackendEntry::Llamacpp(e)) = entries.first_mut()
+            {
+                e.embed = true;
+                e.embed_pooling = cli.llamacpp_embed_pooling;
+                e.embed_n_ctx = cli.llamacpp_embed_n_ctx;
+            }
             if !entries.is_empty() {
                 let auto_pull = cfg.auto_pull;
                 let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
@@ -1078,6 +1097,13 @@ async fn build_llamacpp_cli_only(
         model_sha256: Some(model_sha256_bytes),
         n_ctx: cli.n_ctx,
         n_gpu_layers: cli.n_gpu_layers,
+        // CLI-only path: --llamacpp-embed / --llamacpp-embed-pooling
+        // / --llamacpp-embed-n-ctx flow straight into the config so
+        // dev-mode rigs without a config file can still serve embed.
+        // Issue #16 fix.
+        embed: cli.llamacpp_embed,
+        embed_pooling: cli.llamacpp_embed_pooling,
+        embed_n_ctx: cli.llamacpp_embed_n_ctx,
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;
