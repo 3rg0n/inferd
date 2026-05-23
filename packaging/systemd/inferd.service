@@ -83,6 +83,16 @@ Environment=INFERD_LOG_DIR=%S/inferd/logs
 # (forthcoming).
 NoNewPrivileges=yes
 ProtectHome=read-only
+# ProtectHome=read-only locks $HOME, but the daemon legitimately needs
+# to write the CAS model store at ~/.local/share/models/ (blob writes
+# during auto_pull, manifest updates, working-set link at model load)
+# and ~/.inferd/config.json (default-config write on first boot per
+# default_first_boot_config in crates/inferd-daemon/src/config_file.rs).
+# ReadWritePaths= carves both back out without weakening the rest of
+# $HOME's protection. Note: ReadWritePaths= IS honoured under
+# ProtectHome= alone on systemd >= 232; it does not require
+# ProtectSystem=strict (the older comment was wrong on this point).
+ReadWritePaths=%h/.local/share/models %h/.inferd
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -90,10 +100,6 @@ LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-
-# `ReadWritePaths=` is only meaningful with `ProtectSystem=strict`,
-# which we drop above for per-user reasons. RuntimeDirectory= and
-# StateDirectory= already grant write access where it's needed.
 
 [Install]
 WantedBy=default.target
