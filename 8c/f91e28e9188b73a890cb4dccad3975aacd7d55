@@ -1,0 +1,21 @@
+CHANGELOG.md
+  s_126aec4081f728::t_3899eef1ce9757 10-26
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_ec27a9db50d00e 79-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "8cf91e28e9188b73a890cb4dccad3975aacd7d55",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
