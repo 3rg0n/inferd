@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Embed: oversized inputs no longer abort the daemon**
+  (`crates/inferd-engine/src/llamacpp/backend.rs`, closes #20).
+  libllama's encoder asserts `n_ubatch >= n_tokens` and triggers
+  `SIGABRT` (taking the whole daemon down) when an embed input
+  tokenises beyond `n_ubatch`. The default `n_ubatch=512` meant a
+  single ~2 KB English string was enough to crash inferd under
+  modest batched embed load (e.g. cordon-filter sending 32 inputs
+  per frame). Two-part fix: (1) the embed context now sets
+  `n_batch = n_ubatch = embed_n_ctx`, so any input that fits in
+  the configured embed context window also fits in one ubatch
+  (raises the practical ceiling from ~512 to 2048 tokens with
+  EmbeddingGemma 300M defaults); (2) `run_embed` now tokenises
+  each input first and returns
+  `EmbedError::InvalidRequest("input exceeds embed context: T
+  tokens > n_ubatch N")` for anything still too large — mapped on
+  the wire to `code: invalid_request` so the connection stays
+  open and the caller sees a structured per-input error instead
+  of a closed socket.
+
 ## [0.2.3] - 2026-05-23
 
 Linux post-v0.2.2 follow-up: the v0.2.2 systemd `--user` unit set

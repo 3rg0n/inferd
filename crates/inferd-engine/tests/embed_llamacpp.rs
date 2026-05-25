@@ -271,6 +271,82 @@ async fn task_prefix_changes_embedding() {
 }
 
 #[tokio::test]
+async fn long_input_within_n_ubatch_does_not_abort() {
+    // Regression for issue #20. Pre-fix, libllama's encoder asserted
+    // `n_ubatch >= n_tokens` against a default n_ubatch=512 and aborted
+    // the process on any input >~2KB. Sizing n_ubatch to embed_n_ctx
+    // (2048) lets ~6KB inputs through; this test feeds ~4KB to verify
+    // the encoder accepts it instead of crashing.
+    let Some(path) = embed_model_path() else {
+        skipping_msg();
+        return;
+    };
+    let backend = build_backend(path);
+
+    let long: String = "the quick brown fox jumps over the lazy dog. ".repeat(80);
+    assert!(
+        long.len() > 3000,
+        "test fixture must exceed old 512-token cap"
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        backend.embed(req(vec![long.as_str()])),
+    )
+    .await
+    .expect("embed timed out")
+    .expect("embed of long input must succeed (issue #20)");
+
+    assert_eq!(result.embeddings.len(), 1);
+    assert_eq!(result.embeddings[0].len(), 768);
+    assert!(
+        result.usage.input_tokens > 512,
+        "fixture should exceed old default ubatch"
+    );
+    let norm = l2_norm(&result.embeddings[0]);
+    assert!((norm - 1.0).abs() < 1e-3);
+}
+
+#[tokio::test]
+async fn oversized_input_returns_invalid_request_not_abort() {
+    // Regression for issue #20. With a small embed_n_ctx (which clamps
+    // n_ubatch), an input that tokenises to more than n_ubatch must
+    // return a structured InvalidRequest — not abort the process.
+    let Some(path) = embed_model_path() else {
+        skipping_msg();
+        return;
+    };
+    let backend = LlamaCpp::new(LlamaCppConfig {
+        model_path: path,
+        n_ctx: 2048,
+        embed: true,
+        embed_n_ctx: 64, // Force a tiny n_ubatch.
+        ..Default::default()
+    })
+    .expect("construct LlamaCpp with small embed_n_ctx");
+
+    let long: String = "lorem ipsum dolor sit amet ".repeat(50);
+    let result = backend.embed(req(vec![long.as_str()])).await;
+
+    match result {
+        Err(inferd_engine::EmbedError::InvalidRequest(msg)) => {
+            assert!(
+                msg.contains("n_ubatch") || msg.contains("exceeds"),
+                "expected n_ubatch / exceeds in error, got {msg:?}"
+            );
+        }
+        other => panic!("expected InvalidRequest for oversized input, got {other:?}"),
+    }
+
+    // Crucially the backend is still alive and serves a small input.
+    let small = backend
+        .embed(req(vec!["hi"]))
+        .await
+        .expect("backend must still serve small inputs after the rejection");
+    assert_eq!(small.embeddings.len(), 1);
+}
+
+#[tokio::test]
 async fn all_eight_task_prefixes_succeed() {
     let Some(path) = embed_model_path() else {
         skipping_msg();

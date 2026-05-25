@@ -224,6 +224,13 @@ struct EmbedContext {
     /// time. Cached so `embed()` can size the output vectors without
     /// re-querying.
     n_embd: u32,
+    /// Physical batch size (`n_ubatch`) of this context. Cached so
+    /// `run_embed` can reject oversized inputs *before* calling
+    /// `llama_encode` — libllama asserts `n_ubatch >= n_tokens` inside
+    /// the encoder and aborts the whole process, so the structured
+    /// rejection is the only path to keep the daemon alive when a
+    /// caller sends a too-long input (issue #20).
+    n_ubatch: u32,
 }
 
 /// Internal capability snapshot used by `Backend::capabilities()`.
@@ -310,6 +317,14 @@ impl LlamaCpp {
             let embed_ctx_ptr = unsafe {
                 let mut params = ffi::llama_context_default_params();
                 params.n_ctx = config.embed_n_ctx;
+                // libllama's encoder asserts `n_ubatch >= n_tokens`. The
+                // default `n_ubatch` is 512, so a single input >512
+                // tokens (~2KB English) fires GGML_ASSERT and aborts the
+                // whole daemon (issue #20). Size the logical and
+                // physical batch to the full context window so any
+                // input that fits in n_ctx also fits in one ubatch.
+                params.n_batch = config.embed_n_ctx;
+                params.n_ubatch = config.embed_n_ctx;
                 params.embeddings = true;
                 params.pooling_type = config.embed_pooling.unwrap_or(ffi::LLAMA_POOLING_TYPE_MEAN);
                 ffi::llama_init_from_model(model.as_ptr(), params)
@@ -322,9 +337,15 @@ impl LlamaCpp {
             if n_embd <= 0 {
                 return Err(LlamaCppError::ContextInit);
             }
+            // SAFETY: FFI; we just allocated embed_ctx and hold it
+            // exclusively. libllama may clamp `n_ubatch` to `n_batch`
+            // or to model limits, so query the actual value rather
+            // than trusting the requested params.
+            let n_ubatch = unsafe { ffi::llama_n_ubatch(embed_ctx.ptr.as_ptr()) };
             Some(EmbedContext {
                 ctx: embed_ctx,
                 n_embd: n_embd as u32,
+                n_ubatch,
             })
         } else {
             None
@@ -1228,6 +1249,7 @@ fn run_embed(
     let embed = guard.embed.as_ref().ok_or(EmbedError::Unsupported)?;
     let ctx = embed.ctx.ptr.as_ptr();
     let n_embd = embed.n_embd as usize;
+    let n_ubatch = embed.n_ubatch as usize;
 
     if let Some(d) = requested_dim
         && d as usize > n_embd
@@ -1263,6 +1285,19 @@ fn run_embed(
             return Err(EmbedError::InvalidRequest(
                 "input produced zero tokens".into(),
             ));
+        }
+        // Reject oversized inputs *before* calling llama_encode.
+        // libllama asserts `n_ubatch >= n_tokens` inside the encoder
+        // and aborts the whole process on failure (issue #20). The
+        // structured error keeps the daemon alive and gives the
+        // caller a per-input failure they can act on (truncate /
+        // chunk / reject) instead of a closed connection.
+        if tokens.len() > n_ubatch {
+            return Err(EmbedError::InvalidRequest(format!(
+                "input exceeds embed context: {} tokens > n_ubatch {}",
+                tokens.len(),
+                n_ubatch
+            )));
         }
         input_tokens = input_tokens.saturating_add(tokens.len() as u32);
 
