@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-25
+
+Single-bug release: any embed input over ~512 tokens (~2 KB
+English) was crashing the daemon and triggering a systemd restart
+loop. Real bug reported from cordon-filter integration with
+EmbeddingGemma 300M (issue #20). v0.2.4 makes the embed pathway
+robust: oversized inputs are rejected with a structured error and
+the daemon stays alive; inputs that fit the configured embed
+context (default 2048) flow through without hitting the libllama
+encoder assert.
+
 ### Fixed
 
 - **Embed: oversized inputs no longer abort the daemon**
