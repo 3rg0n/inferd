@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binaries that want to find the staged dir without re-deriving the
   same path. Static-build path is untouched (no shared artefacts to
   stage).
+- **Release tarballs ship a `backends/` subdir**
+  (`.github/workflows/release.yml`, closes #25). The release
+  workflow now builds the daemon with `inferd-daemon/dl-backends`
+  (was `inferd-daemon/llamacpp`) and bundles
+  `target/<target>/release/backends/` next to the daemon binary in
+  every platform tarball. Adds a verification step that fails the
+  release loudly if the `backends/` dir is missing or near-empty —
+  the silent-mock-tarball failure mode (v0.1.1, v0.1.4) but at the
+  dl-backends layer. End users extract one tarball, run
+  `./inferd-daemon`, and libllama dlopen's the right ggml backend
+  from the tarball's own `backends/` dir via `$ORIGIN` /
+  `@loader_path` RPATH — no system-wide install required.
 
 ### Changed
 

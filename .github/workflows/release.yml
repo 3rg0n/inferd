@@ -16,10 +16,15 @@ name: Release
 # setup difference vs the x64 image. Held until that's debugged;
 # see #63 for the issue.
 #
-# Builds ship with the `llamacpp` feature so the binary supports
-# real inference out of the box (`--backend llamacpp`). Without
-# this, downloaded tarballs can only run the mock backend, which
-# is not what end users want from a release.
+# Builds ship with the `dl-backends` feature (ADR 0019, v0.3) so
+# the binary supports real inference out of the box, with the
+# strongest available ggml backend (Metal / CUDA / ROCm / Vulkan /
+# CPU) picked at runtime. Tarballs include a `backends/` subdir
+# with the staged shared+MODULE libs (libllama, libggml,
+# libggml-base, ggml-cpu-* CPU variants, plus per-platform
+# accelerator MODULEs); the daemon's RPATH (`$ORIGIN` /
+# `@loader_path`) means it loads them from next-to-the-binary at
+# runtime, no system-wide install required.
 #
 # aarch64-linux uses GitHub's native arm64 runner
 # (`ubuntu-24.04-arm`, free for public repos since January 2025).
@@ -87,16 +92,23 @@ jobs:
       # scratch — adds ~5 min per platform, eliminates the
       # silent-mock-tarball failure mode.
 
-      - name: Build daemon (with llamacpp)
-        # Use `inferd-daemon/llamacpp` (the daemon's own feature) not
-        # `inferd-engine/llamacpp`. The daemon's `llamacpp` feature
-        # activates `inferd-engine/llamacpp` via dep-feature forwarding
-        # AND sets `cfg(feature = "llamacpp")` in the daemon crate so the
+      - name: Build daemon (with dl-backends)
+        # Use `inferd-daemon/dl-backends` (the daemon's own feature) not
+        # `inferd-engine/dl-backends`. The daemon's `dl-backends` feature
+        # activates the engine's `dl-backends` via dep-feature forwarding,
+        # AND it implies the daemon's `llamacpp` feature so the
         # `BackendKind::Llamacpp` match arm compiles in. Passing only
-        # `inferd-engine/llamacpp` compiles the engine code but leaves the
-        # daemon arm gated out — resulting in a binary that rejects
+        # `inferd-engine/dl-backends` compiles the engine code but leaves
+        # the daemon arm gated out — resulting in a binary that rejects
         # `--backend llamacpp` at runtime.
-        run: cargo build --release --bin inferd-daemon --features inferd-daemon/llamacpp --target ${{ matrix.target }}
+        #
+        # ADR 0019: dl-backends builds libllama as a shared lib and
+        # ships every ggml backend (CPU variants + accelerators) as
+        # MODULE libs that libllama dlopen's at runtime. The
+        # build.rs `stage_backends_dir` step copies them all into
+        # `target/<target>/release/backends/` for the staging step
+        # below to bundle.
+        run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target ${{ matrix.target }}
 
       - name: Build inferdctl CLI
         # Single CLI binary in the gh / kubectl shape: subcommands
@@ -139,6 +151,31 @@ jobs:
           fi
           echo "OK: --backend llamacpp present in CLI surface"
 
+      - name: Verify dl-backends staging populated
+        # ADR 0019 / phase 5b. Asserts build.rs's stage_backends_dir
+        # actually ran and produced runtime-loadable libs. Catches the
+        # silent regression where someone flips back to `--features
+        # inferd-daemon/llamacpp` (static path) by accident — that
+        # would build a working binary but ship a tarball with no
+        # backends, which falls through to "no backend registered" at
+        # runtime.
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          if [ ! -d "$dir" ]; then
+            echo "FAIL: $dir does not exist" >&2
+            exit 1
+          fi
+          count=$(ls -1 "$dir" 2>/dev/null | wc -l)
+          if [ "$count" -lt 2 ]; then
+            echo "FAIL: $dir has $count file(s); expected ≥2 (libllama + at least one ggml-cpu variant)" >&2
+            ls -la "$dir" >&2 || true
+            exit 1
+          fi
+          echo "OK: $dir has $count staged libraries"
+          ls -la "$dir"
+
       - name: Stage release contents
         shell: bash
         run: |
@@ -146,6 +183,20 @@ jobs:
           stage="staging/inferd-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "$stage"
           cp README.md LICENSE CHANGELOG.md "$stage/"
+          # ADR 0019: bundle the dl-backends staging dir produced by
+          # build.rs (`stage_backends_dir`). The whole `backends/`
+          # subtree must ship next to the daemon binary — libllama
+          # has RPATH `$ORIGIN` / `@loader_path` baked in, so it
+          # loads MODULE libs from `<bin dir>/` and friends. Fail
+          # loudly if the dir is missing: a release tarball without
+          # backends would silently fall back to "no backend
+          # registered" at runtime.
+          backends_src="target/${{ matrix.target }}/release/backends"
+          if [ ! -d "$backends_src" ] || [ -z "$(ls -A "$backends_src" 2>/dev/null)" ]; then
+            echo "FAIL: $backends_src missing or empty — dl-backends staging didn't run" >&2
+            exit 1
+          fi
+          cp -r "$backends_src" "$stage/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
             cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
@@ -171,7 +222,10 @@ jobs:
                 ;;
             esac
           fi
+          echo "--- stage root ---"
           ls -la "$stage"
+          echo "--- backends/ ---"
+          ls -la "$stage/backends"
 
       - name: Pack tar.gz
         if: matrix.archive == 'tar.gz'
