@@ -154,6 +154,8 @@ async fn main() -> anyhow::Result<()> {
             embed: caps.embed,
             accelerator: caps.accelerator.kind.as_str().to_string(),
             gpu_layers: caps.accelerator.gpu_layers,
+            device_name: caps.accelerator.device_name.clone(),
+            vram_total_bytes: caps.accelerator.vram_total_bytes,
         });
     }
 

@@ -212,6 +212,38 @@ fn pick_accelerator_kind() -> AcceleratorKind {
     }
 }
 
+/// Build the `AcceleratorInfo` that the adapter caches and exposes
+/// through `capabilities()`.
+///
+/// On `dl-backends` builds, walks the ggml device list to find the
+/// device matching `kind` and reads its name + VRAM total. The
+/// CPU branch and the no-match branch both yield `device_name = None,
+/// vram_total_bytes = None`. On the static-build path the device API
+/// is not exercised (the registry only has the one compile-pinned
+/// backend), so the fields stay `None`.
+fn build_accelerator_info(kind: AcceleratorKind, n_gpu_layers: i32) -> AcceleratorInfo {
+    let gpu_layers = n_gpu_layers.max(0) as u32;
+    #[cfg(feature = "dl-backends")]
+    {
+        let details = super::accelerator::probe_device_for_kind(kind);
+        AcceleratorInfo {
+            kind,
+            gpu_layers,
+            device_name: details.name,
+            vram_total_bytes: details.total_bytes,
+        }
+    }
+    #[cfg(not(feature = "dl-backends"))]
+    {
+        AcceleratorInfo {
+            kind,
+            gpu_layers,
+            device_name: None,
+            vram_total_bytes: None,
+        }
+    }
+}
+
 struct State {
     model: ModelHandle,
     ctx: ContextHandle,
@@ -319,10 +351,7 @@ impl LlamaCpp {
             None => (None, None),
         };
 
-        let accelerator = AcceleratorInfo {
-            kind,
-            gpu_layers: config.n_gpu_layers.max(0) as u32,
-        };
+        let accelerator = build_accelerator_info(kind, config.n_gpu_layers);
 
         // Resolve a stable, human-meaningful model label. Try GGUF
         // `general.name` metadata first; fall back to the file stem.
@@ -502,11 +531,11 @@ impl Backend for LlamaCpp {
                 tools: true,
                 thinking: true,
                 embed,
-                accelerator: self.accelerator,
+                accelerator: self.accelerator.clone(),
             },
             None => BackendCapabilities {
                 embed,
-                accelerator: self.accelerator,
+                accelerator: self.accelerator.clone(),
                 ..BackendCapabilities::default()
             },
         }

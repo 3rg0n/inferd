@@ -27,6 +27,15 @@ use crate::ffi;
 use std::ffi::CStr;
 use std::sync::OnceLock;
 
+/// Optional per-device detail that the registry exposes once
+/// `ggml_backend_load_all` has run. Empty fields mean "not available
+/// from this backend" and should surface as `None` to the caller.
+#[derive(Debug, Default, Clone)]
+pub(super) struct DeviceDetails {
+    pub name: Option<String>,
+    pub total_bytes: Option<u64>,
+}
+
 /// Cached probe result. Probing is idempotent and `ggml_backend_load_all`
 /// is process-wide, so caching once is correct.
 static PROBE: OnceLock<AcceleratorKind> = OnceLock::new();
@@ -125,6 +134,101 @@ fn enumerate_registered_backends() -> Vec<AcceleratorKind> {
         }
     }
     out
+}
+
+/// Probe per-device detail for the chosen accelerator.
+///
+/// Walks the ggml device list (`ggml_backend_dev_count` /
+/// `ggml_backend_dev_get`) and returns the first device whose owning
+/// backend registration name maps to `kind` per [`name_to_kind`].
+/// Reads `ggml_backend_dev_name` for the human-readable label and
+/// `ggml_backend_dev_memory(dev, &free, &total)` for VRAM total.
+///
+/// Returns an empty [`DeviceDetails`] for `Cpu` (the registry's CPU
+/// "device" reports system RAM as `total`, which would mislead the
+/// admin status surface) and for any kind with no matching device.
+/// Caller should set `device_name` / `vram_total_bytes` to `None`
+/// when fields are empty.
+pub(super) fn probe_device_for_kind(kind: AcceleratorKind) -> DeviceDetails {
+    if kind == AcceleratorKind::Cpu {
+        // ggml's CPU device reports host RAM as total. That's not a
+        // useful "VRAM" answer and would lie on the admin surface, so
+        // suppress it explicitly. The `kind == Cpu` branch only fires
+        // when the cascade fell through to CPU anyway, in which case
+        // there's nothing accelerator-shaped to report.
+        return DeviceDetails::default();
+    }
+    // SAFETY: FFI; safe to call after `ggml_backend_load_all`, which
+    // probe_accelerator_uncached() ran before this function.
+    let count = unsafe { ffi::ggml_backend_dev_count() };
+    for i in 0..count {
+        // SAFETY: FFI; index bounded by dev_count; pointer owned by
+        // the registry and outlives this call.
+        let dev = unsafe { ffi::ggml_backend_dev_get(i) };
+        if dev.is_null() {
+            continue;
+        }
+        // SAFETY: FFI; reg pointer is owned by the registry.
+        let reg = unsafe { ffi::ggml_backend_dev_backend_reg(dev) };
+        if reg.is_null() {
+            continue;
+        }
+        // SAFETY: FFI; reg_name returns a 'static C string for the
+        // lifetime of the loaded module.
+        let reg_name_ptr = unsafe { ffi::ggml_backend_reg_name(reg) };
+        if reg_name_ptr.is_null() {
+            continue;
+        }
+        // SAFETY: FFI contract — pointer is a NUL-terminated string.
+        let reg_name = match unsafe { CStr::from_ptr(reg_name_ptr) }.to_str() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if name_to_kind(reg_name) != Some(kind) {
+            continue;
+        }
+
+        // Matching device. Read name + VRAM. Either may be missing on
+        // a given backend; treat null/empty as None.
+        let name = read_dev_name(dev);
+        let total_bytes = read_dev_total_memory(dev);
+        return DeviceDetails { name, total_bytes };
+    }
+    DeviceDetails::default()
+}
+
+/// Read `ggml_backend_dev_name`, returning `None` for null / empty /
+/// non-UTF-8 results. Empty strings are dropped because they convey no
+/// information and would round-trip as `""` on the admin surface.
+fn read_dev_name(dev: *mut ffi::ggml_backend_device) -> Option<String> {
+    // SAFETY: FFI; dev validated by caller.
+    let ptr = unsafe { ffi::ggml_backend_dev_name(dev) };
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: FFI contract — NUL-terminated string with module-static
+    // lifetime.
+    let s = unsafe { CStr::from_ptr(ptr) }.to_str().ok()?;
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// Read `ggml_backend_dev_memory(dev, &free, &total)` and return the
+/// `total` value. Drops the free value — it changes second-to-second
+/// and reporting it would force the admin surface to either lie or
+/// re-probe on every emit (see [`crate::backend::AcceleratorInfo`]).
+/// Returns `None` if the backend reports zero (some backends use 0 to
+/// mean "unknown").
+fn read_dev_total_memory(dev: *mut ffi::ggml_backend_device) -> Option<u64> {
+    let mut free: usize = 0;
+    let mut total: usize = 0;
+    // SAFETY: FFI; dev validated by caller; both out pointers are
+    // local stack slots valid for the call.
+    unsafe { ffi::ggml_backend_dev_memory(dev, &mut free, &mut total) };
+    if total == 0 { None } else { Some(total as u64) }
 }
 
 /// Map a `ggml_backend_reg_name` string to the matching

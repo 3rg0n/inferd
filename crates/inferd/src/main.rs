@@ -410,6 +410,13 @@ async fn cmd_doctor(
                              thinking={thinking} embed={embed}"
                         ),
                     );
+                    if let Some(name) = c.device_name.as_deref() {
+                        let vram = c
+                            .vram_total_bytes
+                            .map(format_bytes_short)
+                            .unwrap_or_else(|| "?".to_string());
+                        report_problem("device", true, &format!("{name} vram={vram}"));
+                    }
                 }
             }
         }
@@ -436,6 +443,27 @@ async fn cmd_doctor(
 }
 
 // --- helpers ----------------------------------------------------------
+
+/// Render a byte count as a short human string (e.g. `"24.0 GiB"`,
+/// `"512 MiB"`). Used by `doctor` to print VRAM totals; the binary
+/// (1024-based) form matches what GPU vendors quote.
+fn format_bytes_short(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    const TIB: u64 = GIB * 1024;
+    if n >= TIB {
+        format!("{:.1} TiB", n as f64 / TIB as f64)
+    } else if n >= GIB {
+        format!("{:.1} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{} MiB", n / MIB)
+    } else if n >= KIB {
+        format!("{} KiB", n / KIB)
+    } else {
+        format!("{n} B")
+    }
+}
 
 /// Render an `AdminEvent` as one-line JSON, mirroring the wire
 /// envelope the daemon publishes. We could just relay the raw

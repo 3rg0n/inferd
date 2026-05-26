@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sanity-checking that a particular accelerator's MODULE actually
   loads. The static-build path (no `dl-backends`) still honours the
   v0.2.x compile-time pick.
+- **Device-detail surface on the admin `capabilities` frame**:
+  `device_name` (e.g. `"NVIDIA GeForce RTX 4090"`, `"Apple M2 Pro"`)
+  and `vram_total_bytes`, sourced from
+  `ggml_backend_dev_name` / `ggml_backend_dev_memory` once
+  `ggml_backend_load_all` has run. `inferdctl doctor` renders these
+  on a new `device:` line when present. Backwards-additive on the
+  admin wire — fields are omitted when null, and older subscribers
+  ignore unknown keys per `docs/protocol-v1.md`. CPU path and
+  cloud adapters keep both fields `None`.
 
 ### Changed
 

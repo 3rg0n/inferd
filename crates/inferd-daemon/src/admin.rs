@@ -330,6 +330,8 @@ mod tests {
             embed: false,
             accelerator: "cuda".into(),
             gpu_layers: 99,
+            device_name: Some("NVIDIA GeForce RTX 4090".into()),
+            vram_total_bytes: Some(24 * 1024 * 1024 * 1024),
         });
         // Snapshot is still Starting — Capabilities lives outside it.
         match b.current() {
@@ -366,6 +368,8 @@ mod tests {
             embed: false,
             accelerator: "cpu".into(),
             gpu_layers: 0,
+            device_name: None,
+            vram_total_bytes: None,
         });
         b.publish(StatusEvent::Ready);
 
