@@ -1,0 +1,25 @@
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_4d386fb1f1c55c 282-287,289
+  s_126aec4081f728::t_9a1e2c5609be6b 366-393,395-411,416-496
+  s_126aec4081f728::t_3921cae35ec8bf 288,290-291
+  s_126aec4081f728::t_f861be32c74a55 394
+  s_126aec4081f728::t_0591143139cb34 412-415
+CHANGELOG.md
+  s_126aec4081f728::t_9489fe2a613c6d 33-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1807000d64d51443e2f62ed28dcc90d03f976bb0",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
