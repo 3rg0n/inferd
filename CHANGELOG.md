@@ -30,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin wire — fields are omitted when null, and older subscribers
   ignore unknown keys per `docs/protocol-v1.md`. CPU path and
   cloud adapters keep both fields `None`.
+- **Backend libraries staged into `target/<profile>/backends/`**
+  (`crates/inferd-engine/build.rs`, closes #24). On the
+  `dl-backends` build path, build.rs now copies every shared +
+  MODULE library produced by cmake (`libllama`, `libggml`,
+  `libggml-base`, every `ggml-cpu-<variant>`, plus whichever
+  accelerator MODULEs were enabled — `ggml-metal`, `ggml-cuda`,
+  `ggml-vulkan`, `ggml-hip`) into a stable
+  `<workspace target>/<profile>/backends/` path. Releases (Phase
+  5b) and platform install scripts (Phase 5d) need a predictable
+  staging location; cmake-rs's hash-suffixed `OUT_DIR` is not it.
+  Emits `INFERD_BACKENDS_DIR` as a `cargo:rustc-env` for downstream
+  binaries that want to find the staged dir without re-deriving the
+  same path. Static-build path is untouched (no shared artefacts to
+  stage).
 
 ### Changed
 

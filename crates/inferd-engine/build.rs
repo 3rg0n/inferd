@@ -279,6 +279,16 @@ fn build_llamacpp() {
         println!("cargo:rustc-link-lib=Advapi32");
     }
 
+    // ADR 0019 / phase 5a: stage shared+MODULE libs into a stable
+    // path under target/<profile>/backends/ so release packaging
+    // (the GitHub Actions release.yml staging step, the install
+    // scripts under packaging/) doesn't need to know cmake-rs's
+    // OUT_DIR hash. Skipped on the static-build path — there's
+    // nothing to stage.
+    if dl_backends {
+        stage_backends_dir(&dst, &manifest_dir);
+    }
+
     // bindgen for libllama's public C API.
     let llama_header = llama_src.join("include").join("llama.h");
     let llama_bindings = bindgen::Builder::default()
@@ -351,6 +361,137 @@ fn build_llamacpp() {
         .expect("write mtmd bindgen output");
     println!("cargo:rerun-if-changed={}", mtmd_header.display());
     println!("cargo:rerun-if-changed={}", mtmd_helper_header.display());
+}
+
+/// Stage every shared + MODULE library produced by the cmake build
+/// into `<workspace target>/<profile>/backends/`.
+///
+/// Why: the dl-backends release tarball (Phase 5b) and the per-OS
+/// install scripts need a stable, predictable path to copy from.
+/// cmake-rs places its outputs under
+/// `target/<profile>/build/inferd-engine-<HASH>/out/{bin,lib}/`, and
+/// the hash changes on every dependency rebuild — neither CI nor a
+/// human can hard-code that path.
+///
+/// What gets staged: every file under `OUT_DIR/lib/` and (on Windows)
+/// `OUT_DIR/bin/` whose name starts with `ggml`, `libggml`, `llama`,
+/// or `libllama`. That captures the shared `libllama` itself, the
+/// shared `libggml` / `libggml-base`, every CPU variant
+/// (`ggml-cpu-haswell`, `ggml-cpu-skylakex`, …), and every
+/// accelerator MODULE (`ggml-metal`, `ggml-cuda`, `ggml-vulkan`,
+/// `ggml-hip`). We deliberately do NOT stage `.lib` import libraries
+/// or `.exp` / `.pdb` files — only the runtime-loadable artefacts.
+///
+/// Idempotent: re-staging on every cargo build overwrites stale
+/// copies. Failure to stage a file is logged via
+/// `cargo:warning=` but doesn't fail the build — the static path
+/// already turned this off; an absent file just means there's
+/// nothing for the release to bundle.
+///
+/// `cargo:rustc-env=INFERD_BACKENDS_DIR=<absolute path>` is emitted
+/// so consumers (smoke-test bin, future runtime probe) can find the
+/// staged dir without re-deriving the same path.
+#[cfg(feature = "dl-backends")]
+fn stage_backends_dir(cmake_dst: &std::path::Path, manifest_dir: &std::path::Path) {
+    use std::path::PathBuf;
+
+    // OUT_DIR is target/<profile>/build/inferd-engine-<hash>/out;
+    // walk up to target/<profile>/. Cargo doesn't expose this
+    // directly — the climb is the only portable way.
+    let out_dir = match env::var("OUT_DIR") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => return,
+    };
+    let target_profile_dir = match out_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+    {
+        Some(p) => p.to_path_buf(),
+        None => {
+            println!(
+                "cargo:warning=stage_backends_dir: cannot derive target/<profile> from OUT_DIR={}",
+                out_dir.display()
+            );
+            return;
+        }
+    };
+    let backends_dir = target_profile_dir.join("backends");
+    if let Err(e) = std::fs::create_dir_all(&backends_dir) {
+        println!(
+            "cargo:warning=stage_backends_dir: mkdir {}: {e}",
+            backends_dir.display()
+        );
+        return;
+    }
+
+    // Source candidates: cmake puts the shared libs in `lib/` on Unix
+    // and split across `bin/` (.dll) + `lib/` (.lib import libs) on
+    // Windows. Sweep both; filter by name.
+    let mut sources = vec![cmake_dst.join("lib")];
+    if cfg!(target_os = "windows") {
+        sources.push(cmake_dst.join("bin"));
+    }
+
+    for src_dir in &sources {
+        let entries = match std::fs::read_dir(src_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            // Only runtime-loadable artefacts (skip .lib / .exp /
+            // .pdb / .a). The matrix here is intentionally
+            // permissive on prefix and strict on extension: ggml's
+            // CPU variants ship as `ggml-cpu-haswell.dll` on
+            // Windows but `libggml-cpu-haswell.so` on Linux, and
+            // we want both shapes.
+            let is_runtime = name.ends_with(".dll")
+                || name.ends_with(".so")
+                || name.ends_with(".dylib")
+                || name.contains(".so."); // Linux versioned soname e.g. libllama.so.1
+            if !is_runtime {
+                continue;
+            }
+            let is_ours = name.starts_with("ggml")
+                || name.starts_with("libggml")
+                || name.starts_with("llama")
+                || name.starts_with("libllama");
+            if !is_ours {
+                continue;
+            }
+
+            let dest = backends_dir.join(&name);
+            if let Err(e) = std::fs::copy(&path, &dest) {
+                println!(
+                    "cargo:warning=stage_backends_dir: copy {} -> {}: {e}",
+                    path.display(),
+                    dest.display()
+                );
+            }
+        }
+    }
+
+    // Surface the staged location for downstream consumers.
+    println!(
+        "cargo:rustc-env=INFERD_BACKENDS_DIR={}",
+        backends_dir.display()
+    );
+
+    // Quiet the lint about manifest_dir being unused without
+    // touching the call site — keeping the parameter makes the
+    // signature future-proof if we later need to copy from a
+    // crate-relative path (e.g. shipping a default mmproj alongside
+    // the backends).
+    let _ = manifest_dir;
 }
 
 #[cfg(not(feature = "llamacpp"))]
