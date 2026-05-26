@@ -72,9 +72,20 @@ pub enum TokenEventV2 {
 pub type TokenStreamV2 = Pin<Box<dyn Stream<Item = TokenEventV2> + Send>>;
 
 /// Hardware-acceleration backend the engine adapter is built and
-/// running with. Reflects compile-time GGML feature flags. Pure CPU
-/// builds (no `cuda` / `metal` / `vulkan` / `rocm` features) report
-/// `Cpu`. A build *with* support but where `n_gpu_layers == 0` also
+/// running with.
+///
+/// In a `dl-backends` build (v0.3 / ADR 0019), this is determined at
+/// process start by probing the ggml backend registry once
+/// `ggml_backend_load_all()` has dlopen'd the MODULE libs shipped
+/// next to the daemon. The cascade is Metal → CUDA → ROCm → Vulkan →
+/// CPU; the strongest backend the host actually has wins. The pick
+/// can be overridden with `INFERD_FORCE_BACKEND={cpu|metal|cuda|rocm|vulkan}`.
+///
+/// In the v0.2.x static-build path, this reflects compile-time GGML
+/// feature flags (`cuda` / `metal` / `vulkan` / `rocm` — at most one
+/// is meaningful per build); pure CPU builds report `Cpu`.
+///
+/// A build *with* GPU support but where `n_gpu_layers == 0` also
 /// effectively uses CPU at runtime — see [`AcceleratorInfo::gpu_layers`].
 ///
 /// New variants may be added in future patch releases (NPU, etc.);

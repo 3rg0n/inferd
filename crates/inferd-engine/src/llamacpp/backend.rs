@@ -179,20 +179,36 @@ pub struct LlamaCpp {
     state: Arc<Mutex<State>>,
 }
 
-/// Compile-time GGML backend the engine was built against. Reflects
-/// the cargo features active at build time (`cuda` / `metal` /
-/// `vulkan` / `rocm` — at most one is meaningful per build).
-const fn compile_time_accelerator_kind() -> AcceleratorKind {
-    if cfg!(feature = "cuda") {
-        AcceleratorKind::Cuda
-    } else if cfg!(feature = "metal") {
-        AcceleratorKind::Metal
-    } else if cfg!(feature = "vulkan") {
-        AcceleratorKind::Vulkan
-    } else if cfg!(feature = "rocm") {
-        AcceleratorKind::Rocm
-    } else {
-        AcceleratorKind::Cpu
+/// Pick the active GGML accelerator.
+///
+/// With `dl-backends` on (v0.3 / ADR 0019): runtime probe of the ggml
+/// backend registry. `ggml_backend_load_all` dlopens every MODULE
+/// shipped next to the daemon binary; the probe walks the registered
+/// list and picks per the cascade Metal > CUDA > ROCm > Vulkan > CPU.
+/// Operators can force a specific backend via the
+/// `INFERD_FORCE_BACKEND` env var. Result is cached process-wide.
+///
+/// Without `dl-backends` (v0.2.x compatibility path): static-build
+/// shape, single accelerator picked at compile time per the
+/// `cuda` / `metal` / `vulkan` / `rocm` cargo features.
+fn pick_accelerator_kind() -> AcceleratorKind {
+    #[cfg(feature = "dl-backends")]
+    {
+        super::accelerator::probe_accelerator()
+    }
+    #[cfg(not(feature = "dl-backends"))]
+    {
+        if cfg!(feature = "cuda") {
+            AcceleratorKind::Cuda
+        } else if cfg!(feature = "metal") {
+            AcceleratorKind::Metal
+        } else if cfg!(feature = "vulkan") {
+            AcceleratorKind::Vulkan
+        } else if cfg!(feature = "rocm") {
+            AcceleratorKind::Rocm
+        } else {
+            AcceleratorKind::Cpu
+        }
     }
 }
 
@@ -253,6 +269,16 @@ impl LlamaCpp {
     pub fn new(config: LlamaCppConfig) -> Result<Self, LlamaCppError> {
         ensure_backend_init();
 
+        // ADR 0019: with `dl-backends`, the ggml backend registry is
+        // empty until ggml_backend_load_all() dlopens the MODULE libs
+        // shipped next to the daemon. Run the probe *before*
+        // load_model so the model loader sees the registered
+        // accelerators when it decides how to honour `n_gpu_layers`.
+        // probe_accelerator() is cached, so subsequent adapter
+        // constructions reuse the first probe's result. Compile-time
+        // path is a no-op aside from the constant-folded match below.
+        let kind = pick_accelerator_kind();
+
         let model = load_model(
             &config.model_path,
             config.model_sha256.as_ref(),
@@ -294,7 +320,7 @@ impl LlamaCpp {
         };
 
         let accelerator = AcceleratorInfo {
-            kind: compile_time_accelerator_kind(),
+            kind,
             gpu_layers: config.n_gpu_layers.max(0) as u32,
         };
 

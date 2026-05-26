@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime accelerator probe**
+  (`crates/inferd-engine/src/llamacpp/accelerator.rs`, gated on the
+  new `dl-backends` feature). With `dl-backends` on, the daemon now
+  calls `ggml_backend_load_all()` at first `LlamaCpp::new` and walks
+  the ggml backend registry to pick the strongest backend the host
+  actually has. The cascade is Metal → CUDA → ROCm → Vulkan → CPU;
+  result is cached process-wide. Operators can force a specific
+  pick with `INFERD_FORCE_BACKEND={cpu|metal|cuda|rocm|vulkan}` —
+  useful for forcing CPU on a GPU host for benchmarking or
+  sanity-checking that a particular accelerator's MODULE actually
+  loads. The static-build path (no `dl-backends`) still honours the
+  v0.2.x compile-time pick.
+
 ### Changed
 
 - **Workspace bumped to `0.3.0-dev`.** v0.3 lands runtime accelerator

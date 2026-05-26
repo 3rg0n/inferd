@@ -9,6 +9,8 @@
 //!   F-6).
 //! - [`backend`] — the `Backend` impl: context, generation, cancellation.
 
+#[cfg(feature = "dl-backends")]
+mod accelerator;
 pub mod backend;
 pub mod chat_template;
 pub mod loader;
