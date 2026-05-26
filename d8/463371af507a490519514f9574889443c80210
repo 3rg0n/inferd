@@ -1,0 +1,30 @@
+packaging/launchd/install-launchagent.sh
+  s_126aec4081f728::t_f9428f96bb0eb5 41-45,47-59,61-70,72-75
+  s_126aec4081f728::t_4265ee5f82d8ab 46,60,71,76-77
+packaging/README.md
+  s_126aec4081f728::t_b5bb72f4c31a1f 26-51
+CHANGELOG.md
+  s_126aec4081f728::t_a85965b8ec20b1 59-78
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_fe4840a9821ccf 290-312
+packaging/windows/install.ps1
+  s_126aec4081f728::t_1ad44eaae8d575 58-75,82-86
+packaging/launchd/uninstall-launchagent.sh
+  s_126aec4081f728::t_c80c028ca44284 28-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d8463371af507a490519514f9574889443c80210",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
