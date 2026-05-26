@@ -23,6 +23,7 @@ implementation choices aren't.
 | [0016](0016-consumer-decodes-media-before-sending.md) | Consumer decodes media before sending — daemon stays codec-free | Accepted |
 | [0017](0017-embeddings-on-a-third-socket.md) | Embeddings on a third socket — NDJSON, not HTTP | Accepted |
 | [0018](0018-cli-renamed-to-inferdctl.md) | CLI binary renamed back to `inferdctl` (crates.io squat + operator disambiguation) | Accepted |
+| [0019](0019-runtime-accelerator-detection-via-ggml-backend-dl.md) | Runtime accelerator detection via `GGML_BACKEND_DL` (Metal / CUDA / ROCm / Vulkan / CPU cascade, no NPU) | Proposed |
 
 ## Writing a new ADR
 
