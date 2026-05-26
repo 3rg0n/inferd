@@ -1,0 +1,24 @@
+CHANGELOG.md
+  s_126aec4081f728::t_bc6ed0df361221 47-58
+.github/workflows/release.yml
+  s_126aec4081f728::t_8d1f2aacac494d 19-27
+  s_126aec4081f728::t_36b9837440a6b1 95-99,101-102,104-111
+  s_126aec4081f728::t_8e47a6ee348a14 154-178
+  s_126aec4081f728::t_83a04074f6955e 186-199,225,227-228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d75f19741d056c0025c74c38bd7770d87fa07aa4",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
