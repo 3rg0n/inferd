@@ -55,12 +55,35 @@ if ($SourceBinary -ne "") {
     }
     Write-Host "Staging $SourceBinary -> $BinaryPath"
     Copy-Item -Path $SourceBinary -Destination $BinaryPath -Force
+
+    # ADR 0019 / phase 5d: stage the `backends/` subdir alongside the
+    # binary. The release tarball ships
+    #   inferd-<tag>-<target>/inferd-daemon.exe
+    #   inferd-<tag>-<target>/backends/{ggml,ggml-base,llama,...}.dll
+    # so the source-tree shape mirrors the install-tree shape. On
+    # Windows the OS loader looks in the EXE's directory first, so
+    # placing the DLLs in $installDir (next to the EXE) is enough — no
+    # RPATH needed. Operators who skip -SourceBinary must copy
+    # `backends\` themselves (the message below tells them how).
+    $sourceDir     = Split-Path -Parent $SourceBinary
+    $sourceBackend = Join-Path $sourceDir "backends"
+    if (Test-Path $sourceBackend) {
+        Write-Host "Staging $sourceBackend\* -> $installDir"
+        Copy-Item -Path (Join-Path $sourceBackend "*") -Destination $installDir -Force
+    } else {
+        Write-Warning "no backends\ subdir at $sourceBackend; daemon will fail at runtime if libllama.dll isn't already next to the binary"
+    }
 }
 if (-not (Test-Path $BinaryPath)) {
     Write-Error @"
 inferd-daemon binary not found at $BinaryPath.
 Either copy it there first, or pass -SourceBinary <path> to stage it:
     .\install.ps1 -SourceBinary .\target\release\inferd-daemon.exe
+
+If staging by hand, copy the entire release tarball contents into
+$installDir — including the backends\ subdir's DLLs (libllama,
+libggml, libggml-base, ggml-cpu-*). The daemon dlopen's them from
+the EXE's directory.
 "@
 }
 

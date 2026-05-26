@@ -23,6 +23,32 @@ The release workflow (`.github/workflows/release.yml`) bundles each
 manifest into the matching platform's archive (M4 packaging
 follow-up, tracked separately from the alpha tag).
 
+## ADR 0019: backends/ co-location
+
+v0.3 builds use the dynamic-loader path: `libllama` is a shared
+library and every ggml backend (`libggml`, `libggml-base`,
+`ggml-cpu-*` CPU variants, plus accelerator MODULEs like
+`ggml-metal` / `ggml-cuda` / `ggml-vulkan` / `ggml-hip`) is a MODULE
+library that libllama dlopen's at runtime.
+
+Release tarballs ship those libs in a `backends/` subdir alongside
+the daemon. **At install time the libs must live next to the daemon
+binary**, not under a `backends/` subdir — `ggml_backend_load_all()`
+searches only the executable's own directory and cwd. The included
+install scripts handle this:
+
+| Script | Behavior |
+|---|---|
+| `windows/install.ps1` | When `-SourceBinary` is given, copies `<source>\backends\*.dll` into `%LOCALAPPDATA%\inferd\` next to `inferd-daemon.exe`. Operators staging by hand should do the same. |
+| `launchd/install-launchagent.sh` | Detects a `backends/` sibling of the binary; if `<bindir>/libllama.dylib` is missing, flattens `backends/*.dylib` into `<bindir>/`. Refuses to write to dirs the user doesn't own. |
+| `systemd/inferd.service` | The unit expects `~/.local/bin/inferd-daemon` plus `libllama.so` + `libggml-*.so` siblings in `~/.local/bin/`. From the release tarball: `cp inferd-v*-linux-*/inferd-daemon ~/.local/bin/ && cp inferd-v*-linux-*/backends/* ~/.local/bin/`. |
+
+The daemon binary itself has `RPATH=$ORIGIN` (Linux) /
+`@loader_path` (macOS) baked in at link time, so libllama+ggml-*
+load from `<bindir>/` without `LD_LIBRARY_PATH` or
+`DYLD_LIBRARY_PATH` gymnastics. Windows uses the OS loader's
+exe-dir-first search, no equivalent flag needed.
+
 ## What hardening is and isn't applied
 
 | Layer | Linux (systemd --user) | macOS (launchd LaunchAgent) | Windows (Startup shortcut) |

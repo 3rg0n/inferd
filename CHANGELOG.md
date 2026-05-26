@@ -56,6 +56,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `./inferd-daemon`, and libllama dlopen's the right ggml backend
   from the tarball's own `backends/` dir via `$ORIGIN` /
   `@loader_path` RPATH — no system-wide install required.
+- **Install scripts handle the `backends/` co-location requirement**
+  (closes #27). `ggml_backend_load_all()` only searches the
+  executable's own directory, not subdirs — so the libs need to
+  live next to the daemon, not under `backends/`. Each platform
+  install path now handles this:
+  - `packaging/windows/install.ps1`: when `-SourceBinary` is given,
+    copies `<source>\backends\*.dll` into `%LOCALAPPDATA%\inferd\`
+    next to `inferd-daemon.exe`.
+  - `packaging/launchd/install-launchagent.sh`: detects a
+    `backends/` sibling of the binary; if `<bindir>/libllama.dylib`
+    is missing, flattens `backends/*.dylib` into `<bindir>/`. Refuses
+    to write to dirs the user doesn't own.
+  - `packaging/systemd/inferd.service` (Linux): unchanged unit, but
+    the packaging README now documents the
+    `cp backends/* ~/.local/bin/` step alongside the binary copy.
+  Daemon binary now also has `RPATH=$ORIGIN` (Linux) /
+  `@loader_path` (macOS) baked in at link time
+  (`crates/inferd-engine/build.rs`), so libllama+ggml-* load from
+  the install dir without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
+  gymnastics.
 
 ### Changed
 

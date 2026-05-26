@@ -38,6 +38,43 @@ if [[ ! -f "$BIN" ]]; then
     exit 1
 fi
 
+# ADR 0019 / phase 5d: ggml_backend_load_all() searches the
+# executable's own directory + cwd for ggml-* MODULE libs; subdirs
+# are NOT searched. The release tarball ships them in `backends/`
+# as a subdir; for the daemon to load them at runtime they must live
+# next to the daemon binary, not under `backends/`.
+#
+# Three layouts to support:
+#   1. Release tarball, freshly extracted to e.g. ~/inferd-v0.3.0/.
+#      Contains ./inferd-daemon and ./backends/libllama.dylib +
+#      ./backends/libggml-*.dylib. Flatten `backends/*` into the
+#      parent.
+#   2. Same dir as (1) but already flattened from a prior install.
+#      libllama.dylib already next to the daemon. No-op.
+#   3. Cargo build: $BIN at e.g. ./target/release/inferd-daemon and
+#      libs at ./target/release/backends/. Flatten as in (1).
+#
+# We refuse to write into directories we don't own (e.g. user passed
+# /usr/local/bin/inferd-daemon). The release-tarball common case is
+# safe — extraction puts everything in one user-owned dir.
+BIN_DIR="$(cd "$(dirname "$BIN")" && pwd)"
+if [[ -d "$BIN_DIR/backends" ]] && [[ ! -f "$BIN_DIR/libllama.dylib" ]]; then
+    if [[ -w "$BIN_DIR" ]]; then
+        echo "Flattening $BIN_DIR/backends/*.dylib -> $BIN_DIR/"
+        cp -f "$BIN_DIR/backends/"*.dylib "$BIN_DIR/"
+    else
+        echo "error: $BIN_DIR/backends/ exists but $BIN_DIR is not writable" >&2
+        echo "       Move both inferd-daemon and the contents of backends/ into a user-owned dir," >&2
+        echo "       e.g. ~/.local/bin/, then re-run this script with the new path." >&2
+        exit 1
+    fi
+fi
+if [[ ! -f "$BIN_DIR/libllama.dylib" ]]; then
+    echo "error: $BIN_DIR/libllama.dylib missing — daemon would fail at startup." >&2
+    echo "       Expected layout: inferd-daemon AND libllama.dylib AND libggml*.dylib siblings in one dir." >&2
+    exit 1
+fi
+
 mkdir -p "$AGENTS_DIR"
 mkdir -p "$LOG_DIR"
 

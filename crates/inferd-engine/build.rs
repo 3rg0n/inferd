@@ -287,6 +287,29 @@ fn build_llamacpp() {
     // nothing to stage.
     if dl_backends {
         stage_backends_dir(&dst, &manifest_dir);
+
+        // ADR 0019 / phase 5d: bake `$ORIGIN` (Linux) /
+        // `@loader_path` (macOS) into the final binary's RPATH so
+        // libllama+ggml-* dlopen from the install dir without
+        // `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`. Windows resolves
+        // co-located DLLs via the OS loader's EXE-dir-first search,
+        // no equivalent flag needed.
+        //
+        // Phase 5d install scripts flatten the tarball's `backends/`
+        // subdir into the install dir, so libllama+ggml-* end up
+        // next to the daemon — matching the `$ORIGIN` /
+        // `@loader_path` location.
+        //
+        // `cargo:rustc-link-arg` (no `-bin` suffix) applies to every
+        // downstream binary that links inferd-engine. inferdctl picks
+        // it up too, but inferdctl's default-features build doesn't
+        // enable `dl-backends` so it won't have a libllama dep at
+        // runtime — the RPATH note is harmless.
+        if cfg!(target_os = "linux") {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+        } else if cfg!(target_os = "macos") {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+        }
     }
 
     // bindgen for libllama's public C API.
