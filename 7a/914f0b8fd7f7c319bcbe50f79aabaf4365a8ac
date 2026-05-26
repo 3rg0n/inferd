@@ -1,0 +1,23 @@
+.github/workflows/pages.yml
+  s_126aec4081f728::t_ee2e2724fa5693 1-40
+docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md
+  s_126aec4081f728::t_9fa649cd5e662b 1-208
+docs/adr/README.md
+  s_126aec4081f728::t_10bac75ee0f3b3 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7a914f0b8fd7f7c319bcbe50f79aabaf4365a8ac",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
