@@ -21,6 +21,21 @@ llamacpp             = []
 # feature is on. Set INFERD_TEST_MODEL_PATH to a GGUF file to actually run
 # them; otherwise they skip with an explanatory message.
 llamacpp-integration = ["llamacpp"]
+# v0.3 / ADR 0019: build llama.cpp with GGML_BACKEND_DL=ON so each
+# ggml backend (CPU / Metal / CUDA / Vulkan / HIP) becomes a MODULE
+# library libllama dlopen's at runtime. Implies BUILD_SHARED_LIBS=ON
+# for libllama itself. The daemon picks the strongest available
+# backend per the cascade in ADR 0019. The v0.2.x static-everything
+# path stays available behind plain `llamacpp` for the duration of
+# v0.3 development; once phase 7 install=work passes everywhere this
+# feature becomes the default.
+dl-backends          = ["llamacpp"]
+# Compile-time GPU backend opt-ins. These remain for the static-build
+# path (v0.2.x compatibility) — operators who recompile with
+# `--features cuda` get a single-accelerator static build. With
+# `dl-backends` on, the cmake matrix decides which backend modules to
+# build; these flags become equivalent to "include this backend lib in
+# the dl bundle".
 cuda                 = ["llamacpp"]
 metal                = ["llamacpp"]
 vulkan               = ["llamacpp"]

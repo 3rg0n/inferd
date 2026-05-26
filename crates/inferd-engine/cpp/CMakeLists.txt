@@ -28,7 +28,21 @@ set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+# v0.3 / ADR 0019: GGML_BACKEND_DL requires shared libs (libllama.so /
+# libllama.dylib / llama.dll). Each ggml backend (cpu / metal / cuda /
+# vulkan / hip) builds as a CMake MODULE library that libllama dlopen's
+# at runtime based on what the host actually has. v0.2.x used static
+# everything which forced one accelerator at compile time.
+#
+# RPATH '$ORIGIN' (Linux) / @loader_path (macOS) means the daemon
+# binary loads libllama from the directory it was launched from —
+# tarballs ship daemon + libllama + backends/ as a flat bundle.
+# build.rs sets BUILD_SHARED_LIBS based on the dl-backends feature.
+if (NOT DEFINED INFERD_BUILD_SHARED_LIBS)
+    set(INFERD_BUILD_SHARED_LIBS OFF)
+endif()
+set(BUILD_SHARED_LIBS ${INFERD_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 # llama.cpp sources. Resolved relative to this CMakeLists.txt's
 # location (crates/inferd-engine/cpp/) up to the workspace root,
@@ -136,18 +150,93 @@ if (TARGET ggml-blas)
     add_dependencies(ggml ggml-blas)
 endif()
 
-# llama.cpp's CMake doesn't always install ggml's archives in the
-# location cmake-rs expects; force them into ${CMAKE_INSTALL_PREFIX}/lib
-# so build.rs's link-search picks them up uniformly.
-install(TARGETS llama ggml ggml-base ggml-cpu
+# Install rules. Both static and shared modes need to resolve.
+#
+# - Static mode (v0.2.x default, fallback): all targets are STATIC
+#   libraries; only ARCHIVE artifacts exist. cmake-rs picks them up
+#   from ${CMAKE_INSTALL_PREFIX}/lib for link-time inclusion.
+# - Shared mode (v0.3 / GGML_BACKEND_DL=ON): llama / ggml / ggml-base
+#   become SHARED libraries (.so / .dylib on Unix → lib/, .dll on
+#   Windows → bin/ + import lib in lib/). ggml-cpu / ggml-metal /
+#   ggml-cuda / ggml-vulkan / ggml-hip become MODULE libraries that
+#   libllama dlopen's at runtime — they go in lib/ on Unix and bin/
+#   on Windows alongside the daemon binary's runtime search path.
+install(TARGETS llama ggml ggml-base
+    LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
     OPTIONAL)
+
+# ggml-cpu: in static mode it's a single STATIC archive named
+# `ggml-cpu`. In DL mode + GGML_CPU_ALL_VARIANTS=ON it's split into
+# multiple MODULE libraries — one per uarch — so libllama can dlopen
+# the strongest variant the host supports. We enumerate the full set
+# of known variant names defensively and let install(... OPTIONAL)
+# silently skip the ones that don't exist on this platform / arch.
+if (TARGET ggml-cpu)
+    install(TARGETS ggml-cpu
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        OPTIONAL)
+endif()
+foreach(cpu_variant
+        # x86_64 variants (Intel uarchs + AMD piledriver).
+        ggml-cpu-x64
+        ggml-cpu-sse42
+        ggml-cpu-ivybridge
+        ggml-cpu-piledriver
+        ggml-cpu-sandybridge
+        ggml-cpu-haswell
+        ggml-cpu-skylakex
+        ggml-cpu-cannonlake
+        ggml-cpu-cascadelake
+        ggml-cpu-icelake
+        ggml-cpu-alderlake
+        ggml-cpu-sapphirerapids
+        # ARM variants (Apple Silicon + ARM server / Snapdragon).
+        ggml-cpu-armv7
+        ggml-cpu-armv8
+        ggml-cpu-armv8.2-a
+        ggml-cpu-armv8.6-a
+        ggml-cpu-arm64
+        ggml-cpu-apple
+        ggml-cpu-graviton
+        ggml-cpu-snapdragon
+        # PowerPC / s390x — kept for completeness; build.rs only
+        # exercises x86_64 + aarch64 today.
+        ggml-cpu-power9
+        ggml-cpu-power10
+        ggml-cpu-z14
+        ggml-cpu-z15)
+    if (TARGET ${cpu_variant})
+        install(TARGETS ${cpu_variant}
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION bin
+            OPTIONAL)
+    endif()
+endforeach()
 
 # Install ggml-blas when it was built (macOS with Accelerate).
 # if(TARGET) is used defensively so this install() is a no-op on
 # platforms where ggml-blas doesn't exist.
 if (TARGET ggml-blas)
     install(TARGETS ggml-blas
+        LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
         OPTIONAL)
 endif()
+
+# Backend MODULE libraries that exist only in DL mode. Each one is a
+# loadable plugin libllama discovers at runtime. Install them so the
+# daemon's tarball can ship them next to the binary. if(TARGET)
+# makes each entry a no-op when that backend wasn't enabled.
+foreach(backend ggml-metal ggml-cuda ggml-vulkan ggml-hip ggml-rpc)
+    if (TARGET ${backend})
+        install(TARGETS ${backend}
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION bin
+            OPTIONAL)
+    endif()
+endforeach()

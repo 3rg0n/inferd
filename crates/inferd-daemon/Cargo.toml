@@ -20,6 +20,12 @@ default = []
 # drop the GPU features.
 llamacpp             = ["inferd-engine/llamacpp"]
 llamacpp-integration = ["llamacpp", "inferd-engine/llamacpp-integration"]
+# v0.3 / ADR 0019: dynamic-loader path. libllama becomes a shared
+# library; ggml backends become MODULE libs dlopen'd at runtime;
+# inferd-daemon picks the strongest available accelerator at boot.
+# Implies daemon-side `llamacpp` so `--backend llamacpp` is wired
+# through to the engine adapter.
+dl-backends          = ["llamacpp", "inferd-engine/dl-backends"]
 cuda     = ["inferd-engine/cuda"]
 metal    = ["inferd-engine/metal"]
 vulkan   = ["inferd-engine/vulkan"]
