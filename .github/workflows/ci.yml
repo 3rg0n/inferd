@@ -13,9 +13,9 @@ name: CI
 
 on:
   push:
-    branches: [main, v0.2-dev]
+    branches: [main, v0.2-dev, v0.3-dev]
   pull_request:
-    branches: [main, v0.2-dev]
+    branches: [main, v0.2-dev, v0.3-dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -89,6 +89,70 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --features inferd-engine/llamacpp -- -D warnings
       - run: cargo test --all --features inferd-engine/llamacpp
+
+  dl-backends:
+    # ADR 0019 (v0.3): the dl-backends path builds libllama as a
+    # shared lib and ships every ggml backend (CPU variants on
+    # x86_64, plus per-platform accelerator MODULEs) as a separately
+    # dlopen'd library. This job is the same shape as `llamacpp` but
+    # exercises the runtime accelerator probe + the build.rs
+    # stage_backends_dir hook + the RPATH bake. Once dl-backends
+    # becomes the default (post-Phase 7 install=work validation), the
+    # static `llamacpp` job either retires or shrinks to a no-cuda
+    # x86_64 sanity check.
+    name: ${{ matrix.os }} / dl-backends feature
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install libclang (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy --all-targets --features inferd-engine/dl-backends -- -D warnings
+
+      - name: test
+        run: cargo test --all --features inferd-engine/dl-backends
+
+      # Phase 5a/5b verification: every dl-backends build must
+      # produce a populated `target/debug/backends/` (test build) so
+      # the release pipeline can stage from `target/release/backends/`
+      # later. CI runs the test build, which hits build.rs's
+      # stage_backends_dir at the same hook. Failing here means
+      # release tarballs would also ship empty.
+      - name: Verify backends/ staging populated
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/debug/backends"
+          if [ ! -d "$dir" ]; then
+            echo "FAIL: $dir missing — stage_backends_dir didn't run" >&2
+            exit 1
+          fi
+          count=$(ls -1 "$dir" 2>/dev/null | wc -l)
+          if [ "$count" -lt 2 ]; then
+            echo "FAIL: $dir has $count file(s); expected ≥2" >&2
+            ls -la "$dir" >&2 || true
+            exit 1
+          fi
+          echo "OK: $dir has $count staged libraries"
+          ls -la "$dir"
 
   security:
     name: ${{ matrix.os }} / Tier 5 security regression

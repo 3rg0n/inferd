@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `./inferd-daemon`, and libllama dlopen's the right ggml backend
   from the tarball's own `backends/` dir via `$ORIGIN` /
   `@loader_path` RPATH — no system-wide install required.
+- **CI matrix exercises the `dl-backends` path**
+  (`.github/workflows/ci.yml`, closes #131). New `dl-backends` job
+  runs `cargo clippy + test` on Linux/macOS/Windows with
+  `inferd-engine/dl-backends`, then asserts
+  `target/debug/backends/` is populated by `stage_backends_dir`.
+  Catches regressions where someone breaks the staging hook or the
+  shared-build cmake config without exercising the static
+  `llamacpp` job. The `v0.3-dev` branch is added to the push +
+  pull-request triggers so v0.3 work runs on every commit.
 - **Install scripts handle the `backends/` co-location requirement**
   (closes #27). `ggml_backend_load_all()` only searches the
   executable's own directory, not subdirs — so the libs need to
