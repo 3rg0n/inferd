@@ -285,7 +285,13 @@ fn build_llamacpp() {
     // scripts under packaging/) doesn't need to know cmake-rs's
     // OUT_DIR hash. Skipped on the static-build path — there's
     // nothing to stage.
-    if dl_backends {
+    //
+    // The whole block (call + RPATH bake) is `#[cfg(feature =
+    // "dl-backends")]` because `stage_backends_dir` itself is
+    // feature-gated and the rustc-link-arg lines have nothing to
+    // do on the static path either.
+    #[cfg(feature = "dl-backends")]
+    {
         stage_backends_dir(&dst, &manifest_dir);
 
         // ADR 0019 / phase 5d: bake `$ORIGIN` (Linux) /

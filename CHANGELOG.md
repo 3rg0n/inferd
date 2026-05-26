@@ -86,6 +86,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the install dir without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
   gymnastics.
 
+### Fixed
+
+- **Static `llamacpp` build path was broken on `v0.3-dev`**
+  (`crates/inferd-engine/build.rs`). Phase 5a gated the
+  `stage_backends_dir` helper with `#[cfg(feature = "dl-backends")]`
+  to silence an unused-function lint, but the call site still ran
+  the function unconditionally behind the runtime bool
+  `if dl_backends { stage_backends_dir(…) }` — `cfg!()` doesn't
+  prevent rustc from resolving the symbol. Result: the static CI
+  job (`cargo clippy --features inferd-engine/llamacpp`) failed
+  with `cannot find function stage_backends_dir in this scope` on
+  Linux + macOS. Rewrote both the staging call and the matching
+  `cargo:rustc-link-arg=-Wl,-rpath,…` lines to live inside one
+  `#[cfg(feature = "dl-backends")] { … }` block so rustc only sees
+  them when the feature is on.
+
 ### Changed
 
 - **Workspace bumped to `0.3.0-dev`.** v0.3 lands runtime accelerator
