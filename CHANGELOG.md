@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace bumped to `0.3.0-dev`.** v0.3 lands runtime accelerator
+  detection per [ADR 0019](docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md):
+  Metal / CUDA / ROCm / Vulkan / CPU cascade picked at boot via
+  llama.cpp's `GGML_BACKEND_DL` dynamic-loader path. v0.2.x ships
+  CPU + platform-BLAS only; operators on GPU hardware were leaving an
+  order of magnitude of throughput on the table. NPU paths
+  (OpenVINO / ANE / DirectML-NPU / QNN) deliberately excluded — LLM
+  decode lags CPU+SIMD on every shipping NPU in 2026.
+
 ## [0.2.4] - 2026-05-25
 
 Single-bug release: any embed input over ~512 tokens (~2 KB
