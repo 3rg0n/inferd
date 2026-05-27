@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.4] - 2026-05-27
+
 ### Fixed
 
 - **systemd unit failed first start with `status=226/NAMESPACE` on
