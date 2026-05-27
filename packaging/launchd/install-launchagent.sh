@@ -37,6 +37,10 @@ if [[ ! -f "$BIN" ]]; then
     echo "       Then re-run:     $0 target/release/inferd-daemon" >&2
     exit 1
 fi
+# Resolve to an absolute path so launchd's plist never contains a
+# relative path (launchd resolves Program relative to /, not the
+# caller's cwd, which causes EX_NOINPUT / exit-78 at launch time).
+BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 
 # ADR 0019 / phase 5d: ggml_backend_load_all() searches the
 # executable's own directory + cwd for ggml-* MODULE libs; subdirs
@@ -58,10 +62,14 @@ fi
 # /usr/local/bin/inferd-daemon). The release-tarball common case is
 # safe — extraction puts everything in one user-owned dir.
 BIN_DIR="$(cd "$(dirname "$BIN")" && pwd)"
-if [[ -d "$BIN_DIR/backends" ]] && [[ ! -f "$BIN_DIR/libllama.dylib" ]]; then
+if [[ -d "$BIN_DIR/backends" ]]; then
     if [[ -w "$BIN_DIR" ]]; then
-        echo "Flattening $BIN_DIR/backends/*.dylib -> $BIN_DIR/"
-        cp -f "$BIN_DIR/backends/"*.dylib "$BIN_DIR/"
+        echo "Flattening $BIN_DIR/backends/ -> $BIN_DIR/"
+        # Copy both .dylib (shared libs: libllama, libggml, libggml-base) and
+        # .so (backend MODULE libs: libggml-metal.so, libggml-cpu.so, libggml-blas.so).
+        # ggml_backend_load_all uses .so extension on all Unix platforms including macOS.
+        # Run as a subshell with nullglob so missing globs don't abort the script.
+        (shopt -s nullglob; cp -f "$BIN_DIR/backends/"*.dylib "$BIN_DIR/backends/"*.so "$BIN_DIR/" 2>/dev/null || true)
     else
         echo "error: $BIN_DIR/backends/ exists but $BIN_DIR is not writable" >&2
         echo "       Move both inferd-daemon and the contents of backends/ into a user-owned dir," >&2

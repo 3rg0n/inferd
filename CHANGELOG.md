@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS RPATH missing from daemon binary with `dl-backends`**
+  (`crates/inferd-daemon/build.rs`, closes #26). `cargo:rustc-link-arg`
+  emitted by a library crate's build script does NOT propagate to
+  downstream binaries — only `rustc-link-search` and `rustc-link-lib`
+  do. The daemon binary therefore had no `LC_RPATH` entries, and dyld
+  reported "no LC_RPATH's found" at startup. Fixed by adding a
+  `build.rs` to `inferd-daemon` that emits
+  `-Wl,-rpath,@loader_path` and `-Wl,-rpath,@loader_path/backends`
+  directly from the final binary's own link step. The daemon now starts
+  from any directory without `DYLD_LIBRARY_PATH`.
+- **`install-launchagent.sh` missed `.so` backend modules when
+  flattening `backends/`** (`packaging/launchd/install-launchagent.sh`).
+  `ggml_backend_load_all()` uses the `.so` extension on all Unix
+  platforms including macOS; the Metal and CPU backend MODULEs are
+  `libggml-metal.so` and `libggml-cpu.so`. The previous flatten step
+  only copied `*.dylib`, so neither backend was ever loaded and the
+  daemon fell through to "no registered backends → fail". Fixed by
+  using `nullglob` and copying both `*.dylib` and `*.so` from
+  `backends/` into the install dir.
+- **`install-launchagent.sh` passed relative binary path to launchd**
+  (`packaging/launchd/install-launchagent.sh`). launchd resolves a
+  relative `Program` path relative to `/`, not the caller's cwd, so
+  `./target/release/inferd-daemon` silently became
+  `/target/release/inferd-daemon` and the service exited immediately
+  (exit 78 / `ENOEXEC`). The script now resolves `$BIN` to an
+  absolute path immediately after the existence check.
+- **`dl-backends` first-boot config wrote `n_gpu_layers: 0`**
+  (`crates/inferd-daemon/src/config_file.rs`). With dynamic backends the
+  accelerator is picked at runtime; shipping `n_gpu_layers: 0` means
+  Metal is selected but no layers are offloaded, matching CPU speed.
+  The first-boot default for `dl-backends` builds is now `-1` (offload
+  all layers), which is correct for any GPU path (llama.cpp clamps it to
+  0 when no GPU device exists, so CPU-only hosts are unaffected).
+  Operators who want explicit CPU mode can set `n_gpu_layers: 0` in
+  `~/.inferd/config.json` after first boot.
+
 ### Added
 
 - **Runtime accelerator probe**

@@ -427,12 +427,25 @@ pub fn default_config_path() -> PathBuf {
 /// extra cloud entries, …) edit the file after first boot — the
 /// daemon never overwrites an existing config.
 pub fn default_first_boot_config() -> ConfigFile {
+    // With dl-backends the accelerator is picked at runtime (Metal / CUDA /
+    // CPU); -1 means "offload all layers" which is correct for any GPU path.
+    // On a CPU-only host the value is harmless — llama.cpp clamps it to 0
+    // when no GPU device is present.  Operators who want to force CPU can
+    // set n_gpu_layers: 0 in ~/.inferd/config.json after first boot.
+    //
+    // Without dl-backends a single accelerator is compiled in.  Defaulting
+    // to 0 keeps the existing v0.2.x behaviour (static CPU build).
+    #[cfg(feature = "dl-backends")]
+    let default_gpu_layers: i32 = -1;
+    #[cfg(not(feature = "dl-backends"))]
+    let default_gpu_layers: i32 = 0;
+
     ConfigFile {
         auto_pull: true,
         models_home: None,
         model: None,
         n_ctx: default_n_ctx(),
-        n_gpu_layers: 0,
+        n_gpu_layers: default_gpu_layers,
         admin_addr: None,
         backends: Some(vec![
             BackendEntry::Llamacpp(LlamacppEntry {
@@ -448,7 +461,7 @@ pub fn default_first_boot_config() -> ConfigFile {
                     license: Some("gemma".into()),
                 },
                 n_ctx: default_n_ctx(),
-                n_gpu_layers: 0,
+                n_gpu_layers: default_gpu_layers,
                 embed: false,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
@@ -467,7 +480,7 @@ pub fn default_first_boot_config() -> ConfigFile {
                     license: Some("gemma".into()),
                 },
                 n_ctx: default_embed_n_ctx(),
-                n_gpu_layers: 0,
+                n_gpu_layers: default_gpu_layers,
                 embed: true,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
