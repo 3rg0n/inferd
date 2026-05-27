@@ -38,13 +38,15 @@
   </div>
   <div class="masthead-rule"></div>
   <div class="masthead-meta">
-    <span>v0.2.4</span>
+    <span>v0.3.0</span>
     <span class="dot">·</span>
     <span>MIT</span>
     <span class="dot">·</span>
     <span>Rust</span>
     <span class="dot">·</span>
     <span>Linux · macOS · Windows</span>
+    <span class="dot">·</span>
+    <span>Metal · CUDA · ROCm · Vulkan · CPU</span>
   </div>
 </header>
 
@@ -60,15 +62,15 @@
     <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small NDJSON-over-IPC protocol. It is plumbing, not a product.
   </p>
   <div class="hero-actions">
-    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.2.4</a>
+    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.3.0</a>
     <a class="btn ghost" href="https://github.com/3rg0n/inferd">Read the source</a>
   </div>
-  <pre class="hero-snippet" aria-label="example session"><span class="prompt">$</span> inferdctl status
-daemon      <span class="ok">ready</span>
-backend     llamacpp · gemma-4-e4b · cpu
-embed       llamacpp · embeddinggemma-300m · 768→256 MRL
-queue       0 active · 0 queued · cap 1+10
-uptime      4h 12m</pre>
+  <pre class="hero-snippet" aria-label="example session"><span class="prompt">$</span> inferdctl doctor
+[ <span class="ok">ok</span> ] config:    loaded ~/.inferd/config.json (auto_pull=true)
+[ <span class="ok">ok</span> ] manifest:  gemma-4-e4b · embeddinggemma-300m
+[ <span class="ok">ok</span> ] admin:     ready
+[ <span class="ok">ok</span> ] backend:   llamacpp accelerator=metal gpu_layers=99 embed=true
+[ <span class="ok">ok</span> ] device:    Apple M2 Pro vram=16.0 GiB</pre>
 </section>
 
 <section id="what" class="section">
@@ -153,6 +155,13 @@ uptime      4h 12m</pre>
                                       │
                                       ▼
                     ┌──────────────────────────────────────┐
+                    │   runtime accelerator probe (v0.3)   │
+                    │   metal · cuda · rocm · vulkan · cpu │
+                    │   strongest available, picked at boot │
+                    └──────────────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────┐
                     │  shared content-addressable store    │
                     │  $MODELS_HOME/blobs/sha256/aa/...    │
                     └──────────────────────────────────────┘</pre>
@@ -164,7 +173,7 @@ uptime      4h 12m</pre>
       </article>
       <article class="card">
         <h3>Embed</h3>
-        <p>Send text, get a 768-dim vector — or 256-dim via Matryoshka truncation. Bounded inputs return structured errors instead of crashing the daemon (issue #20, fixed in v0.2.4).</p>
+        <p>Send text, get a 768-dim vector — or 256-dim via Matryoshka truncation. Bounded inputs return structured errors instead of crashing the daemon (issue #20, fixed in v0.3.0).</p>
       </article>
       <article class="card">
         <h3>Admin</h3>
@@ -183,6 +192,13 @@ uptime      4h 12m</pre>
 {"type":"token","id":"r1","text":"!"}
 {"type":"done","id":"r1","content":"Hello there!","usage":{"prompt_tokens":12,"completion_tokens":3},"backend":"llamacpp"}</pre>
     </details>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">New in v0.3</p>
+      <p>
+        The release tarball ships every ggml backend — Metal, CUDA, ROCm, Vulkan, plus per-CPU-feature variants — as separately loadable shared libraries. At boot, inferd probes the host hardware and picks the strongest backend available. The daemon binary is the same on every machine; the accelerator pick happens at runtime, not at compile time. Operators can override with <code>INFERD_FORCE_BACKEND</code> for benchmarking. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md" class="ext">ADR 0019 ↗</a>
+      </p>
+    </aside>
   </div>
 </section>
 
@@ -200,31 +216,32 @@ uptime      4h 12m</pre>
       <article class="install-card">
         <h3 class="os">Linux</h3>
         <p class="install-desc">systemd <code>--user</code> unit. No sudo, no system-wide service.</p>
-<pre>curl -L \
-  https://github.com/3rg0n/inferd/releases/download/v0.2.4/inferd-v0.2.4-x86_64-unknown-linux-gnu.tar.gz \
-  -o inferd.tar.gz
-tar xzf inferd.tar.gz
-./packaging/systemd/install-user.sh</pre>
+<pre>tar xzf inferd-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+cd  inferd-v0.3.0-x86_64-unknown-linux-gnu
+mkdir -p ~/.local/bin
+cp inferd-daemon inferdctl backends/* ~/.local/bin/
+mkdir -p ~/.config/systemd/user
+cp packaging/inferd.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now inferd</pre>
       </article>
 
       <article class="install-card">
         <h3 class="os">macOS</h3>
         <p class="install-desc">launchd <code>LaunchAgent</code>, per-user, Apple Silicon.</p>
-<pre>curl -L \
-  https://github.com/3rg0n/inferd/releases/download/v0.2.4/inferd-v0.2.4-aarch64-apple-darwin.tar.gz \
-  -o inferd.tar.gz
-tar xzf inferd.tar.gz
-./packaging/launchd/install-launchagent.sh</pre>
+<pre>tar xzf inferd-v0.3.0-aarch64-apple-darwin.tar.gz
+cd  inferd-v0.3.0-aarch64-apple-darwin
+./packaging/install-launchagent.sh ./inferd-daemon</pre>
       </article>
 
       <article class="install-card">
         <h3 class="os">Windows</h3>
         <p class="install-desc">Per-user Startup-folder shortcut. No SCM service.</p>
-<pre>Invoke-WebRequest `
-  https://github.com/3rg0n/inferd/releases/download/v0.2.4/inferd-v0.2.4-x86_64-pc-windows-msvc.zip `
-  -OutFile inferd.zip
-Expand-Archive inferd.zip
-.\packaging\windows\install-user.ps1</pre>
+<pre>Expand-Archive inferd-v0.3.0-x86_64-pc-windows-msvc.zip
+cd  inferd-v0.3.0-x86_64-pc-windows-msvc
+powershell -ExecutionPolicy Bypass `
+  -File .\packaging\install.ps1 `
+  -SourceBinary .\inferd-daemon.exe</pre>
       </article>
     </div>
 
@@ -268,7 +285,7 @@ Expand-Archive inferd.zip
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Status</p>
-      <p>Alpha · v0.2.4</p>
+      <p>Alpha · v0.3.0</p>
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Set in</p>

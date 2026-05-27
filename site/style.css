@@ -361,6 +361,27 @@ h1.display em {
   color: var(--muted-dark);
 }
 
+/*
+ * Standalone variant used in §3 to spotlight the v0.3 accelerator
+ * detection. Lives outside the two-col grid, so it needs its own
+ * typography knobs.
+ */
+.callout-block {
+  margin-top: 36px;
+  max-width: 760px;
+}
+.callout-block p:not(.callout-label) {
+  font-family: var(--display);
+  font-size: 19px;
+  line-height: 1.6;
+  font-weight: 300;
+}
+.callout-block .ext {
+  font-family: var(--mono);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
 /* ---------- §2 numbered list ---------- */
 
 .numbered {
