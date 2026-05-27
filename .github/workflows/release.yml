@@ -110,7 +110,17 @@ jobs:
         with:
           cuda: '12.6.0'
           method: 'network'
-          sub-packages: '["nvcc","cudart","cudart-dev","cublas","cublas-dev","cccl"]'
+          # Package names: Jimver maps each entry to `cuda-<name>-<MAJOR>-<MINOR>`
+          # *unless* the name starts with `lib`, in which case it's used
+          # verbatim. CUDA 12.x renamed the cublas packages to
+          # `libcublas-12-6` / `libcublas-dev-12-6`, so the sub-package
+          # entries here MUST be `libcublas` / `libcublas-dev` — the
+          # un-prefixed `cublas` / `cublas-dev` resolve to nonexistent
+          # `cuda-cublas-12-6` packages and `apt-get install` fails with
+          # `Unable to locate package cuda-cublas-12-6`. nvcc / cudart /
+          # cccl keep the un-prefixed form because their NVIDIA package
+          # names *do* use the `cuda-` prefix.
+          sub-packages: '["nvcc","cudart","cudart-dev","libcublas","libcublas-dev","cccl"]'
           linux-local-args: '["--toolkit"]'
 
       # No rust-cache for release builds. Release runs are rare,
@@ -171,15 +181,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rel="target/${{ matrix.target }}/release"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            bin="target/${{ matrix.target }}/release/inferd-daemon.exe"
-          else
-            bin="target/${{ matrix.target }}/release/inferd-daemon"
+            bin="$rel/inferd-daemon.exe"
+            # dl-backends links the daemon against llama.dll, which
+            # build.rs stages into $rel/backends/. Windows resolves
+            # imported DLLs at process startup from the exe's own dir +
+            # PATH — it does NOT search subdirs. So `inferd-daemon.exe
+            # --help` fails to start (exit 127, "0xC0000135 not
+            # found") with llama.dll one level down. install.ps1
+            # already flattens backends/*.dll next to the exe at
+            # install time; do the equivalent here so the verify step
+            # mirrors what real users see post-install.
+            cp -v "$rel"/backends/*.dll "$rel/" 2>/dev/null || true
           fi
+          [ "${{ runner.os }}" = "Windows" ] || bin="$rel/inferd-daemon"
           ls -la "$bin"
           if ! "$bin" --help 2>&1 | grep -qE 'llamacpp'; then
             echo "FAIL: built binary does NOT advertise --backend llamacpp" >&2
-            "$bin" --help >&2
+            "$bin" --help >&2 || true
             exit 1
           fi
           echo "OK: --backend llamacpp present in CLI surface"

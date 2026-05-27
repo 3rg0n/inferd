@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-05-27
+
+### Fixed
+
+- **`release.yml` Linux CUDA install resolved nonexistent `cuda-cublas-12-6` package**
+  (`.github/workflows/release.yml`). The Jimver/cuda-toolkit action
+  expands a sub-package name without a `lib` prefix to
+  `cuda-<name>-<MAJOR>-<MINOR>` (e.g. `cuda-nvcc-12-6`). CUDA 12.x
+  ships cublas as `libcublas-12-6` / `libcublas-dev-12-6`, not
+  `cuda-cublas-12-6`, so `apt-get install` failed at the toolkit
+  install step and rc.1's Linux x86_64 build never reached `cargo
+  build`. Sub-packages are now `["nvcc","cudart","cudart-dev",
+  "libcublas","libcublas-dev","cccl"]` — the `lib`-prefixed forms
+  are passed through verbatim by the action and resolve correctly.
+- **`release.yml` Windows verify step couldn't load `llama.dll` from `backends/`**
+  (`.github/workflows/release.yml`). `dl-backends` builds link the
+  daemon against `llama.dll`, which `build.rs` stages into
+  `backends/`. The Windows DLL loader resolves imported DLLs at
+  process startup from the exe's own dir + PATH only — it does not
+  search subdirectories. So `inferd-daemon.exe --help` aborted with
+  exit 127 (`STATUS_DLL_NOT_FOUND`) before `main()` could run.
+  `install.ps1` already flattens `backends\\*.dll` next to the exe at
+  install time; the verify step now does the equivalent in-place so
+  it mirrors the post-install layout. Linux + macOS unaffected
+  (`$ORIGIN/backends` and `@loader_path/backends` are baked into the
+  daemon's RPATH).
+
 ## [0.3.0-rc.1] - 2026-05-27
 
 ### Changed
