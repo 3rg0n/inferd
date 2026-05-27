@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **systemd unit failed first start with `status=226/NAMESPACE` on
+  fresh installs** (`packaging/systemd/inferd.service`).
+  `ReadWritePaths=%h/.local/share/models %h/.inferd` requires both
+  paths to exist before namespace setup; on a fresh box neither does
+  yet (the daemon normally creates them on first boot), so the unit
+  aborted before `ExecStart` ran. Added `ExecStartPre=/usr/bin/mkdir
+  -p %h/.inferd %h/.local/share/models` so the unit is self-sufficient
+  on first start. mkdir -p is idempotent and runs unprivileged under
+  the user instance.
+- **Linux x86_64 release tarball shipped `libggml-cuda.so` without
+  its CUDA runtime deps** (`.github/workflows/release.yml`).
+  `ldd backends/libggml-cuda.so` on the consumer machine showed
+  `libcudart.so.12 => not found` and `libcublas.so.12 => not found`,
+  and ggml's `dlopen()` swallows the missing-deps failure silently —
+  so the v0.3 runtime accelerator probe registered only `Cpu` and the
+  daemon ran with `gpu_layers=0` on every NVIDIA host that had no
+  system-wide CUDA install. The release workflow now bundles the
+  required CUDA runtime libs into `backends/` next to the MODULE,
+  forces `DT_RUNPATH=$ORIGIN` on libggml-cuda.so via patchelf
+  (idempotent), and re-runs `ldd` after bundling to fail loudly if
+  any dep still doesn't resolve. Discovery is dynamic (parses ldd's
+  "not found" lines) so the bundled set tracks ggml's actual NEEDED
+  entries instead of a hard-coded list. NVIDIA's EULA explicitly
+  permits redistribution of these specific runtime libs.
+
 ## [0.3.0-rc.3] - 2026-05-27
 
 ### Fixed

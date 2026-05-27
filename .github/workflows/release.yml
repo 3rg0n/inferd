@@ -275,6 +275,111 @@ jobs:
           fi
           echo "OK: libggml-metal MODULE present in $dir"
 
+      # Bundle the CUDA runtime libs (libcudart, libcublas, libcublasLt)
+      # next to libggml-cuda.so. Without this, the daemon's runtime
+      # accelerator probe (ADR 0019) silently falls back to CPU on every
+      # NVIDIA host that downloads the tarball: ggml uses dlopen() on the
+      # MODULE and dlopen quietly fails with "libcudart.so.12: cannot open
+      # shared object file" if the deps aren't resolvable. Bundling the
+      # CUDA runtime libs into backends/ alongside the MODULE — combined
+      # with the $ORIGIN RPATH baked into libggml-cuda.so by ggml's
+      # CMake — means dlopen finds them with no system-wide CUDA install
+      # required on the consumer machine.
+      #
+      # NVIDIA's EULA explicitly permits redistribution of these
+      # specific runtime libs (cuda-redist list:
+      # https://docs.nvidia.com/cuda/eula/#attachment-a). We only ship
+      # libcudart.so.12 / libcublas.so.12 / libcublasLt.so.12 — not the
+      # toolkit, not nvcc.
+      #
+      # Discovery is via `ldd libggml-cuda.so | grep "not found"`: we
+      # find every dep that doesn't resolve in the staging dir, locate
+      # the matching .so under CUDA_PATH/lib64 or the system lib dir,
+      # and copy it (dereferencing symlinks via -L so the bundled file
+      # is the actual ELF). After bundling, re-run ldd inside the dir
+      # and fail if any dep still doesn't resolve.
+      - name: Bundle CUDA runtime libs (Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          backends_dir="target/${{ matrix.target }}/release/backends"
+          module="$backends_dir/libggml-cuda.so"
+          if [ ! -f "$module" ]; then
+            echo "FAIL: $module missing — earlier step should have caught this" >&2
+            exit 1
+          fi
+
+          # patchelf is needed below to guarantee DT_RUNPATH contains
+          # $ORIGIN. ggml's CMake usually does this already, but the flag
+          # surface (BUILD_RPATH_USE_ORIGIN, INSTALL_RPATH) is fiddly and
+          # we'd rather not depend on it. patchelf is idempotent: if
+          # $ORIGIN is already in RUNPATH the second call is a no-op.
+          if ! command -v patchelf >/dev/null 2>&1; then
+            sudo apt-get install -y patchelf
+          fi
+          patchelf --set-rpath '$ORIGIN' "$module"
+
+          # Where to look for redist libs. Jimver/cuda-toolkit installs
+          # under /usr/local/cuda-<ver> and exports CUDA_PATH; cublas is
+          # installed via apt to /usr/lib/x86_64-linux-gnu/. Search both.
+          search_dirs=()
+          if [ -n "${CUDA_PATH:-}" ] && [ -d "$CUDA_PATH/lib64" ]; then
+            search_dirs+=("$CUDA_PATH/lib64")
+          fi
+          if [ -d "/usr/local/cuda-12.6/lib64" ]; then
+            search_dirs+=("/usr/local/cuda-12.6/lib64")
+          fi
+          if [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+            search_dirs+=("/usr/lib/x86_64-linux-gnu")
+          fi
+
+          # Iterate ldd's "not found" deps and copy the SONAME from the
+          # first search dir that has it. -L follows the symlink so the
+          # bundled file is the actual versioned library (e.g.
+          # libcudart.so.12.6.77), then we recreate the SONAME symlink
+          # so dlopen by SONAME works.
+          missing=$(ldd "$module" | awk '/not found/ { print $1 }' || true)
+          if [ -z "$missing" ]; then
+            echo "ldd already resolves cleanly — nothing to bundle"
+            exit 0
+          fi
+          echo "Unresolved deps to bundle:"
+          echo "$missing"
+
+          for soname in $missing; do
+            found=""
+            for d in "${search_dirs[@]}"; do
+              if [ -e "$d/$soname" ]; then
+                found="$d/$soname"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "FAIL: could not locate $soname in any of ${search_dirs[*]}" >&2
+              exit 1
+            fi
+            # -L: dereference symlinks; copy the real file under the
+            # SONAME so dlopen(SONAME) finds it directly. ggml-cuda's
+            # NEEDED entries are SONAMEs, not full version strings.
+            cp -Lv "$found" "$backends_dir/$soname"
+          done
+
+          # Re-verify resolution. ggml's CMake bakes RUNPATH=$ORIGIN
+          # into libggml-cuda.so, so the loader resolves NEEDED
+          # SONAMEs from the same dir. Plain `ldd` exercises that path
+          # exactly the way production will (no LD_LIBRARY_PATH crutch),
+          # which is the load shape we actually want to verify.
+          echo "--- re-verifying ldd (bare, $ORIGIN RUNPATH only) ---"
+          if ldd "$module" | grep -q 'not found'; then
+            echo "FAIL: libggml-cuda.so still has unresolved deps after bundling" >&2
+            ldd "$module" >&2
+            exit 1
+          fi
+          ldd "$module"
+          echo "OK: libggml-cuda.so resolves cleanly with bundled deps"
+          ls -la "$backends_dir"
+
       - name: Stage release contents
         shell: bash
         run: |

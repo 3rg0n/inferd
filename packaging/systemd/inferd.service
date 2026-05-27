@@ -43,6 +43,13 @@ Type=simple
 # who want a non-default group (e.g. for a service account that
 # shares the daemon) `groupadd inferd-users` first and append
 # `--group inferd-users` to the ExecStart line below.
+# ReadWritePaths= below carves %h/.inferd and %h/.local/share/models out
+# of ProtectHome=read-only. systemd resolves those paths during namespace
+# setup *before* ExecStart runs and aborts with status=226/NAMESPACE if
+# either is missing. On a fresh install they don't exist yet (the daemon
+# normally creates them on first boot), so create them up front. mkdir -p
+# is idempotent and runs unprivileged under the user instance.
+ExecStartPre=/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
 ExecStart=%h/.local/bin/inferd-daemon \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
