@@ -1,0 +1,21 @@
+docs/v0.3-validation.md
+  s_126aec4081f728::t_4584b14bb112db 192-212
+packaging/windows/install.ps1
+  s_126aec4081f728::t_d22c1033239779 108-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0e4ec127ccb670d59b862290795ebd2811ce6eb9",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
