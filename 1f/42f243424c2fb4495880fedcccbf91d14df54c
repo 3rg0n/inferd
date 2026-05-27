@@ -1,0 +1,28 @@
+.github/workflows/release.yml
+  s_126aec4081f728::t_e7bb075cb7db71 95-115
+  s_126aec4081f728::t_300c79afc3b84c 212-247
+  s_126aec4081f728::t_588274791b7d80 55-59,63,67,71,75
+  s_126aec4081f728::t_5c164d4f41841b 141-144
+crates/inferd-daemon/build.rs
+  s_126aec4081f728::t_c6a1f9f35b93b5 17-22,24-29
+CHANGELOG.md
+  s_126aec4081f728::t_98bca247d74255 10-25
+.gitignore
+  s_126aec4081f728::t_5a38b95c81f3c9 12-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1f42f243424c2fb4495880fedcccbf91d14df54c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
