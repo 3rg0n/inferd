@@ -14,19 +14,17 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DL_BACKENDS");
 
-    if std::env::var("CARGO_FEATURE_DL_BACKENDS").is_err() {
-        return;
+    if std::env::var("CARGO_FEATURE_DL_BACKENDS").is_ok() {
+        #[cfg(target_os = "linux")]
+        {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/backends");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+            println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/backends");
+        }
     }
-
-    #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
-
-    #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/backends");
-
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
-
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/backends");
 }

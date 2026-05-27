@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Release tarball for Linux x86_64 now ships `libggml-cuda.so`**
+  (`.github/workflows/release.yml`). The release workflow used to build
+  with `--features inferd-daemon/dl-backends` only on Linux, which left
+  `GGML_CUDA=OFF` in the cmake configure step — the resulting tarball
+  had no CUDA MODULE so the v0.3 runtime accelerator probe always fell
+  through to CPU on NVIDIA hosts. The workflow now installs the CUDA
+  toolkit on the Ubuntu runner (Jimver/cuda-toolkit, pinned by SHA) and
+  builds with `inferd-daemon/dl-backends,inferd-daemon/cuda`. A new
+  staging assertion fails the release if `libggml-cuda.so` is missing
+  from the produced `backends/` dir, and a parallel one for
+  `libggml-metal.{so,dylib}` on `aarch64-apple-darwin`. Per-target
+  features are now declared in the matrix entry's `features:` field
+  rather than hard-coded in the build step.
+
 ### Fixed
 
 - **macOS RPATH missing from daemon binary with `dl-backends`**

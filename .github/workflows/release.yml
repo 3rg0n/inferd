@@ -52,18 +52,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x86_64 Linux ships dl-backends + cuda. nvcc + cudart for the
+          # cuda MODULE are installed via the Jimver/cuda-toolkit step
+          # below (only on this matrix entry). Other targets stay on
+          # dl-backends alone (CPU + per-arch accelerator: Metal on
+          # macOS, none extra on aarch64-linux or Windows for now).
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            features: inferd-daemon/dl-backends,inferd-daemon/cuda
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
+            features: inferd-daemon/dl-backends
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            features: inferd-daemon/dl-backends
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            features: inferd-daemon/dl-backends
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
@@ -82,6 +91,27 @@ jobs:
       - name: Install LLVM (macOS)
         if: runner.os == 'macOS'
         run: brew install llvm
+
+      # CUDA toolkit for x86_64-linux only — needed because that target's
+      # `features:` includes inferd-daemon/cuda, which flips
+      # GGML_CUDA=ON and asks build.rs to compile libggml-cuda.so via
+      # nvcc. ubuntu-latest = 24.04 (glibc 2.39) which is compatible
+      # with CUDA 12.6's bundled headers.
+      #
+      # The runner image already provides gcc-13 as default which CUDA
+      # 12.6 supports. Sub-packages are the minimum to compile +
+      # link a runtime-loadable libggml-cuda.so: nvcc for the device
+      # compiler, cudart for cudaMalloc/cudaMemcpy, cublas for the
+      # GEMM kernels ggml-cuda calls into, plus the cccl headers
+      # ggml-cuda's templates need.
+      - name: Install CUDA toolkit (Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          sub-packages: '["nvcc","cudart","cudart-dev","cublas","cublas-dev","cccl"]'
+          linux-local-args: '["--toolkit"]'
 
       # No rust-cache for release builds. Release runs are rare,
       # correctness > speed, and we've now seen Swatinem's cache
@@ -108,7 +138,10 @@ jobs:
         # build.rs `stage_backends_dir` step copies them all into
         # `target/<target>/release/backends/` for the staging step
         # below to bundle.
-        run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target ${{ matrix.target }}
+        #
+        # Per-target features come from the matrix entry (some targets
+        # add accelerator features like `cuda` on x86_64-linux).
+        run: cargo build --release --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}
 
       - name: Build inferdctl CLI
         # Single CLI binary in the gh / kubectl shape: subcommands
@@ -175,6 +208,42 @@ jobs:
           fi
           echo "OK: $dir has $count staged libraries"
           ls -la "$dir"
+
+      # Per-target accelerator MODULE check. The point of enabling
+      # `cuda` on x86_64-linux is to ship `libggml-cuda.so` in the
+      # tarball — if it's missing, the runtime probe falls back to CPU
+      # on every NVIDIA host that downloads the tarball, defeating the
+      # whole runtime-accelerator-detection promise (ADR 0019). Same
+      # logic applies to Metal on aarch64-darwin.
+      - name: Verify accelerator MODULE present (Linux x86_64 → CUDA)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          if ! ls "$dir" | grep -q '^libggml-cuda\.so$'; then
+            echo "FAIL: libggml-cuda.so missing from $dir — CUDA build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: libggml-cuda.so present in $dir"
+
+      - name: Verify accelerator MODULE present (macOS arm64 → Metal)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          # Mac Claude found that ggml_backend_load_all uses .so on all
+          # Unix targets (macOS included) — install-launchagent.sh
+          # flattens both *.dylib and *.so. Either name is acceptable
+          # here as long as a metal MODULE shipped.
+          if ! ls "$dir" | grep -qE '^libggml-metal\.(so|dylib)$'; then
+            echo "FAIL: libggml-metal.{so,dylib} missing from $dir — Metal build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: libggml-metal MODULE present in $dir"
 
       - name: Stage release contents
         shell: bash
