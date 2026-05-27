@@ -1,0 +1,27 @@
+site/index.html
+  s_126aec4081f728::t_a36f2ff49519f6 288
+  s_126aec4081f728::t_7c8b293d3b2b3c 41,48-49
+  s_126aec4081f728::t_040a824a52ff11 195-201
+  s_126aec4081f728::t_5f4cffe767288a 65,68-73
+  s_126aec4081f728::t_7794df4401e27d 158-164
+  s_126aec4081f728::t_13f5cb5a519426 176
+  s_126aec4081f728::t_38b4e1259a8609 219-226,232-234,240-244
+site/style.css
+  s_126aec4081f728::t_319f767bc6b0ce 364-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "47329411ef4cba910a1d2a31427756278cb3190d",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    }
+  }
+}
