@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-05-27
+
 ### Changed
 
 - **Release tarball for Linux x86_64 now ships `libggml-cuda.so`**
