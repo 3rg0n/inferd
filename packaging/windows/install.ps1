@@ -105,7 +105,14 @@ $env:INFERD_LOG_DIR = $LogDir
 # or zombie), the named-pipe paths collide with what the new
 # Startup-launched daemon wants to bind.
 & sc.exe query inferd-daemon 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$legacyServicePresent = ($LASTEXITCODE -eq 0)
+# `sc.exe query` returns 1060 when the service doesn't exist. Without
+# this clear, the script inherits 1060 as its own exit (1060 mod 256
+# = 36), which packaging tooling reads as a failed install even
+# though everything below succeeded. Reset before any control flow
+# touches `$LASTEXITCODE` again.
+$global:LASTEXITCODE = 0
+if ($legacyServicePresent) {
     Write-Warning @"
 A legacy 'inferd-daemon' Windows service is registered. The new install
 runs the daemon as a per-user Startup process and does NOT use SCM.
