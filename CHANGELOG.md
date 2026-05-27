@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.3] - 2026-05-27
+
+### Fixed
+
+- **`release.yml` CUDA cublas install via Jimver still failed**
+  (`.github/workflows/release.yml`). Jimver/cuda-toolkit always
+  rewrites a sub-package name `X` to `cuda-X-<MAJOR>-<MINOR>` —
+  there is no escape hatch to pass a name through verbatim. CUDA
+  12.x's cublas packages are `libcublas-12-6` / `libcublas-dev-12-6`
+  (no `cuda-` prefix), so both `cublas` (rc.1, → `cuda-cublas-12-6`)
+  and `libcublas` (rc.2, → `cuda-libcublas-12-6`) resolved to
+  nonexistent packages. The action now installs nvcc / cudart / cccl
+  via Jimver and runs a separate `apt-get install libcublas-12-6
+  libcublas-dev-12-6` step against the NVIDIA repo Jimver has
+  already configured. ggml-cuda's MODULE build needs both the
+  runtime `.so` and the dev headers (`cublas_v2.h`).
+
 ## [0.3.0-rc.2] - 2026-05-27
 
 ### Fixed

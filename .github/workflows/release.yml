@@ -110,18 +110,28 @@ jobs:
         with:
           cuda: '12.6.0'
           method: 'network'
-          # Package names: Jimver maps each entry to `cuda-<name>-<MAJOR>-<MINOR>`
-          # *unless* the name starts with `lib`, in which case it's used
-          # verbatim. CUDA 12.x renamed the cublas packages to
-          # `libcublas-12-6` / `libcublas-dev-12-6`, so the sub-package
-          # entries here MUST be `libcublas` / `libcublas-dev` — the
-          # un-prefixed `cublas` / `cublas-dev` resolve to nonexistent
-          # `cuda-cublas-12-6` packages and `apt-get install` fails with
-          # `Unable to locate package cuda-cublas-12-6`. nvcc / cudart /
-          # cccl keep the un-prefixed form because their NVIDIA package
-          # names *do* use the `cuda-` prefix.
-          sub-packages: '["nvcc","cudart","cudart-dev","libcublas","libcublas-dev","cccl"]'
+          # Jimver always rewrites sub-package names to
+          # `cuda-<name>-<MAJOR>-<MINOR>`. That works for nvcc /
+          # cudart / cccl (NVIDIA does ship `cuda-nvcc-12-6` etc) but
+          # fails for cublas — CUDA 12.x's cublas packages are
+          # `libcublas-12-6` / `libcublas-dev-12-6` (NO `cuda-`
+          # prefix), and Jimver has no escape hatch to pass them
+          # through verbatim. Both rc.1 (`cuda-cublas-12-6`) and rc.2
+          # (`cuda-libcublas-12-6`) tried it via Jimver and apt
+          # rejected both with "Unable to locate package". The
+          # follow-up step below installs cublas via plain apt-get
+          # against the NVIDIA repo Jimver has already configured.
+          sub-packages: '["nvcc","cudart","cudart-dev","cccl"]'
           linux-local-args: '["--toolkit"]'
+
+      - name: Install cuBLAS (Linux x86_64 only, post-Jimver)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          # ggml-cuda links against cublas for GEMM kernels; both the
+          # runtime and dev (headers) packages are needed because the
+          # MODULE build runs nvcc + g++ which #include cublas_v2.h.
+          sudo apt-get install -y libcublas-12-6 libcublas-dev-12-6
 
       # No rust-cache for release builds. Release runs are rare,
       # correctness > speed, and we've now seen Swatinem's cache
