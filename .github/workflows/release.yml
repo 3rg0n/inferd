@@ -303,14 +303,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Unset LD_LIBRARY_PATH for this whole step so `ldd` reports
-          # what a real consumer machine sees. Jimver/cuda-toolkit
-          # exports LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64, which
-          # makes ldd happily resolve libcudart / libcublas that an
-          # end user without that env (i.e. everyone) would lack. With
-          # this unset, the discovery loop below correctly identifies
-          # all the toolkit deps that need bundling.
-          unset LD_LIBRARY_PATH
           backends_dir="target/${{ matrix.target }}/release/backends"
           module="$backends_dir/libggml-cuda.so"
           if [ ! -f "$module" ]; then
@@ -318,19 +310,20 @@ jobs:
             exit 1
           fi
 
-          # patchelf is needed below to guarantee DT_RUNPATH contains
-          # $ORIGIN. ggml's CMake usually does this already, but the flag
-          # surface (BUILD_RPATH_USE_ORIGIN, INSTALL_RPATH) is fiddly and
-          # we'd rather not depend on it. patchelf is idempotent: if
-          # $ORIGIN is already in RUNPATH the second call is a no-op.
+          # patchelf forces DT_RUNPATH=$ORIGIN on libggml-cuda.so so the
+          # loader resolves NEEDED SONAMEs from the lib's own dir (where
+          # we'll bundle them below). ggml's CMake usually does this
+          # already, but BUILD_RPATH_USE_ORIGIN/INSTALL_RPATH behaviour
+          # is fiddly. patchelf is idempotent: if $ORIGIN is already in
+          # RUNPATH the second call is a no-op.
           if ! command -v patchelf >/dev/null 2>&1; then
             sudo apt-get install -y patchelf
           fi
           patchelf --set-rpath '$ORIGIN' "$module"
 
           # Where to look for redist libs. Jimver/cuda-toolkit installs
-          # under /usr/local/cuda-<ver> and exports CUDA_PATH; cublas is
-          # installed via apt to /usr/lib/x86_64-linux-gnu/. Search both.
+          # under /usr/local/cuda-<ver>; cublas is installed via apt to
+          # /usr/lib/x86_64-linux-gnu/. Both are searched in order.
           search_dirs=()
           if [ -n "${CUDA_PATH:-}" ] && [ -d "$CUDA_PATH/lib64" ]; then
             search_dirs+=("$CUDA_PATH/lib64")
@@ -338,82 +331,116 @@ jobs:
           if [ -d "/usr/local/cuda-12.6/lib64" ]; then
             search_dirs+=("/usr/local/cuda-12.6/lib64")
           fi
+          if [ -d "/usr/local/cuda-12.6/targets/x86_64-linux/lib" ]; then
+            search_dirs+=("/usr/local/cuda-12.6/targets/x86_64-linux/lib")
+          fi
           if [ -d "/usr/lib/x86_64-linux-gnu" ]; then
             search_dirs+=("/usr/lib/x86_64-linux-gnu")
           fi
 
-          # Driver-provided libs that we must NEVER bundle: these come
-          # from the consumer's installed NVIDIA driver, are version-
-          # locked to it, and NVIDIA's EULA explicitly forbids
-          # redistributing them. They're expected to be unresolved in
-          # CI (no GPU/driver on the runner) and resolved at runtime by
-          # the driver install (e.g. /usr/lib/wsl/lib/libcuda.so.1 on
-          # WSL, /usr/lib/x86_64-linux-gnu/libcuda.so.1 on bare metal).
-          # If a host doesn't have an NVIDIA driver, the daemon's
-          # accelerator probe correctly skips the CUDA backend — that's
-          # the design.
+          # Driver-provided libs that we must NEVER bundle. NVIDIA's
+          # EULA forbids redistributing them; they're version-locked
+          # to the user's installed driver and resolved at runtime
+          # by the driver install (/usr/lib/wsl/lib/libcuda.so.1 on
+          # WSL, /usr/lib/x86_64-linux-gnu/libcuda.so.1 on bare
+          # metal). Hosts without an NVIDIA driver legitimately
+          # don't resolve these, and the accelerator probe correctly
+          # falls through to CPU.
           driver_skiplist="libcuda.so.1 libnvidia-ml.so.1"
 
-          # Iterate ldd's "not found" deps and copy the SONAME from the
-          # first search dir that has it. -L follows the symlink so the
-          # bundled file is the actual versioned library (e.g.
-          # libcudart.so.12.6.77), then we recreate the SONAME symlink
-          # so dlopen by SONAME works.
-          missing=$(ldd "$module" | awk '/not found/ { print $1 }' || true)
-          if [ -z "$missing" ]; then
-            echo "ldd already resolves cleanly — nothing to bundle"
-            exit 0
-          fi
-          echo "Unresolved deps reported by ldd:"
-          echo "$missing"
+          # Walk DT_NEEDED transitively via readelf — NOT ldd. ldd
+          # consults /etc/ld.so.cache, which on the GHA runner
+          # contains /etc/ld.so.conf.d/cuda-12-6.conf entries pointing
+          # at the toolkit install dir, so it falsely "resolves" libs
+          # the consumer host won't have. readelf -d reads NEEDED
+          # straight from the ELF dynamic section — it doesn't lie.
+          #
+          # Algorithm: BFS from libggml-cuda.so. For every NEEDED
+          # SONAME not yet in backends/ and not in the driver
+          # skiplist, locate it under search_dirs and copy under its
+          # SONAME (with -L to dereference the version symlink so
+          # the bundled file is the actual ELF). After copying,
+          # enqueue its own NEEDED entries. Loop until the queue
+          # empties — gives us the full transitive closure
+          # (libcublas → libcublasLt, etc).
+          declare -A bundled
+          declare -A on_skiplist
+          for s in $driver_skiplist; do on_skiplist[$s]=1; done
 
-          for soname in $missing; do
-            # Driver libs: skip without bundling, without failing.
-            if echo " $driver_skiplist " | grep -q " $soname "; then
-              echo "skip: $soname is driver-provided (resolved at runtime by NVIDIA driver)"
+          # Seed queue with libggml-cuda.so's direct NEEDED entries.
+          mapfile -t queue < <(readelf -d "$module" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+
+          while [ "${#queue[@]}" -gt 0 ]; do
+            soname="${queue[0]}"
+            queue=("${queue[@]:1}")
+
+            # Already bundled? Skip.
+            if [ -n "${bundled[$soname]:-}" ]; then continue; fi
+            # Driver lib? Skip.
+            if [ -n "${on_skiplist[$soname]:-}" ]; then
+              echo "skip: $soname is driver-provided (resolved at runtime)"
+              bundled[$soname]=skip
               continue
             fi
-            found=""
-            for d in "${search_dirs[@]}"; do
-              if [ -e "$d/$soname" ]; then
-                found="$d/$soname"
-                break
+            # Already present in backends/ (e.g. libllama.so, ggml-*)?
+            # Then it was staged by build.rs, no copy needed; still
+            # walk its NEEDED for transitive closure.
+            if [ -e "$backends_dir/$soname" ]; then
+              bundled[$soname]=staged
+            else
+              # Locate the lib under search_dirs.
+              found=""
+              for d in "${search_dirs[@]}"; do
+                if [ -e "$d/$soname" ]; then found="$d/$soname"; break; fi
+              done
+              if [ -z "$found" ]; then
+                echo "FAIL: could not locate $soname in any of ${search_dirs[*]}" >&2
+                exit 1
               fi
-            done
-            if [ -z "$found" ]; then
-              echo "FAIL: could not locate $soname in any of ${search_dirs[*]}" >&2
-              exit 1
+              cp -Lv "$found" "$backends_dir/$soname"
+              bundled[$soname]=copied
             fi
-            # -L: dereference symlinks; copy the real file under the
-            # SONAME so dlopen(SONAME) finds it directly. ggml-cuda's
-            # NEEDED entries are SONAMEs, not full version strings.
-            cp -Lv "$found" "$backends_dir/$soname"
+
+            # Walk NEEDED of the bundled/staged lib for transitive deps.
+            mapfile -t deps < <(readelf -d "$backends_dir/$soname" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+            for dep in "${deps[@]}"; do queue+=("$dep"); done
           done
 
-          # Re-verify resolution. ggml's CMake bakes RUNPATH=$ORIGIN
-          # into libggml-cuda.so, so the loader resolves NEEDED
-          # SONAMEs from the same dir. Plain `ldd` exercises that path
-          # exactly the way production will (no LD_LIBRARY_PATH crutch),
-          # which is the load shape we actually want to verify.
-          #
-          # Driver-provided libs (libcuda.so.1, libnvidia-ml.so.1) will
-          # remain "not found" on the build runner because there's no
-          # NVIDIA driver installed. That's expected and correct — they
-          # resolve at runtime on the consumer host. We filter them out
-          # of the failure check.
-          echo '--- re-verifying ldd (bare, $ORIGIN RUNPATH only) ---'
-          ldd "$module" || true
-          # Build a regex of skiplist sonames with literal dots escaped
-          # for grep -E, so the post-bundle check ignores them.
-          skip_re=$(echo "$driver_skiplist" | tr ' ' '|' | sed 's/\./\\./g')
-          remaining=$(ldd "$module" | awk '/not found/ { print $1 }' \
-            | grep -Ev "^(${skip_re})$" || true)
-          if [ -n "$remaining" ]; then
-            echo "FAIL: libggml-cuda.so still has unresolved non-driver deps after bundling" >&2
-            echo "$remaining" >&2
-            exit 1
-          fi
-          echo "OK: libggml-cuda.so resolves cleanly with bundled deps (driver libs deferred to runtime)"
+          echo "--- bundle decisions ---"
+          for k in "${!bundled[@]}"; do echo "  $k -> ${bundled[$k]}"; done
+
+          # Final verification: walk NEEDED again from libggml-cuda.so
+          # transitively and assert every SONAME is either present in
+          # backends/ or on the driver skiplist. This catches a class
+          # of bug where the loop above missed a transitive dep.
+          declare -A seen
+          stack=("$module")
+          while [ "${#stack[@]}" -gt 0 ]; do
+            cur="${stack[-1]}"
+            unset 'stack[-1]'
+            mapfile -t deps < <(readelf -d "$cur" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+            for dep in "${deps[@]}"; do
+              if [ -n "${seen[$dep]:-}" ]; then continue; fi
+              seen[$dep]=1
+              if [ -n "${on_skiplist[$dep]:-}" ]; then continue; fi
+              if [ -e "$backends_dir/$dep" ]; then
+                stack+=("$backends_dir/$dep")
+              else
+                # Some NEEDEDs are libc/libstdc++/libm — those resolve
+                # via the consumer's glibc and don't need bundling.
+                # Allow common system libs through.
+                case "$dep" in
+                  libc.so.*|libm.so.*|libdl.so.*|librt.so.*|libpthread.so.*|libstdc++.so.*|libgcc_s.so.*|ld-linux-*.so.*)
+                    ;;
+                  *)
+                    echo "FAIL: $dep missing from backends/ and not a system lib or driver lib" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+            done
+          done
+          echo "OK: libggml-cuda.so transitive closure resolves under backends/ + driver skiplist + system libs"
           ls -la "$backends_dir"
 
       - name: Stage release contents

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.7] - 2026-05-28
+
+### Fixed
+
+- **rc.6 release workflow's CUDA bundling missed transitive deps and
+  was lied to by `ldd` via the runner's `/etc/ld.so.cache`**
+  (`.github/workflows/release.yml`). Two related problems with the
+  ldd-based discovery loop: (a) the GHA runner has
+  `/etc/ld.so.conf.d/cuda-12-6.conf` registering the toolkit install
+  dir system-wide, so ldd resolved `libcudart.so.12` through that
+  path and hid it from the discovery loop — but a consumer host
+  without that ld.so.conf entry would still see it missing; (b) once
+  `libcublas.so.12` was bundled, ldd of `libggml-cuda.so` walked
+  through the bundled lib and surfaced its `libcublasLt.so.12` dep,
+  which the loop had no chance to bundle (single pass). Rewrote the
+  bundling step to walk `DT_NEEDED` via `readelf -d` in BFS — doesn't
+  consult ld.so.cache, doesn't lie. Closure is followed transitively,
+  with three exit conditions per soname: already-bundled (skip),
+  driver-skiplist (skip), system lib (allow-list of libc / libm /
+  libstdc++ / etc). A second pass walks the same closure and asserts
+  every soname falls into one of those three buckets, failing the
+  build if anything's missing.
+
 ## [0.3.0-rc.6] - 2026-05-28
 
 ### Fixed
