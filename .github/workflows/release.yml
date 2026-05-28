@@ -303,6 +303,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Unset LD_LIBRARY_PATH for this whole step so `ldd` reports
+          # what a real consumer machine sees. Jimver/cuda-toolkit
+          # exports LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64, which
+          # makes ldd happily resolve libcudart / libcublas that an
+          # end user without that env (i.e. everyone) would lack. With
+          # this unset, the discovery loop below correctly identifies
+          # all the toolkit deps that need bundling.
+          unset LD_LIBRARY_PATH
           backends_dir="target/${{ matrix.target }}/release/backends"
           module="$backends_dir/libggml-cuda.so"
           if [ ! -f "$module" ]; then
@@ -393,7 +401,7 @@ jobs:
           # NVIDIA driver installed. That's expected and correct — they
           # resolve at runtime on the consumer host. We filter them out
           # of the failure check.
-          echo "--- re-verifying ldd (bare, $ORIGIN RUNPATH only) ---"
+          echo '--- re-verifying ldd (bare, $ORIGIN RUNPATH only) ---'
           ldd "$module" || true
           # Build a regex of skiplist sonames with literal dots escaped
           # for grep -E, so the post-bundle check ignores them.

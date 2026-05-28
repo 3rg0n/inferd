@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.6] - 2026-05-28
+
+### Fixed
+
+- **rc.5 release workflow's CUDA bundling step missed real toolkit
+  deps because `LD_LIBRARY_PATH` was masking them**
+  (`.github/workflows/release.yml`). Jimver/cuda-toolkit exports
+  `LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64`, so `ldd
+  libggml-cuda.so` on the runner happily resolved `libcudart.so.12` /
+  `libcublas.so.12` through that env var and reported only
+  `libcuda.so.1` as missing — but a consumer machine without that env
+  would still see all the toolkit libs unresolved. Step now `unset
+  LD_LIBRARY_PATH` at start so ldd reports what end users actually
+  see. Also single-quoted an `echo` containing `$ORIGIN` (was failing
+  `set -u`) so the post-bundle re-verify step doesn't abort with
+  `ORIGIN: unbound variable`.
+
 ## [0.3.0-rc.5] - 2026-05-27
 
 ### Fixed
