@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.5] - 2026-05-27
+
+### Fixed
+
+- **rc.4 release workflow tripped on `libcuda.so.1` in CUDA bundling**
+  (`.github/workflows/release.yml`). The dynamic-`ldd`-discovery loop
+  added in rc.4 found `libcuda.so.1` unresolved on the GHA runner
+  (correct — there's no NVIDIA driver on the build host) and tried to
+  bundle it, which failed because no toolkit ships it. `libcuda.so.1`
+  is the NVIDIA driver lib: redistributing it is forbidden by NVIDIA's
+  EULA, it's version-locked to the consumer's installed driver, and
+  it's always provided at runtime by the driver install (e.g.
+  `/usr/lib/wsl/lib/libcuda.so.1` on WSL,
+  `/usr/lib/x86_64-linux-gnu/libcuda.so.1` on bare metal). Workflow
+  now has an explicit skiplist (`libcuda.so.1`,
+  `libnvidia-ml.so.1`) that's bypassed in the bundle loop and
+  filtered out of the post-bundle ldd check. Hosts without an NVIDIA
+  driver still degrade correctly: the daemon's accelerator probe
+  skips the CUDA backend and the user gets CPU.
+
 ## [0.3.0-rc.4] - 2026-05-27
 
 ### Fixed

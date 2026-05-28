@@ -334,6 +334,18 @@ jobs:
             search_dirs+=("/usr/lib/x86_64-linux-gnu")
           fi
 
+          # Driver-provided libs that we must NEVER bundle: these come
+          # from the consumer's installed NVIDIA driver, are version-
+          # locked to it, and NVIDIA's EULA explicitly forbids
+          # redistributing them. They're expected to be unresolved in
+          # CI (no GPU/driver on the runner) and resolved at runtime by
+          # the driver install (e.g. /usr/lib/wsl/lib/libcuda.so.1 on
+          # WSL, /usr/lib/x86_64-linux-gnu/libcuda.so.1 on bare metal).
+          # If a host doesn't have an NVIDIA driver, the daemon's
+          # accelerator probe correctly skips the CUDA backend — that's
+          # the design.
+          driver_skiplist="libcuda.so.1 libnvidia-ml.so.1"
+
           # Iterate ldd's "not found" deps and copy the SONAME from the
           # first search dir that has it. -L follows the symlink so the
           # bundled file is the actual versioned library (e.g.
@@ -344,10 +356,15 @@ jobs:
             echo "ldd already resolves cleanly — nothing to bundle"
             exit 0
           fi
-          echo "Unresolved deps to bundle:"
+          echo "Unresolved deps reported by ldd:"
           echo "$missing"
 
           for soname in $missing; do
+            # Driver libs: skip without bundling, without failing.
+            if echo " $driver_skiplist " | grep -q " $soname "; then
+              echo "skip: $soname is driver-provided (resolved at runtime by NVIDIA driver)"
+              continue
+            fi
             found=""
             for d in "${search_dirs[@]}"; do
               if [ -e "$d/$soname" ]; then
@@ -370,14 +387,25 @@ jobs:
           # SONAMEs from the same dir. Plain `ldd` exercises that path
           # exactly the way production will (no LD_LIBRARY_PATH crutch),
           # which is the load shape we actually want to verify.
+          #
+          # Driver-provided libs (libcuda.so.1, libnvidia-ml.so.1) will
+          # remain "not found" on the build runner because there's no
+          # NVIDIA driver installed. That's expected and correct — they
+          # resolve at runtime on the consumer host. We filter them out
+          # of the failure check.
           echo "--- re-verifying ldd (bare, $ORIGIN RUNPATH only) ---"
-          if ldd "$module" | grep -q 'not found'; then
-            echo "FAIL: libggml-cuda.so still has unresolved deps after bundling" >&2
-            ldd "$module" >&2
+          ldd "$module" || true
+          # Build a regex of skiplist sonames with literal dots escaped
+          # for grep -E, so the post-bundle check ignores them.
+          skip_re=$(echo "$driver_skiplist" | tr ' ' '|' | sed 's/\./\\./g')
+          remaining=$(ldd "$module" | awk '/not found/ { print $1 }' \
+            | grep -Ev "^(${skip_re})$" || true)
+          if [ -n "$remaining" ]; then
+            echo "FAIL: libggml-cuda.so still has unresolved non-driver deps after bundling" >&2
+            echo "$remaining" >&2
             exit 1
           fi
-          ldd "$module"
-          echo "OK: libggml-cuda.so resolves cleanly with bundled deps"
+          echo "OK: libggml-cuda.so resolves cleanly with bundled deps (driver libs deferred to runtime)"
           ls -la "$backends_dir"
 
       - name: Stage release contents
