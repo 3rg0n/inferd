@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.8] - 2026-06-01
+
 ### Fixed
 
 - **rc.7 was not install=work on Linux: the CUDA bundling step staged
@@ -29,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-existent path.** The tarball flattens the systemd unit to
   `packaging/inferd.service`; the checklist said
   `packaging/systemd/inferd.service`. Corrected the install step.
+- **Windows: daemon allocated a visible console window on startup
+  (#28).** `inferd-daemon.exe` is a console-subsystem exe, so a launch
+  from the per-user Startup shortcut popped a tracing window on the
+  desktop. After logging is wired to the activity log + admin pipe the
+  daemon now calls `FreeConsole()` — but only when it owns the console
+  (sole attached process, the shortcut/double-click case). Launched
+  from an interactive shell it leaves the shared console alone so
+  hand-run debugging still prints. Windows-only `#[cfg(windows)]`.
 
 ## [0.3.0-rc.7] - 2026-05-28
 
