@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **rc.7 was not install=work on Linux: the CUDA bundling step staged
+  the glibc family into `backends/`, crashing the daemon at boot**
+  (`.github/workflows/release.yml`). The rc.7 BFS copy loop applied
+  its system-lib allow-list only in the *final verification* pass, not
+  in the *copy* loop — so `libc.so.6`, `libdl.so.2`,
+  `libpthread.so.0`, `librt.so.1`, `libm.so.6`, `libstdc++.so.6`,
+  `libgcc_s.so.1`, and `ld-linux-x86-64.so.2` were copied next to
+  `libggml-cuda.so`. With `$ORIGIN` RUNPATH the loader prefers those
+  runner-built copies over the consumer's glibc; on any host whose
+  glibc differs from `ubuntu-latest` the daemon dies immediately with
+  `symbol lookup error: libc.so.6: undefined symbol:
+  __nptl_change_stack_perm, version GLIBC_PRIVATE`. Hoisted the
+  allow-list into an `is_system_lib` predicate consulted by the copy
+  loop, so the glibc family is never staged and resolves from the
+  consumer's own glibc at runtime. Found in the rc.7 RTX 5080 / WSL
+  validation; see `docs/v0.3-validation.md` findings 2026-06-01.
+- **`docs/v0.3-validation.md` Linux install step referenced a
+  non-existent path.** The tarball flattens the systemd unit to
+  `packaging/inferd.service`; the checklist said
+  `packaging/systemd/inferd.service`. Corrected the install step.
+
 ## [0.3.0-rc.7] - 2026-05-28
 
 ### Fixed

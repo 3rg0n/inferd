@@ -348,6 +348,27 @@ jobs:
           # falls through to CPU.
           driver_skiplist="libcuda.so.1 libnvidia-ml.so.1"
 
+          # System libs (glibc family + libstdc++/libgcc) that we must
+          # NEVER bundle either. These resolve from the CONSUMER's own
+          # glibc at runtime. Bundling the runner's copies is actively
+          # harmful: libggml-cuda.so's RUNPATH is `$ORIGIN`, so a
+          # bundled libc.so.6 would be *preferred* over the host's —
+          # and the runner's glibc is almost never bit-identical to the
+          # consumer's. The mismatch surfaces as the loader pulling a
+          # stale libc.so.6 that the host's libdl/libpthread/librt then
+          # fail against with `undefined symbol: __nptl_change_stack_perm,
+          # version GLIBC_PRIVATE` (caught in the rc.7 WSL validation).
+          # The final verification pass below already treats these as
+          # host-resolved; this matching predicate keeps the COPY loop
+          # from staging them in the first place.
+          is_system_lib() {
+            case "$1" in
+              libc.so.*|libm.so.*|libdl.so.*|librt.so.*|libpthread.so.*|libstdc++.so.*|libgcc_s.so.*|ld-linux-*.so.*)
+                return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           # Walk DT_NEEDED transitively via readelf — NOT ldd. ldd
           # consults /etc/ld.so.cache, which on the GHA runner
           # contains /etc/ld.so.conf.d/cuda-12-6.conf entries pointing
@@ -380,6 +401,15 @@ jobs:
             if [ -n "${on_skiplist[$soname]:-}" ]; then
               echo "skip: $soname is driver-provided (resolved at runtime)"
               bundled[$soname]=skip
+              continue
+            fi
+            # System lib (glibc family / libstdc++ / libgcc)? Skip —
+            # MUST resolve from the consumer's own glibc, never from a
+            # bundled copy (see is_system_lib comment above). We don't
+            # even walk its NEEDED: the host loader owns that subtree.
+            if is_system_lib "$soname"; then
+              echo "skip: $soname is a system lib (resolved by consumer glibc)"
+              bundled[$soname]=system
               continue
             fi
             # Already present in backends/ (e.g. libllama.so, ggml-*)?
