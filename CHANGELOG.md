@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Windows x86_64 release tarball now ships CUDA** (`.github/workflows/
+  release.yml`). The Windows matrix entry builds with
+  `inferd-daemon/dl-backends,inferd-daemon/cuda`, installs the CUDA 12.6
+  toolkit (Jimver), stages `ggml-cuda.dll` (via build.rs), and bundles
+  the CUDA redist DLLs (`cudart64_12` / `cublas64_12` / `cublasLt64_12`)
+  into `backends\` next to it. The driver DLL `nvcuda.dll` is never
+  bundled (EULA; resolves from System32). Windows + NVIDIA users now get
+  GPU acceleration out of the box; hosts without an NVIDIA driver fall
+  through to CPU at the runtime probe (ADR 0019). A verify gate fails the
+  build if `ggml-cuda.dll` is missing, and an import-closure check
+  asserts every imported DLL is bundled, a driver DLL, or a system DLL.
+  build.rs already flipped `GGML_CUDA=ON` for Windows when the `cuda`
+  feature is set; this is a CI/packaging change only.
+
 ## [0.3.0-rc.9] - 2026-06-01
 
 ### Fixed

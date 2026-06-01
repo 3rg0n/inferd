@@ -69,10 +69,17 @@ jobs:
             target: aarch64-apple-darwin
             archive: tar.gz
             features: inferd-daemon/dl-backends
+          # x86_64 Windows ships dl-backends + cuda, same as Linux. The
+          # CUDA toolkit (nvcc + cudart + cublas) is installed via the
+          # Jimver/cuda-toolkit step below (gated to this entry).
+          # ggml-cuda.dll is staged by build.rs's stage_backends_dir; the
+          # CUDA redist DLLs are bundled next to the exe by the Windows
+          # bundling step. Hosts without an NVIDIA driver fall through to
+          # CPU at the runtime probe (ADR 0019).
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
-            features: inferd-daemon/dl-backends
+            features: inferd-daemon/dl-backends,inferd-daemon/cuda
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
@@ -132,6 +139,21 @@ jobs:
           # runtime and dev (headers) packages are needed because the
           # MODULE build runs nvcc + g++ which #include cublas_v2.h.
           sudo apt-get install -y libcublas-12-6 libcublas-dev-12-6
+
+      # CUDA toolkit for x86_64-windows. Same role as the Linux step:
+      # that target's `features` includes inferd-daemon/cuda, so build.rs
+      # flips GGML_CUDA=ON and cmake compiles ggml-cuda.dll via nvcc.
+      # Unlike Linux, the Windows network installer ships cublas as a
+      # first-class sub-package (`cublas` / `libcublas`), so no post-step
+      # apt workaround is needed — Jimver resolves them directly. The
+      # action exports CUDA_PATH so cmake's FindCUDAToolkit locates nvcc.
+      - name: Install CUDA toolkit (Windows x86_64 only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","visual_studio_integration"]'
 
       # No rust-cache for release builds. Release runs are rare,
       # correctness > speed, and we've now seen Swatinem's cache
@@ -274,6 +296,23 @@ jobs:
             exit 1
           fi
           echo "OK: libggml-metal MODULE present in $dir"
+
+      - name: Verify accelerator MODULE present (Windows x86_64 → CUDA)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          # On Windows the ggml CUDA MODULE is `ggml-cuda.dll` (no `lib`
+          # prefix, unlike the Linux `libggml-cuda.so`). Same failure
+          # mode as the Linux gate: a missing MODULE means the CUDA build
+          # silently produced a CPU-only tarball.
+          if ! ls "$dir" | grep -q '^ggml-cuda\.dll$'; then
+            echo "FAIL: ggml-cuda.dll missing from $dir — CUDA build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: ggml-cuda.dll present in $dir"
 
       # Bundle the CUDA runtime libs (libcudart, libcublas, libcublasLt)
       # next to libggml-cuda.so. Without this, the daemon's runtime
@@ -472,6 +511,98 @@ jobs:
           done
           echo "OK: libggml-cuda.so transitive closure resolves under backends/ + driver skiplist + system libs"
           ls -la "$backends_dir"
+
+      # Bundle the CUDA runtime DLLs (cudart / cublas / cublasLt) next to
+      # ggml-cuda.dll. Same rationale as the Linux step: without them the
+      # runtime probe silently falls back to CPU on every NVIDIA host,
+      # because Windows' LoadLibrary can't resolve ggml-cuda.dll's imports.
+      # Windows is simpler than Linux here — no RPATH/$ORIGIN: the loader
+      # searches the DLL's own directory, and install.ps1 flattens
+      # backends\*.dll next to the exe, so co-locating the redist DLLs in
+      # backends\ is sufficient.
+      #
+      # NVIDIA's EULA permits redistributing the CUDA runtime libraries
+      # (cuda-redist). We ship only cudart64_12 / cublas64_12 /
+      # cublasLt64_12. The driver-provided `nvcuda.dll` is NEVER bundled
+      # (EULA-forbidden, version-locked to the user's driver, resolved
+      # from System32 at runtime) — the same posture as libcuda.so.1 on
+      # Linux.
+      - name: Bundle CUDA runtime DLLs (Windows x86_64 only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $backendsDir = "target/${{ matrix.target }}/release/backends"
+          $module = Join-Path $backendsDir "ggml-cuda.dll"
+          if (-not (Test-Path $module)) {
+              Write-Error "FAIL: $module missing — earlier step should have caught this"
+          }
+
+          # CUDA_PATH is exported by the Jimver toolkit step. The redist
+          # DLLs live under its bin\.
+          $cudaBin = Join-Path $env:CUDA_PATH "bin"
+          if (-not (Test-Path $cudaBin)) {
+              Write-Error "FAIL: CUDA bin dir not found at $cudaBin (CUDA_PATH=$env:CUDA_PATH)"
+          }
+
+          # ggml-cuda.dll's redistributable imports. Versioned DLL names
+          # are stable across CUDA 12.x (the SONAME-equivalent on Windows
+          # is the file name). cublas pulls in cublasLt. We copy by glob
+          # so a 12.x point bump (cudart64_12.dll) still matches.
+          $redistGlobs = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
+          foreach ($glob in $redistGlobs) {
+              $hits = Get-ChildItem -Path (Join-Path $cudaBin $glob) -ErrorAction SilentlyContinue
+              if (-not $hits) {
+                  Write-Error "FAIL: no CUDA redist DLL matching '$glob' under $cudaBin"
+              }
+              foreach ($f in $hits) {
+                  Write-Host "bundling $($f.Name) -> $backendsDir"
+                  Copy-Item -Path $f.FullName -Destination $backendsDir -Force
+              }
+          }
+
+          # Verify ggml-cuda.dll's imports resolve under backends\ + the
+          # driver skiplist + system DLLs. dumpbin ships with MSVC (on
+          # PATH inside the windows-latest image's VS dev environment;
+          # fall back to a known location if not).
+          $dumpbin = (Get-Command dumpbin -ErrorAction SilentlyContinue).Source
+          if (-not $dumpbin) {
+              $pf86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+              $vswhere = Join-Path $pf86 "Microsoft Visual Studio\Installer\vswhere.exe"
+              if (Test-Path $vswhere) {
+                  $vsPath = & $vswhere -latest -property installationPath
+                  $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                             Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1 -ExpandProperty FullName
+              }
+          }
+          # Driver-provided / system DLLs that resolve at runtime and must
+          # NOT be bundled. nvcuda.dll is the driver (EULA); the rest are
+          # OS / MSVC runtime DLLs present on any Windows host.
+          $allowed = @(
+              "nvcuda.dll",        # NVIDIA driver — System32, never bundled
+              "kernel32.dll","ntdll.dll","user32.dll","advapi32.dll",
+              "msvcrt.dll","ucrtbase.dll","vcruntime140.dll","vcruntime140_1.dll",
+              "msvcp140.dll","api-ms-win-*.dll","bcrypt.dll","dbghelp.dll"
+          )
+          if ($dumpbin) {
+              $deps = & $dumpbin /dependents $module |
+                      Select-String -Pattern '^\s+(\S+\.dll)' |
+                      ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() }
+              foreach ($dep in $deps) {
+                  if (Test-Path (Join-Path $backendsDir $dep)) { continue }
+                  $isAllowed = $false
+                  foreach ($a in $allowed) {
+                      if ($dep -like $a.ToLower()) { $isAllowed = $true; break }
+                  }
+                  if (-not $isAllowed) {
+                      Write-Error "FAIL: $dep imported by ggml-cuda.dll is not bundled, not a driver DLL, and not a known system DLL"
+                  }
+              }
+              Write-Host "OK: ggml-cuda.dll imports resolve under backends\ + driver skiplist + system DLLs"
+          } else {
+              Write-Warning "dumpbin not found; skipped import-closure verification (DLLs were still bundled)"
+          }
+          Get-ChildItem $backendsDir | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Stage release contents
         shell: bash
