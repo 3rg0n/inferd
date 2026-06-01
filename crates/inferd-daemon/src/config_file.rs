@@ -41,6 +41,14 @@
 //!       "n_gpu_layers": 35
 //!     },
 //!     {
+//!       "kind": "llamacpp",
+//!       "name": "local-gemma-vision",
+//!       "model":  { "name": "gemma-4-e4b", "sha256": "...", "source_url": "https://...gguf" },
+//!       "mmproj": { "name": "gemma-4-e4b-mmproj", "sha256": "...", "source_url": "https://...mmproj.gguf" },
+//!       "n_ctx": 8192,
+//!       "n_gpu_layers": 35
+//!     },
+//!     {
 //!       "kind": "openai-compat",
 //!       "name": "anthropic-fallback",
 //!       "base_url": "https://api.anthropic.com",
@@ -231,6 +239,18 @@ pub struct LlamacppEntry {
 
     /// Per-entry model spec (CAS layout, ADR 0011).
     pub model: ModelConfig,
+
+    /// Optional multimodal projector (mmproj) for v2 vision/audio
+    /// (ADR 0013 / 0015 / 0016). When set, the daemon fetches the
+    /// projector as an additional CAS blob — same pinned-URL +
+    /// constant-time-SHA path as `model` — and hands it to libmtmd, so
+    /// the backend's `capabilities().vision` flips `true` and v2 image
+    /// attachments are encoded. When `None` (the default), the backend
+    /// is text-only and reports `vision: false`. The projector must
+    /// match the base model family (e.g. a Gemma 4 mmproj for a Gemma 4
+    /// model). Issue #30.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<ModelConfig>,
 
     /// Llama.cpp context window in tokens. Default: 8192.
     #[serde(default = "default_n_ctx")]
@@ -460,6 +480,11 @@ pub fn default_first_boot_config() -> ConfigFile {
                         .into(),
                     license: Some("gemma".into()),
                 },
+                // Text-only by default. Operators who want vision add an
+                // `mmproj` block pointing at a Gemma 4 projector GGUF
+                // (issue #30); the daemon then fetches it into the CAS
+                // and lights up v2 image attachments.
+                mmproj: None,
                 n_ctx: default_n_ctx(),
                 n_gpu_layers: default_gpu_layers,
                 embed: false,
@@ -479,6 +504,8 @@ pub fn default_first_boot_config() -> ConfigFile {
                             .into(),
                     license: Some("gemma".into()),
                 },
+                // Embedding model — no projector.
+                mmproj: None,
                 n_ctx: default_embed_n_ctx(),
                 n_gpu_layers: default_gpu_layers,
                 embed: true,
@@ -652,6 +679,12 @@ impl ConfigFile {
                 match entry {
                     BackendEntry::Llamacpp(e) => {
                         validate_model_config(&e.model)?;
+                        // mmproj (issue #30) is fetched + SHA-verified
+                        // through the same path as the base model, so it
+                        // gets the same https + 64-hex-sha validation.
+                        if let Some(mm) = e.mmproj.as_ref() {
+                            validate_model_config(mm)?;
+                        }
                         if e.n_ctx == 0 {
                             return Err(ConfigError::Invalid(format!(
                                 "backends[{name:?}].n_ctx must be > 0"
@@ -726,6 +759,10 @@ impl ConfigFile {
         vec![BackendEntry::Llamacpp(LlamacppEntry {
             name: m.name.clone(),
             model: m,
+            // Legacy single-model configs are text-only; vision needs
+            // the multi-backend `backends:` shape with an `mmproj` block
+            // (issue #30).
+            mmproj: None,
             n_ctx: self.n_ctx,
             n_gpu_layers: self.n_gpu_layers,
             // Legacy single-model configs predate ADR 0017's embed

@@ -1045,6 +1045,39 @@ async fn build_llamacpp_entry(
         blob_path
     };
 
+    // Optional multimodal projector (issue #30). When the entry has an
+    // `mmproj` block, fetch it as an additional CAS blob via the same
+    // pinned-URL + constant-time-SHA path as the base model, then hand
+    // its path + expected SHA to the engine so libmtmd loads it and
+    // `capabilities().vision` flips true. None → text-only backend.
+    let (mmproj_path, mmproj_sha256_bytes) = if let Some(mm) = entry.mmproj.as_ref() {
+        let mm_spec: ModelSpec = mm.into();
+        let mm_sha = parse_sha256_hex(&mm.sha256)?;
+        let path = if auto_pull {
+            let spec_clone = mm_spec.clone();
+            let store_clone = store.clone();
+            let bcast = Arc::clone(&broadcaster);
+            tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
+                .await
+                .map_err(|e| anyhow::anyhow!("mmproj fetch task join: {e}"))?
+                .map_err(|e| anyhow::anyhow!("mmproj fetch failed for {}: {e}", entry.name))?
+        } else {
+            let blob_path = store.blob_path(&mm_spec.sha256_hex);
+            if !blob_path.exists() {
+                anyhow::bail!(
+                    "mmproj for {} not present in store at {} and auto_pull is disabled. \
+                     Run `inferdctl pull` or set auto_pull: true in config.",
+                    entry.name,
+                    blob_path.display()
+                );
+            }
+            blob_path
+        };
+        (Some(path), Some(mm_sha))
+    } else {
+        (None, None)
+    };
+
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Mmap {
             path: model_path.clone(),
@@ -1057,6 +1090,8 @@ async fn build_llamacpp_entry(
     let backend = LlamaCpp::new(LlamaCppConfig {
         model_path,
         model_sha256: Some(model_sha256_bytes),
+        mmproj_path,
+        mmproj_sha256: mmproj_sha256_bytes,
         n_ctx,
         n_gpu_layers,
         embed: entry.embed,

@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc.10] - 2026-06-01
+### Added
+
+- **Multimodal (v2 vision) is now reachable via config** (issue #30).
+  The v2 multimodal engine (libmtmd bridge, `generate_v2`, image
+  attachments) shipped in v0.2.0, but there was no operator-facing way
+  to load a vision projector — so every daemon reported `vision: false`
+  and consumers correctly concluded "no multimodal." Added an optional
+  `mmproj` block to a `llamacpp` backend entry (a `ModelConfig` with the
+  same `name`/`sha256`/`source_url` shape as `model`). When set, the
+  daemon fetches the projector as an additional CAS blob through the
+  same pinned-URL + constant-time-SHA path as the base model, hands its
+  path + expected SHA to `LlamaCppConfig.mmproj_path` / `mmproj_sha256`,
+  and the backend's `capabilities().vision` flips `true`. `mmproj` is
+  validated (https + 64-hex sha) at config load like `model`. The
+  default config stays text-only (`mmproj: None`); operators opt in. The
+  projector must match the base model family. Pure config/plumbing —
+  the wire protocol, FFI, and chat-templating were already in place.
 
 ### Added
 
