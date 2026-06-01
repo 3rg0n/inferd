@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`INFERD_FORCE_BACKEND=cpu` did not actually run on CPU on a GPU
+  host** (`crates/inferd-engine/src/llamacpp/backend.rs`). The override
+  flipped the *reported* accelerator to CPU but `LlamaCpp::new` still
+  passed the configured `n_gpu_layers` (default `-1` = offload all) to
+  the model loader, so on a box with a registered GPU the model loaded
+  onto the GPU anyway — defeating the ADR 0019 operator escape hatch
+  for benchmarking / sanity checks. Now gates the layer count on the
+  chosen kind: `kind == Cpu` forces `n_gpu_layers = 0` before load and
+  reports it through `build_accelerator_info`. Present since the ADR
+  0019 probe first landed; found in the rc.8 RTX 5080 / WSL validation
+  (`docs/v0.3-validation.md`, 2026-06-01).
+
 ## [0.3.0-rc.8] - 2026-06-01
 
 ### Fixed

@@ -311,10 +311,25 @@ impl LlamaCpp {
         // path is a no-op aside from the constant-folded match below.
         let kind = pick_accelerator_kind();
 
+        // Gate GPU offload on the chosen accelerator. When the probe (or
+        // an `INFERD_FORCE_BACKEND=cpu` override) selects CPU, force
+        // `n_gpu_layers = 0` regardless of the configured value. Without
+        // this, a GPU host whose operator forced CPU still offloads to the
+        // registered GPU device — llama.cpp only clamps the configured
+        // count to 0 when *no* GPU device is present, not when the operator
+        // asked for CPU on a GPU box. This keeps the ADR 0019 escape hatch
+        // honest: forcing CPU actually runs on CPU. Any non-CPU kind passes
+        // the configured value through unchanged (`-1` = offload all).
+        let effective_gpu_layers = if kind == AcceleratorKind::Cpu {
+            0
+        } else {
+            config.n_gpu_layers
+        };
+
         let model = load_model(
             &config.model_path,
             config.model_sha256.as_ref(),
-            config.n_gpu_layers,
+            effective_gpu_layers,
         )?;
 
         // SAFETY: FFI. `model.as_ptr()` is non-null and valid for the
@@ -351,7 +366,7 @@ impl LlamaCpp {
             None => (None, None),
         };
 
-        let accelerator = build_accelerator_info(kind, config.n_gpu_layers);
+        let accelerator = build_accelerator_info(kind, effective_gpu_layers);
 
         // Resolve a stable, human-meaningful model label. Try GGUF
         // `general.name` metadata first; fall back to the file stem.
