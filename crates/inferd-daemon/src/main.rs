@@ -54,6 +54,17 @@ use tracing_subscriber::util::SubscriberInitExt;
 async fn main() -> anyhow::Result<()> {
     install_tracing()?;
 
+    // Windows: when launched from the per-user Startup shortcut (or a
+    // double-click), a console-subsystem exe gets a fresh console window
+    // allocated for it, which sits visibly on the desktop showing tracing
+    // output (issue #28). Detach from it now that logging is wired to the
+    // activity log + admin pipe. Only detaches when we OWN the console
+    // (sole attached process); a daemon launched from an interactive shell
+    // shares that shell's console and is left alone so `inferd-daemon` still
+    // prints when run by hand for debugging.
+    #[cfg(windows)]
+    detach_own_console();
+
     let cli = Cli::parse();
     // Note: at-least-one-transport check is deferred until after the
     // config file is loaded — the operator may declare TCP via
@@ -1162,6 +1173,36 @@ fn install_tracing() -> anyhow::Result<()> {
         .with(logx_layer)
         .init();
     Ok(())
+}
+
+/// Free a console window the daemon owns, so a Startup-shortcut launch
+/// doesn't leave a tracing window on the desktop (issue #28).
+///
+/// `GetConsoleProcessList` reports how many processes share the attached
+/// console. A console allocated *for us* by `CreateProcess` (the shortcut /
+/// double-click case) lists exactly one PID — ours. A console inherited
+/// from an interactive shell lists at least two (the shell + us), and we
+/// leave that one alone so `inferd-daemon` run by hand still prints to the
+/// terminal. `FreeConsole` only detaches this process from the console; the
+/// file + admin-pipe log sinks installed by `install_tracing` are
+/// unaffected. If no console is attached, `GetConsoleProcessList` returns 0
+/// and we no-op.
+#[cfg(windows)]
+fn detach_own_console() {
+    use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+
+    // SAFETY: GetConsoleProcessList writes up to `len` PIDs into the buffer
+    // and returns the count actually attached (0 if no console). We pass a
+    // small fixed buffer; we only care whether the count is exactly 1.
+    let mut pids = [0u32; 4];
+    let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    if count == 1 {
+        // SAFETY: detaches this process from its console. No further console
+        // I/O is expected; tracing writes to the activity log + admin pipe.
+        unsafe {
+            FreeConsole();
+        }
+    }
 }
 
 /// Wire Ctrl-C (SIGINT on Unix) to N oneshot channels so multiple
