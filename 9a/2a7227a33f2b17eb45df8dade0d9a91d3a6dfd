@@ -1,0 +1,25 @@
+packaging/windows/install.ps1
+  s_126aec4081f728::t_b960dae520326e 139-147,151-152
+  s_126aec4081f728::t_f0504de84ed4e4 191-193
+  s_126aec4081f728::t_3a1ede8506b5c2 36
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_b9df21cc026ab7 56-57
+packaging/launchd/io.inferd.daemon.plist
+  s_126aec4081f728::t_b09780607b7f09 53-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9a2a7227a33f2b17eb45df8dade0d9a91d3a6dfd",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
