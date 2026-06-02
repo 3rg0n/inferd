@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc.11] - 2026-06-02
+### Fixed
+
+- **Install manifests now bind the v2 socket** (`packaging/windows/
+  install.ps1`, `packaging/systemd/inferd.service`,
+  `packaging/launchd/io.inferd.daemon.plist`). All three launched the
+  daemon with `--pipe`/`--uds` + `--embed` but **not** `--v2`, so the
+  typed-content-block surface (ADR 0015) never bound — making the
+  multimodal-by-default projector (issue #30) unreachable: a consumer
+  couldn't send image attachments even though the backend loaded the
+  vision encoder. Added `--v2` + `--v2-addr` to each manifest. Found by
+  the rc.11 from-tarball validation, which auto-pulled the projector and
+  loaded vision but had no v2 socket to dial. Verified end to end: a
+  real 256×256 image sent over `\\.\pipe\inferd-infer-v2` round-trips
+  through mtmd (input_tokens 276 vs ~33 text-only) and the model
+  correctly describes it ("A single, bright red circle").
 
 ### Fixed
 

@@ -50,6 +50,9 @@
         <string>__TMPDIR__inferd/inferd.lock</string>
         <string>--uds</string>
         <string>__TMPDIR__inferd/infer.sock</string>
+        <string>--v2</string>
+        <string>--v2-addr</string>
+        <string>__TMPDIR__inferd/infer.v2.sock</string>
         <string>--admin-addr</string>
         <string>__TMPDIR__inferd/admin.sock</string>
         <string>--embed</string>

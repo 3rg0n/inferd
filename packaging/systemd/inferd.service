@@ -53,6 +53,8 @@ ExecStartPre=/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
 ExecStart=%h/.local/bin/inferd-daemon \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
+    --v2 \
+    --v2-addr %t/inferd/infer.v2.sock \
     --admin-addr %t/inferd/admin.sock \
     --embed \
     --embed-addr %t/inferd/infer.embed.sock
