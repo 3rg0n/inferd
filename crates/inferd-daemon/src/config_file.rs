@@ -36,13 +36,6 @@
 //!     {
 //!       "kind": "llamacpp",
 //!       "name": "local-gemma",
-//!       "model": { "name": "gemma-4-e4b", "sha256": "...", "source_url": "https://...gguf" },
-//!       "n_ctx": 8192,
-//!       "n_gpu_layers": 35
-//!     },
-//!     {
-//!       "kind": "llamacpp",
-//!       "name": "local-gemma-vision",
 //!       "model":  { "name": "gemma-4-e4b", "sha256": "...", "source_url": "https://...gguf" },
 //!       "mmproj": { "name": "gemma-4-e4b-mmproj", "sha256": "...", "source_url": "https://...mmproj.gguf" },
 //!       "n_ctx": 8192,
@@ -480,11 +473,25 @@ pub fn default_first_boot_config() -> ConfigFile {
                         .into(),
                     license: Some("gemma".into()),
                 },
-                // Text-only by default. Operators who want vision add an
-                // `mmproj` block pointing at a Gemma 4 projector GGUF
-                // (issue #30); the daemon then fetches it into the CAS
-                // and lights up v2 image attachments.
-                mmproj: None,
+                // Gemma 4 is natively multimodal; unsloth ships the
+                // vision projector in the same repo as the text GGUF.
+                // Pull it by default (issue #30) so a fresh install has
+                // working v2 image attachments out of the box — the
+                // daemon fetches it as a second CAS blob and hands it to
+                // mtmd, flipping capabilities().vision = true. mmproj-F16
+                // is the standard quant (~945 MB). Operators who want a
+                // text-only daemon can delete this block after first
+                // boot.
+                mmproj: Some(ModelConfig {
+                    name: "gemma-4-e4b-mmproj".into(),
+                    sha256: "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51"
+                        .into(),
+                    size_bytes: Some(990_372_672),
+                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
+                         mmproj-F16.gguf"
+                        .into(),
+                    license: Some("gemma".into()),
+                }),
                 n_ctx: default_n_ctx(),
                 n_gpu_layers: default_gpu_layers,
                 embed: false,
@@ -1365,6 +1372,19 @@ mod tests {
                 } else {
                     saw_generate = true;
                     assert_eq!(e.model.name, "gemma-4-e4b");
+                    // Multimodal by default (issue #30): the generate
+                    // backend ships a vision projector so a fresh
+                    // install has working v2 image attachments.
+                    let mm = e
+                        .mmproj
+                        .as_ref()
+                        .expect("default generate backend must carry an mmproj projector");
+                    assert_eq!(mm.name, "gemma-4-e4b-mmproj");
+                    assert!(
+                        mm.source_url.ends_with("mmproj-F16.gguf"),
+                        "default mmproj should be the F16 projector, got {}",
+                        mm.source_url
+                    );
                 }
             }
         }

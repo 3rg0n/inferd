@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multimodal is now ON by default** (issue #30). The first-boot
+  default config's `gemma-4-e4b` backend now carries an `mmproj` block
+  pointing at unsloth's `mmproj-F16.gguf` (sha256 `ddf46c21…`, ~945 MB),
+  which lives in the same repo as the text GGUF. A fresh install
+  auto-pulls the projector as a second CAS blob and loads it through
+  mtmd, so the daemon reports `vision: true` / `audio: true` and accepts
+  v2 image attachments out of the box — no config editing. Verified on a
+  deployed daemon: `inferdctl doctor` →
+  `v2=true vision=true audio=true`. Operators who want a text-only
+  daemon delete the `mmproj` block after first boot. Gemma 4 is natively
+  multimodal; inferd simply never pulled the projector before.
 - **Multimodal (v2 vision) is now reachable via config** (issue #30).
   The v2 multimodal engine (libmtmd bridge, `generate_v2`, image
   attachments) shipped in v0.2.0, but there was no operator-facing way
