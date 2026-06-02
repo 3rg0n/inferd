@@ -215,6 +215,16 @@ impl ToolCallParser {
         let max_len = TOOL_OPEN.len().max(THINK_OPEN.len());
         let mut hold = 0;
         for k in 1..=n.min(max_len) {
+            // `pending` is a UTF-8 String; `n - k` can land inside a
+            // multi-byte char (e.g. the model emitted an emoji at the
+            // buffer boundary). Slicing on a non-char-boundary panics.
+            // Both sentinels are pure ASCII, so a suffix that isn't a
+            // valid char boundary can never be a prefix of one — skip
+            // those k rather than slicing. (Found by the Tier-3 v2 test
+            // when the model emitted a non-ASCII token at the tail.)
+            if !self.pending.is_char_boundary(n - k) {
+                continue;
+            }
             let suffix = &self.pending[n - k..];
             if TOOL_OPEN.starts_with(suffix) || THINK_OPEN.starts_with(suffix) {
                 hold = k;
@@ -435,6 +445,31 @@ mod tests {
             }
         }
         assert_eq!(joined, "hello world");
+    }
+
+    #[test]
+    fn multibyte_char_at_buffer_tail_does_not_panic() {
+        // Regression: safe_plain_emit_len sliced `pending` by byte
+        // offset; a multi-byte UTF-8 char (emoji, CJK, accented) at the
+        // tail put `n - k` inside a char, panicking on the slice.
+        // Surfaced by the Tier-3 v2 test when the model emitted a
+        // non-ASCII token at the buffer boundary. The parser must pass
+        // these through as plain text without panicking.
+        let mut p = ToolCallParser::new();
+        let mut out = Vec::new();
+        // Emoji is 4 bytes; CJK is 3; é is 2 — exercise each landing
+        // at the end of a push.
+        for piece in ["hello 😀", "世界", "café", " done"] {
+            out.extend(p.push(piece));
+        }
+        out.extend(p.finish());
+        let mut joined = String::new();
+        for o in &out {
+            if let Output::Text(t) = o {
+                joined.push_str(t);
+            }
+        }
+        assert_eq!(joined, "hello 😀世界café done");
     }
 
     #[test]

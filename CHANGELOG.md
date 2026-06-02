@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Panic in the v2 tool/thinking sentinel parser on a multi-byte UTF-8
+  token at the buffer boundary** (`crates/inferd-engine/src/llamacpp/
+  tool_parser.rs`). `safe_plain_emit_len` sliced the pending `String` by
+  byte offset (`pending[n - k..]`); when the model emitted a non-ASCII
+  token (emoji / CJK / accented char) whose bytes straddled the tail,
+  `n - k` landed inside a char and the slice panicked, killing the v2
+  generation worker. Now skips offsets that aren't char boundaries
+  before slicing (both sentinels are ASCII, so a non-boundary suffix can
+  never match a sentinel prefix anyway). Found by the Tier-3 v2
+  multimodal test during the issue #30 image-path validation; regression
+  test added.
+
 ### Added
 
 - **Multimodal (v2 vision) is now reachable via config** (issue #30).
