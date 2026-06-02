@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.11] - 2026-06-02
+
 ### Fixed
 
 - **Panic in the v2 tool/thinking sentinel parser on a multi-byte UTF-8
