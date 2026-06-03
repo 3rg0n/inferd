@@ -355,8 +355,14 @@ async fn cmd_doctor(
             // through backend construction. If we only see one frame,
             // it's the snapshot (daemon may not have hit Capabilities
             // yet — e.g. still in LoadingModel).
+            // The daemon writes one capabilities frame *per backend*
+            // followed by the snapshot frame on connect (admin.rs). Drain
+            // several frames so a multi-backend daemon's full capability
+            // set is captured, not just the first — a 2-frame read would
+            // miss a vision-capable generate backend behind an embed
+            // backend (and vice versa).
             let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..8 {
                 match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
                     Ok(Ok(event)) => frames.push(event),
                     _ => break,
@@ -372,7 +378,10 @@ async fn cmd_doctor(
                     ),
                 );
             } else {
-                let caps = frames.iter().find(|e| e.status == "capabilities");
+                let caps_frames: Vec<&inferd_client::AdminEvent> = frames
+                    .iter()
+                    .filter(|e| e.status == "capabilities")
+                    .collect();
                 let snapshot = frames
                     .iter()
                     .find(|e| e.status != "capabilities")
@@ -391,7 +400,11 @@ async fn cmd_doctor(
                         }
                     ),
                 );
-                if let Some(c) = caps {
+                // One `backend:` line per registered backend, so a
+                // multi-backend daemon reports e.g. a vision-capable
+                // generate backend AND an embed backend, instead of
+                // whichever frame happened to arrive first.
+                for c in &caps_frames {
                     let backend = c.backend.as_deref().unwrap_or("?");
                     let accel = c.accelerator.as_deref().unwrap_or("?");
                     let gpu_layers = c.gpu_layers.unwrap_or(0);

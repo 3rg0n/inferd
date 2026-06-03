@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
     // Resolve models + construct backends. Publishes loading_model
     // phase events through the broadcaster. Returns the canonical
     // ordered list (multi-backend per ADR 0007).
-    let backends: Vec<Arc<dyn Backend>> =
+    let (backends, backend_labels): (Vec<Arc<dyn Backend>>, Vec<String>) =
         match build_backends(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
             Ok(b) => b,
             Err(e) => {
@@ -153,10 +153,14 @@ async fn main() -> anyhow::Result<()> {
     // Publish capability snapshot so admin subscribers can introspect
     // multimodal / tools / accelerator posture before Ready (#77).
     // One frame per backend so subscribers see the full router shape.
-    for b in &backends {
+    for (b, label) in backends.iter().zip(backend_labels.iter()) {
         let caps = b.capabilities();
         broadcaster.publish(StatusEvent::Capabilities {
-            backend: b.name().to_string(),
+            // Unique config-entry label (e.g. "gemma-4-e4b"), not
+            // `b.name()` which is the kind ("llamacpp") and collides
+            // across entries — that collision made the caps map drop all
+            // but the last backend (doctor's vision=false bug).
+            backend: label.clone(),
             v2: caps.v2,
             vision: caps.vision,
             audio: caps.audio,
@@ -657,7 +661,13 @@ async fn build_backends(
     )]
     config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
-) -> anyhow::Result<Vec<Arc<dyn Backend>>> {
+) -> anyhow::Result<(Vec<Arc<dyn Backend>>, Vec<String>)> {
+    // Returns the backends AND a parallel list of unique labels — the
+    // config-entry name (e.g. "gemma-4-e4b" / "embeddinggemma-300m"),
+    // not `Backend::name()` which is the *kind* ("llamacpp") and
+    // collides across entries. The labels key the per-backend
+    // capabilities frames so doctor can report each backend distinctly.
+    //
     // Default path (no --backend): defer to the config file when
     // present, otherwise fall back to mock. This is the change that
     // fixes #15 — previously the unset CLI flag silently defaulted to
@@ -688,11 +698,14 @@ async fn build_backends(
             if !entries.is_empty() {
                 let auto_pull = cfg.auto_pull;
                 let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
+                let mut labels: Vec<String> = Vec::with_capacity(entries.len());
                 for entry in entries {
+                    let label = entry.name().to_string();
                     let b = build_entry(&entry, cfg, auto_pull, Arc::clone(&broadcaster)).await?;
                     out.push(b);
+                    labels.push(label);
                 }
-                return Ok(out);
+                return Ok((out, labels));
             }
         }
 
@@ -701,7 +714,7 @@ async fn build_backends(
                 path: PathBuf::from("(mock)"),
             },
         });
-        return Ok(vec![Arc::new(Mock::new())]);
+        return Ok((vec![Arc::new(Mock::new())], vec!["mock".to_string()]));
     }
 
     match cli.backend.expect("checked is_none above") {
@@ -711,22 +724,22 @@ async fn build_backends(
                     path: PathBuf::from("(mock)"),
                 },
             });
-            Ok(vec![Arc::new(Mock::new())])
+            Ok((vec![Arc::new(Mock::new())], vec!["mock".to_string()]))
         }
         #[cfg(feature = "llamacpp")]
         BackendKind::Llamacpp => {
             let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
-            Ok(vec![b])
+            Ok((vec![b], vec!["llamacpp".to_string()]))
         }
         #[cfg(feature = "openai")]
         BackendKind::OpenaiCompat => {
             let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
-            Ok(vec![b])
+            Ok((vec![b], vec!["openai-compat".to_string()]))
         }
         #[cfg(feature = "bedrock")]
         BackendKind::BedrockInvoke => {
             let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
-            Ok(vec![b])
+            Ok((vec![b], vec!["bedrock-invoke".to_string()]))
         }
     }
 }
