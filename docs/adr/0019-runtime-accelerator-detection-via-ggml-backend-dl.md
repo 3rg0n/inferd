@@ -1,7 +1,10 @@
 # 0019. Runtime accelerator detection via `GGML_BACKEND_DL`
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-05-26
+- Accepted: 2026-06-03 (v0.3 install=work validation complete — all
+  non-skip accelerator rows green: Windows CPU/CUDA, Linux CPU/CUDA,
+  macOS Metal; see `docs/v0.3-validation.md`)
 
 ## Context
 

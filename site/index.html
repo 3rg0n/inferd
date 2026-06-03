@@ -199,6 +199,13 @@
         The release tarball ships every ggml backend — Metal, CUDA, ROCm, Vulkan, plus per-CPU-feature variants — as separately loadable shared libraries. At boot, inferd probes the host hardware and picks the strongest backend available. The daemon binary is the same on every machine; the accelerator pick happens at runtime, not at compile time. Operators can override with <code>INFERD_FORCE_BACKEND</code> for benchmarking. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md" class="ext">ADR 0019 ↗</a>
       </p>
     </aside>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">Multimodal out of the box</p>
+      <p>
+        The default model is Gemma 4, and inferd pulls its vision projector on first boot — no extra config. Send images on the v2 socket as typed content blocks; the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and answers questions about an image without any setup.
+      </p>
+    </aside>
   </div>
 </section>
 
