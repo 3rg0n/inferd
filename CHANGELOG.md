@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **v0.3.0 install=work validation complete** (`docs/v0.3-validation.md`,
+  2026-06-03). All non-skip rows in the coverage matrix are ☑: Linux
+  x86_64 CPU + CUDA (rc.8/rc.9, RTX 5080 / WSL), macOS arm64 Metal +
+  multimodal (rc.12, Apple M1). Forced-backend CPU smoke verified on
+  Linux (rc.9). Phase 8 (#133) may proceed.
+
 ## [0.3.0-rc.12] - 2026-06-03
 
 ### Fixed
