@@ -1,0 +1,21 @@
+docs/adr/README.md
+  s_126aec4081f728::t_e8799d10e29984 27
+docs/adr/0020-inferd-http-bridge-is-a-separate-process.md
+  s_126aec4081f728::t_a1145dcada3796 1-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e1b88f000eed5a6e6dee522ff0b5d1d9dd2166a2",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
