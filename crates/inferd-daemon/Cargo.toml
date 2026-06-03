@@ -44,8 +44,8 @@ bedrock  = ["inferd-engine/bedrock"]
 security = []
 
 [dependencies]
-inferd-proto  = { path = "../inferd-proto", version = "=0.3.0-rc.12" }
-inferd-engine = { path = "../inferd-engine", version = "=0.3.0-rc.12" }
+inferd-proto  = { path = "../inferd-proto", version = "=0.3.0-rc.13" }
+inferd-engine = { path = "../inferd-engine", version = "=0.3.0-rc.13" }
 tokio               = { workspace = true }
 tokio-stream        = "0.1"
 serde               = { workspace = true }
