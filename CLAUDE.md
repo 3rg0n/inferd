@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Alpha.** v0.1 is in flight: `inferd-proto`, `inferd-engine`, `inferd-daemon`, and `inferd-client` are scaffolded and pass their lint+test cycles. Treat `docs/plan-v0.1.md`, `context.md`, `docs/protocol-v1.md`, and `docs/adr/` as the authoritative spec. Workspace members in `Cargo.toml` reflect what currently builds.
+**v0.3.0-rc.** v0.1 and v0.2 have shipped. The current line is v0.3 (branch `v0.3-dev`), which implements runtime accelerator detection per [ADR 0019](docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md) — the daemon picks the strongest available compute backend (Metal / CUDA / ROCm / Vulkan / CPU) at boot instead of being baked in at compile time. All five crates ship: `inferd-proto`, `inferd-engine`, `inferd-daemon`, `inferd-client`, and `inferdctl`.
+
+What's landed since v0.1: the v2 typed-content wire protocol (ADR 0015), the embeddings third socket (ADR 0017), cloud backend adapters (`openai-compat`, `bedrock-invoke`), and the gateway-not-pipe positioning (ADR 0013). Treat `context.md`, `docs/protocol-v1.md`, `docs/adr/`, and `CHANGELOG.md` as the authoritative spec. The workspace version in the root `Cargo.toml` is the source of truth for the current release.
 
 Before writing code, read `context.md` — it is the hand-off brief for new contributors and names the non-negotiable invariants the daemon must preserve.
+
+Releasable means **install=work**: a fresh-machine installer → real `generate` + real `embed`, no mock backend, no hand-edited config, no "run pull first." Mock-default install scripts are a release blocker. Don't cut a release tag until end-to-end works on the target platform; confirm with the user before any `git tag` / `gh release create` / `cargo publish`.
 
 ## What inferd is
 
@@ -14,13 +18,19 @@ inferd is a single host-wide local-inference daemon. One warm model in memory, m
 
 Reference consumer projects exist as examples, but inferd does not encode any consumer's assumptions. The daemon's only contract is the wire protocol.
 
-## Wire protocol is frozen
+## Wire protocol is frozen — and there are now three of them
 
-Protocol v1 is designed for inferd on its own merits ([ADR 0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md), supersedes 0001). It is **immutable once shipped**. Do not change framing, rename fields, or break existing field semantics. Breaking changes become v2 on a **separate socket path** — no in-band version negotiation. See `docs/protocol-v1.md`.
+Each wire surface is frozen the moment it ships. Breaking changes never mutate an existing surface; they go to a successor on a **separate socket path** — no in-band version negotiation. Backwards-additive changes within a surface (new optional fields older servers MUST ignore and older clients MUST NOT require) are acceptable; parsers enforce "unknown fields ignored on parse" so the door for additive changes stays open. Frame cap: 64 MiB per line, explicit byte limit — use a bounded reader, not an auto-growing buffer.
 
-Frame cap: 64 MiB per line. Use a bounded reader, not an auto-growing buffer.
+Three live wire surfaces, each on its own socket and each independently frozen:
 
-Backwards-additive changes within v1 (new optional fields older servers MUST ignore and older clients MUST NOT require) are acceptable; v0.1 enforces "unknown fields ignored on parse" so the door for additive changes stays open.
+| Surface | Socket (Linux) | Shape | ADR |
+|---|---|---|---|
+| v1 generation | `infer.sock` | text-only `Message { role, content: String }`, token stream | [0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md) (supersedes 0001) |
+| v2 generation | `infer.v2.sock` | typed content blocks, attachments, tools, thinking | [0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md) |
+| embeddings | `infer.embed.sock` | single-frame `embeddings` response, MRL `dimensions`, `task` prefix | [0017](docs/adr/0017-embeddings-on-a-third-socket.md) |
+
+A socket is bound **only when** the active backend advertises that capability (`supports()`): an embedding-only model binds the embed socket and not v1/v2; a generation-only model binds v1/v2 and not embed. The admin socket is shared across all surfaces. `docs/protocol-v1.md` documents v1; the v2 and embed shapes are specified in ADRs 0015/0017.
 
 ## Model store
 
@@ -39,33 +49,35 @@ The store is wire-compatible with the cross-tool *Shared Local Model Store* conv
 `docs/` contains upstream Gemma 4 reference docs — not inferd design, but context on the model the default `llamacpp` backend serves:
 
 - `run-gemma-content-generation-and-inferences.md` — framework/variant landscape
-- `text.function.calling.with.gemma.4.md` — tool-use schema (potential v0.2+ protocol extension)
-- `thinking.mode.in.gemma.md` — reasoning trace separation (potential v0.2+ response-frame extension)
+- `text.function.calling.with.gemma.4.md` — tool-use schema (now expressed on the v2 wire as typed tool blocks, ADR 0015)
+- `thinking.mode.in.gemma.md` — reasoning trace separation (now a v2 response-frame concern, ADR 0015)
 
-Treat these as background, not requirements. v0.1 does not expose function-calling or thinking-mode semantics on the wire; the protocol stays frozen per ADR 0008.
+Treat these as background, not requirements. v1 stays text-only and frozen per ADR 0008; tool-use and thinking semantics live on the v2 socket. The daemon owns the model-specific shaping that turns semantic v2 frames into Gemma's wire format (ADR 0013 — gateway, not pipe).
 
 ## Architecture
 
 Single `cargo workspace` at repo root. Crates:
 
-| Crate | Role | Status |
+| Crate | Bin/lib | Role |
 |---|---|---|
-| `inferd-proto` | Wire format: `Request`, `Response`, NDJSON read/write. `no_std`-friendly. | shipping |
-| `inferd-daemon` | Binary — lifecycle, queue, single-instance lock, Unix socket / Windows named pipe / loopback TCP endpoints, admin socket, activity log, CAS model store, fetch. | shipping |
-| `inferd-engine` | `Backend` trait + adapters. v0.1 ships `llamacpp` (FFI to vendored `libllama`) + `mock` (tests). v0.2 adds Anthropic / OpenAI / Bedrock / LiteLLM behind the same trait. | shipping (llamacpp + mock) |
-| `inferd-client` | Rust client: NDJSON-over-IPC client + admin subscriber + connect-and-retry helpers. Published to crates.io. | shipping |
-| `inferd` | Single CLI binary in the gh / kubectl shape. v0.1 subcommands: `status`, `watch`, `pull`, `doctor`. Future: default `-p "..."` prompt mode (replaces the previously-scaffolded `inferd-stdio`). | shipping |
+| `inferd-proto` | lib | Wire format for all three surfaces: `request.rs`/`response.rs`/`error.rs` (v1), `v2/` (typed content blocks), `embed/` (embeddings), `frame.rs` (NDJSON read/write, 64 MiB cap). `no_std`-friendly. |
+| `inferd-engine` | lib | `Backend` trait (`backend.rs`) + adapters: `llamacpp/` (FFI to vendored `libllama` via `ffi.rs` + `mtmd_ffi.rs` for multimodal), `mock.rs` (tests), `openai_compat/` and `bedrock_invoke/` (outbound-HTTPS cloud adapters, feature-gated). |
+| `inferd-daemon` | bin `inferd-daemon` | Lifecycle (`lifecycle.rs` / `lifecycle_v2.rs` / `lifecycle_embed.rs` — one per wire surface), admission `queue.rs`, single-instance `lock.rs`, `endpoint.rs` (UDS / named pipe / loopback TCP), `admin.rs`, `peercred.rs`, `auth.rs`, `router.rs`, CAS `store.rs`, `fetch.rs`, activity `logx.rs` + `redact.rs`. |
+| `inferd-client` | lib | Rust client, one surface each: `client.rs` (v1), `v2_client.rs`, `embed_client.rs`, plus `admin.rs` subscriber and `wait.rs` connect-and-retry. Published to crates.io. |
+| `inferdctl` | bin `inferdctl` | Single CLI in the gh / kubectl shape (renamed from `inferd` per [ADR 0018](docs/adr/0018-cli-renamed-to-inferdctl.md)). Subcommands: `status`, `watch`, `pull`, `doctor`. Crate dir is `crates/inferd/` but the package and binary are `inferdctl`. |
 
-Clients (`clients/go/`, future `clients/py/`, `clients/ts/`) are hand-written wrappers shipped alongside the daemon. The Go client is the canonical example for non-Rust consumers.
+The `inferdctl` CLI is a **reference middleware, not a privileged surface** ([ADR 0014](docs/adr/0014-inferd-cli-is-a-reference-middleware.md)) — it talks to the daemon over the same `inferd-client` library every other consumer uses. Cloud adapters live behind cargo features (`openai`, `bedrock`); the dynamic-loader accelerator path lives behind `dl-backends` (ADR 0019). `cargo tree -e features` is the verifiable boundary for what a given build links.
+
+Clients (`clients/go/`, `clients/py/`, `clients/ts/`) are hand-written wrappers shipped alongside the daemon. The Go client is the canonical example for non-Rust consumers.
 
 ### Flow at runtime
 
 1. Daemon boots, acquires single-instance lock (flock on Unix, LockFileEx on Windows). Admin socket is bound *immediately* so progress UIs can connect during the rest of bring-up.
 2. Daemon reads `~/.inferd/config.json`, opens the model store, resolves or fetches the configured model into the CAS layout, verifies SHA-256 with constant-time compare.
-3. Backend reports ready (for the v0.1 llama.cpp FFI backend: model load + KV-cache allocation succeed). **Only then** does the daemon create the inference socket / pipe / TCP listener — never before.
-4. Client connects over NDJSON, sends `Request` frames.
+3. Backend reports ready (for the llama.cpp FFI backend: model load + KV-cache allocation succeed; with `dl-backends`, this is also where `ggml_backend_load_all()` runs and the strongest available accelerator is selected per the ADR 0019 cascade). **Only then** does the daemon bind the inference socket(s) the backend's capabilities advertise — never before.
+4. Client connects over NDJSON to the matching surface socket, sends frames.
 5. Admission queue (default: 1 active generation, 10 queued). Overflow returns `{"type":"error","code":"queue_full",...}` immediately.
-6. Router picks a backend per ADR 0007 policy (v0.1: trivial — one backend). Backend streams tokens back as `{"type":"token",...}` frames, terminates with one `done` or one `error`.
+6. Router picks a backend per ADR 0007 operator policy. Backend streams tokens back as `{"type":"token",...}` frames, terminates with one `done` or one `error` (the `done`/terminal frame carries the `backend` field per ADR 0009). Embed requests return a single terminal `embeddings` frame instead.
 7. Client disconnect cancels the in-flight job. No retry/fallback in the daemon, no mid-stream failover — the caller owns retry.
 
 ## Non-negotiable invariants (from `context.md` §"Invariants")
@@ -81,7 +93,7 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 7. 64 MiB NDJSON frame cap, explicit byte limit (THREAT_MODEL F-5).
 8. SHA-256 verification of downloaded models uses **constant-time** compare (`subtle` crate).
 9. Activity log NDJSON → `~/.inferd/logs/*.ndjson`, `INFERD_LOG=0|1|debug`, 3-generation rotation, secret redactor at write time.
-10. Every `std::process::Command` is reviewed. v0.1 has **no subprocess engines** (per ADR 0005, llama.cpp is linked via FFI). Any future `Command` invocation is a code smell needing justification.
+10. Every `std::process::Command` is reviewed. inferd has **no subprocess engines** (per ADR 0005, llama.cpp is linked via FFI; ADR 0019's dynamic-loader path stays in-process via `dlopen`, still not a subprocess). Any `Command` invocation is a code smell needing justification.
 11. The daemon may make outbound HTTPS only for the narrow purpose carved by [ADR 0010](docs/adr/0010-narrow-https-exception-for-model-bootstrap.md): one URL, one SHA, one file. No HTTP server, no OpenAI-compat, no registry browsing, no HTTP after `ready`.
 
 [ADR 0005](docs/adr/0005-libllama-ffi-not-subprocess.md) (supersedes 0003): the v0.1 default backend is `libllama` linked via FFI from a vendored `llama.cpp` submodule. No subprocess llamafile. No HTTP server compiled into the daemon. The `Backend` trait stays the same; only the default adapter changes.
@@ -94,6 +106,8 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 
 [ADR 0011](docs/adr/0011-shared-content-addressable-model-store.md): models live in a shared CAS store at `$MODELS_HOME`. Manifest indirection (`name → sha`) plus content-addressed blob paths. Wire-compatible with the cross-tool convention.
 
+[ADR 0013](docs/adr/0013-inferd-is-the-gateway-not-the-pipe.md): inferd is a **gateway, not a pipe**. The daemon owns model-specific shaping — chat templating, attachment routing (mtmd for llamacpp), tool-call lifecycle, embed task-prefixes and MRL truncation. Consumers send *semantic intent* (`messages[]`, `attachments[]`, `tools[]`); the daemon translates to what the engine consumes. This is distinct from ADR 0006 (which is about consumer-facing surfaces like HTTP/web UI staying out); engine-level shaping is squarely a daemon concern. Invariant #1 ("zero knowledge of prompts") is the v1 text-only framing; from v2 on, the daemon knows the *engine's* format, never the *consumer's* application logic.
+
 ## Scope gates (what NOT to build)
 
 - No HTTP/gRPC transport in the daemon — ever (ADR 0006). IPC only. HTTP is an ecosystem-extension job, separate process. The narrow ADR 0010 HTTPS exception is for model bootstrap only and explicitly forbids serving HTTP.
@@ -101,12 +115,13 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 - No per-request backend override on the wire — ever (ADR 0006, ADR 0007). Apps wanting per-call provider control should write their own SDK integration.
 - No in-daemon retry on backend failure (ADR 0007). Caller owns retry.
 - No mid-stream failover, ever (ADR 0007). Structurally broken; explicitly rejected.
-- No subprocess engines in v0.1 (ADR 0005). llama.cpp is linked, not spawned.
-- No multi-model warm pool, ever ([ADR 0012](docs/adr/0012-one-warm-model-per-inferd-process.md)). One warm model per inferd process; operators who need N concurrent models run N inferd processes. The router (ADR 0007) multiplexes *backends*, not *models*.
+- No subprocess engines, ever (ADR 0005). llama.cpp is linked via FFI / `dlopen`, never spawned.
+- No multi-model warm pool, ever ([ADR 0012](docs/adr/0012-one-warm-model-per-inferd-process.md)). One warm model per inferd process; operators who need N concurrent models (or gen + embed) run N inferd processes. The router (ADR 0007) multiplexes *backends*, not *models*.
 - No registry browsing, model search, or arbitrary HTTP fetches in the daemon (ADR 0010). The fetch surface is one URL + one SHA.
-- No new v1 wire fields. v1 is frozen (ADR 0008). Extensions go to v2 on a separate socket.
+- No breaking changes to any shipped wire surface. v1 / v2 / embed are each frozen (ADR 0008 / 0015 / 0017). Additive optional fields only; breaking changes go to a successor socket.
 - No async runtime pluralism. Tokio everywhere.
-- No cloud backends in v0.1 (v0.2). The `Backend` trait + router are designed for them; adapters aren't built yet.
+- No NPU paths in the accelerator cascade (ADR 0019). Metal / CUDA / ROCm / Vulkan / CPU only; revisit NPUs when vendor toolchains beat CPU+SIMD on LLM decode.
+- No mid-stream backend switching or multi-GPU sharding (ADR 0019). Pick one accelerator at boot; pick one backend per request.
 
 ## Commands
 
@@ -118,7 +133,17 @@ cargo audit
 cargo deny check
 ```
 
-Integration tests that need a real llama.cpp build are gated behind the `llamacpp-integration` cargo feature. Run a single test with `cargo test -p <crate> <test_name>`.
+Run the full lint + test + audit cycle across the whole workspace before every commit, not just changed files.
+
+Feature-gated builds and tests:
+
+- The daemon and engine pick adapters at compile time via cargo features. Key ones: `llamacpp` (FFI backend), `dl-backends` (ADR 0019 dynamic-loader / runtime accelerator selection — implies `llamacpp`), `cuda` / `metal` / `vulkan` / `rocm` (per-backend opt-ins), `openai` / `bedrock` (cloud adapters), `security` (Tier-5 regression tests in the daemon).
+- Integration tests that need a real llama.cpp build are gated behind `llamacpp-integration`; set `INFERD_TEST_MODEL_PATH` to a GGUF file to actually run them, otherwise they skip.
+- Run a single test with `cargo test -p <crate> <test_name>`.
+- Build with a backend, e.g. `cargo build -p inferd-daemon --features dl-backends` (or `--features cuda` for the static single-accelerator path).
+- `INFERD_FORCE_BACKEND=cpu|metal|cuda|rocm|vulkan` pins the accelerator at runtime (env-only, no CLI flag — ADR 0019).
+
+Release engineering: `docs/RELEASING.md` is the tag/publish runbook; `docs/v0.3-validation.md` is the per-platform install=work coverage matrix. The release workflow (`.github/workflows/release.yml`) bundles backend dylibs into each tarball; the Linux x86_64 CUDA path uses `readelf -d` BFS to walk the transitive DT_NEEDED closure and patchelf to bake `$ORIGIN` RUNPATH (NVIDIA driver libs `libcuda.so.1` / `libnvidia-ml.so.1` are skiplisted — redistribution is EULA-forbidden).
 
 ## When writing ADRs
 

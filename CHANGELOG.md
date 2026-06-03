@@ -7,6 +7,683 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-03
+
+First stable v0.3 release. Headline: **runtime accelerator detection**
+(ADR 0019) — one binary ships every ggml backend as a loadable module
+and picks the strongest available (Metal / CUDA / ROCm / Vulkan / CPU)
+at boot — and **multimodal by default**, with the reference Gemma 4
+model pulling its vision projector on first boot so a fresh install
+answers questions about images with no extra config.
+
+install=work validation is complete on every shipped target with real
+hardware: Windows x86_64 CPU + CUDA (RTX 5080), Linux x86_64 CPU + CUDA
+(RTX 5080 / WSL), and macOS arm64 Metal (Apple M1) — each a
+fresh-machine install that auto-pulls the models and serves real
+generate + embed + a real v2 image round-trip. See
+`docs/v0.3-validation.md`. ADR 0019 is accepted.
+
+This section ratifies the cumulative work detailed in the
+`0.3.0-rc.1` … `0.3.0-rc.13` entries below; no code changes between
+`0.3.0-rc.13` and `0.3.0` beyond the version bump.
+
+## [0.3.0-rc.13] - 2026-06-03
+
+### Fixed
+
+- **`inferdctl doctor` reported only one backend's capabilities, showing
+  `vision=false` on a multimodal daemon.** Two causes: (1) the admin
+  `StatusBroadcaster` retained capabilities in a single watch slot, so
+  each backend's caps frame overwrote the previous; (2) the caps frame's
+  `backend` field used `Backend::name()` (the *kind*, `"llamacpp"`,
+  identical across entries) rather than the unique config-entry name, so
+  even a keyed map collided. Now retains caps per backend (keyed by the
+  config-entry label), replays one frame per backend on admin connect,
+  and doctor prints a `backend:` line for each — so the vision-capable
+  generate backend shows `vision=true` alongside the embed backend.
+  Found by Mac Claude during rc.12 Metal validation (#32); affected all
+  platforms (display-only — the daemon's actual capabilities were
+  correct).
+
+### Validation
+
+- **v0.3.0 install=work validation complete** (`docs/v0.3-validation.md`,
+  2026-06-03). All non-skip rows in the coverage matrix are ☑: Linux
+  x86_64 CPU + CUDA (rc.8/rc.9, RTX 5080 / WSL), macOS arm64 Metal +
+  multimodal (rc.12, Apple M1). Forced-backend CPU smoke verified on
+  Linux (rc.9). Phase 8 (#133) may proceed.
+
+## [0.3.0-rc.12] - 2026-06-03
+
+### Fixed
+
+- **Install manifests now bind the v2 socket** (`packaging/windows/
+  install.ps1`, `packaging/systemd/inferd.service`,
+  `packaging/launchd/io.inferd.daemon.plist`). All three launched the
+  daemon with `--pipe`/`--uds` + `--embed` but **not** `--v2`, so the
+  typed-content-block surface (ADR 0015) never bound — making the
+  multimodal-by-default projector (issue #30) unreachable: a consumer
+  couldn't send image attachments even though the backend loaded the
+  vision encoder. Added `--v2` + `--v2-addr` to each manifest. Found by
+  the rc.11 from-tarball validation, which auto-pulled the projector and
+  loaded vision but had no v2 socket to dial. Verified end to end: a
+  real 256×256 image sent over `\\.\pipe\inferd-infer-v2` round-trips
+  through mtmd (input_tokens 276 vs ~33 text-only) and the model
+  correctly describes it ("A single, bright red circle").
+
+### Fixed
+
+- **Panic in the v2 tool/thinking sentinel parser on a multi-byte UTF-8
+  token at the buffer boundary** (`crates/inferd-engine/src/llamacpp/
+  tool_parser.rs`). `safe_plain_emit_len` sliced the pending `String` by
+  byte offset (`pending[n - k..]`); when the model emitted a non-ASCII
+  token (emoji / CJK / accented char) whose bytes straddled the tail,
+  `n - k` landed inside a char and the slice panicked, killing the v2
+  generation worker. Now skips offsets that aren't char boundaries
+  before slicing (both sentinels are ASCII, so a non-boundary suffix can
+  never match a sentinel prefix anyway). Found by the Tier-3 v2
+  multimodal test during the issue #30 image-path validation; regression
+  test added.
+
+### Added
+
+- **Multimodal is now ON by default** (issue #30). The first-boot
+  default config's `gemma-4-e4b` backend now carries an `mmproj` block
+  pointing at unsloth's `mmproj-F16.gguf` (sha256 `ddf46c21…`, ~945 MB),
+  which lives in the same repo as the text GGUF. A fresh install
+  auto-pulls the projector as a second CAS blob and loads it through
+  mtmd, so the daemon reports `vision: true` / `audio: true` and accepts
+  v2 image attachments out of the box — no config editing. Verified on a
+  deployed daemon: `inferdctl doctor` →
+  `v2=true vision=true audio=true`. Operators who want a text-only
+  daemon delete the `mmproj` block after first boot. Gemma 4 is natively
+  multimodal; inferd simply never pulled the projector before.
+- **Multimodal (v2 vision) is now reachable via config** (issue #30).
+  The v2 multimodal engine (libmtmd bridge, `generate_v2`, image
+  attachments) shipped in v0.2.0, but there was no operator-facing way
+  to load a vision projector — so every daemon reported `vision: false`
+  and consumers correctly concluded "no multimodal." Added an optional
+  `mmproj` block to a `llamacpp` backend entry (a `ModelConfig` with the
+  same `name`/`sha256`/`source_url` shape as `model`). When set, the
+  daemon fetches the projector as an additional CAS blob through the
+  same pinned-URL + constant-time-SHA path as the base model, hands its
+  path + expected SHA to `LlamaCppConfig.mmproj_path` / `mmproj_sha256`,
+  and the backend's `capabilities().vision` flips `true`. `mmproj` is
+  validated (https + 64-hex sha) at config load like `model`. The
+  default config stays text-only (`mmproj: None`); operators opt in. The
+  projector must match the base model family. Pure config/plumbing —
+  the wire protocol, FFI, and chat-templating were already in place.
+
+### Added
+
+- **Windows x86_64 release tarball now ships CUDA** (`.github/workflows/
+  release.yml`). The Windows matrix entry builds with
+  `inferd-daemon/dl-backends,inferd-daemon/cuda`, installs the CUDA 12.6
+  toolkit (Jimver), stages `ggml-cuda.dll` (via build.rs), and bundles
+  the CUDA redist DLLs (`cudart64_12` / `cublas64_12` / `cublasLt64_12`)
+  into `backends\` next to it. The driver DLL `nvcuda.dll` is never
+  bundled (EULA; resolves from System32). Windows + NVIDIA users now get
+  GPU acceleration out of the box; hosts without an NVIDIA driver fall
+  through to CPU at the runtime probe (ADR 0019). A verify gate fails the
+  build if `ggml-cuda.dll` is missing, and an import-closure check
+  asserts every imported DLL is bundled, a driver DLL, or a system DLL.
+  build.rs already flipped `GGML_CUDA=ON` for Windows when the `cuda`
+  feature is set; this is a CI/packaging change only.
+
+## [0.3.0-rc.9] - 2026-06-01
+
+### Fixed
+
+- **`INFERD_FORCE_BACKEND=cpu` did not actually run on CPU on a GPU
+  host** (`crates/inferd-engine/src/llamacpp/backend.rs`). The override
+  flipped the *reported* accelerator to CPU but `LlamaCpp::new` still
+  passed the configured `n_gpu_layers` (default `-1` = offload all) to
+  the model loader, so on a box with a registered GPU the model loaded
+  onto the GPU anyway — defeating the ADR 0019 operator escape hatch
+  for benchmarking / sanity checks. Now gates the layer count on the
+  chosen kind: `kind == Cpu` forces `n_gpu_layers = 0` before load and
+  reports it through `build_accelerator_info`. Present since the ADR
+  0019 probe first landed; found in the rc.8 RTX 5080 / WSL validation
+  (`docs/v0.3-validation.md`, 2026-06-01).
+
+## [0.3.0-rc.8] - 2026-06-01
+
+### Fixed
+
+- **rc.7 was not install=work on Linux: the CUDA bundling step staged
+  the glibc family into `backends/`, crashing the daemon at boot**
+  (`.github/workflows/release.yml`). The rc.7 BFS copy loop applied
+  its system-lib allow-list only in the *final verification* pass, not
+  in the *copy* loop — so `libc.so.6`, `libdl.so.2`,
+  `libpthread.so.0`, `librt.so.1`, `libm.so.6`, `libstdc++.so.6`,
+  `libgcc_s.so.1`, and `ld-linux-x86-64.so.2` were copied next to
+  `libggml-cuda.so`. With `$ORIGIN` RUNPATH the loader prefers those
+  runner-built copies over the consumer's glibc; on any host whose
+  glibc differs from `ubuntu-latest` the daemon dies immediately with
+  `symbol lookup error: libc.so.6: undefined symbol:
+  __nptl_change_stack_perm, version GLIBC_PRIVATE`. Hoisted the
+  allow-list into an `is_system_lib` predicate consulted by the copy
+  loop, so the glibc family is never staged and resolves from the
+  consumer's own glibc at runtime. Found in the rc.7 RTX 5080 / WSL
+  validation; see `docs/v0.3-validation.md` findings 2026-06-01.
+- **`docs/v0.3-validation.md` Linux install step referenced a
+  non-existent path.** The tarball flattens the systemd unit to
+  `packaging/inferd.service`; the checklist said
+  `packaging/systemd/inferd.service`. Corrected the install step.
+- **Windows: daemon allocated a visible console window on startup
+  (#28).** `inferd-daemon.exe` is a console-subsystem exe, so a launch
+  from the per-user Startup shortcut popped a tracing window on the
+  desktop. After logging is wired to the activity log + admin pipe the
+  daemon now calls `FreeConsole()` — but only when it owns the console
+  (sole attached process, the shortcut/double-click case). Launched
+  from an interactive shell it leaves the shared console alone so
+  hand-run debugging still prints. Windows-only `#[cfg(windows)]`.
+
+## [0.3.0-rc.7] - 2026-05-28
+
+### Fixed
+
+- **rc.6 release workflow's CUDA bundling missed transitive deps and
+  was lied to by `ldd` via the runner's `/etc/ld.so.cache`**
+  (`.github/workflows/release.yml`). Two related problems with the
+  ldd-based discovery loop: (a) the GHA runner has
+  `/etc/ld.so.conf.d/cuda-12-6.conf` registering the toolkit install
+  dir system-wide, so ldd resolved `libcudart.so.12` through that
+  path and hid it from the discovery loop — but a consumer host
+  without that ld.so.conf entry would still see it missing; (b) once
+  `libcublas.so.12` was bundled, ldd of `libggml-cuda.so` walked
+  through the bundled lib and surfaced its `libcublasLt.so.12` dep,
+  which the loop had no chance to bundle (single pass). Rewrote the
+  bundling step to walk `DT_NEEDED` via `readelf -d` in BFS — doesn't
+  consult ld.so.cache, doesn't lie. Closure is followed transitively,
+  with three exit conditions per soname: already-bundled (skip),
+  driver-skiplist (skip), system lib (allow-list of libc / libm /
+  libstdc++ / etc). A second pass walks the same closure and asserts
+  every soname falls into one of those three buckets, failing the
+  build if anything's missing.
+
+## [0.3.0-rc.6] - 2026-05-28
+
+### Fixed
+
+- **rc.5 release workflow's CUDA bundling step missed real toolkit
+  deps because `LD_LIBRARY_PATH` was masking them**
+  (`.github/workflows/release.yml`). Jimver/cuda-toolkit exports
+  `LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64`, so `ldd
+  libggml-cuda.so` on the runner happily resolved `libcudart.so.12` /
+  `libcublas.so.12` through that env var and reported only
+  `libcuda.so.1` as missing — but a consumer machine without that env
+  would still see all the toolkit libs unresolved. Step now `unset
+  LD_LIBRARY_PATH` at start so ldd reports what end users actually
+  see. Also single-quoted an `echo` containing `$ORIGIN` (was failing
+  `set -u`) so the post-bundle re-verify step doesn't abort with
+  `ORIGIN: unbound variable`.
+
+## [0.3.0-rc.5] - 2026-05-27
+
+### Fixed
+
+- **rc.4 release workflow tripped on `libcuda.so.1` in CUDA bundling**
+  (`.github/workflows/release.yml`). The dynamic-`ldd`-discovery loop
+  added in rc.4 found `libcuda.so.1` unresolved on the GHA runner
+  (correct — there's no NVIDIA driver on the build host) and tried to
+  bundle it, which failed because no toolkit ships it. `libcuda.so.1`
+  is the NVIDIA driver lib: redistributing it is forbidden by NVIDIA's
+  EULA, it's version-locked to the consumer's installed driver, and
+  it's always provided at runtime by the driver install (e.g.
+  `/usr/lib/wsl/lib/libcuda.so.1` on WSL,
+  `/usr/lib/x86_64-linux-gnu/libcuda.so.1` on bare metal). Workflow
+  now has an explicit skiplist (`libcuda.so.1`,
+  `libnvidia-ml.so.1`) that's bypassed in the bundle loop and
+  filtered out of the post-bundle ldd check. Hosts without an NVIDIA
+  driver still degrade correctly: the daemon's accelerator probe
+  skips the CUDA backend and the user gets CPU.
+
+## [0.3.0-rc.4] - 2026-05-27
+
+### Fixed
+
+- **systemd unit failed first start with `status=226/NAMESPACE` on
+  fresh installs** (`packaging/systemd/inferd.service`).
+  `ReadWritePaths=%h/.local/share/models %h/.inferd` requires both
+  paths to exist before namespace setup; on a fresh box neither does
+  yet (the daemon normally creates them on first boot), so the unit
+  aborted before `ExecStart` ran. Added `ExecStartPre=/usr/bin/mkdir
+  -p %h/.inferd %h/.local/share/models` so the unit is self-sufficient
+  on first start. mkdir -p is idempotent and runs unprivileged under
+  the user instance.
+- **Linux x86_64 release tarball shipped `libggml-cuda.so` without
+  its CUDA runtime deps** (`.github/workflows/release.yml`).
+  `ldd backends/libggml-cuda.so` on the consumer machine showed
+  `libcudart.so.12 => not found` and `libcublas.so.12 => not found`,
+  and ggml's `dlopen()` swallows the missing-deps failure silently —
+  so the v0.3 runtime accelerator probe registered only `Cpu` and the
+  daemon ran with `gpu_layers=0` on every NVIDIA host that had no
+  system-wide CUDA install. The release workflow now bundles the
+  required CUDA runtime libs into `backends/` next to the MODULE,
+  forces `DT_RUNPATH=$ORIGIN` on libggml-cuda.so via patchelf
+  (idempotent), and re-runs `ldd` after bundling to fail loudly if
+  any dep still doesn't resolve. Discovery is dynamic (parses ldd's
+  "not found" lines) so the bundled set tracks ggml's actual NEEDED
+  entries instead of a hard-coded list. NVIDIA's EULA explicitly
+  permits redistribution of these specific runtime libs.
+
+## [0.3.0-rc.3] - 2026-05-27
+
+### Fixed
+
+- **`release.yml` CUDA cublas install via Jimver still failed**
+  (`.github/workflows/release.yml`). Jimver/cuda-toolkit always
+  rewrites a sub-package name `X` to `cuda-X-<MAJOR>-<MINOR>` —
+  there is no escape hatch to pass a name through verbatim. CUDA
+  12.x's cublas packages are `libcublas-12-6` / `libcublas-dev-12-6`
+  (no `cuda-` prefix), so both `cublas` (rc.1, → `cuda-cublas-12-6`)
+  and `libcublas` (rc.2, → `cuda-libcublas-12-6`) resolved to
+  nonexistent packages. The action now installs nvcc / cudart / cccl
+  via Jimver and runs a separate `apt-get install libcublas-12-6
+  libcublas-dev-12-6` step against the NVIDIA repo Jimver has
+  already configured. ggml-cuda's MODULE build needs both the
+  runtime `.so` and the dev headers (`cublas_v2.h`).
+
+## [0.3.0-rc.2] - 2026-05-27
+
+### Fixed
+
+- **`release.yml` Linux CUDA install resolved nonexistent `cuda-cublas-12-6` package**
+  (`.github/workflows/release.yml`). The Jimver/cuda-toolkit action
+  expands a sub-package name without a `lib` prefix to
+  `cuda-<name>-<MAJOR>-<MINOR>` (e.g. `cuda-nvcc-12-6`). CUDA 12.x
+  ships cublas as `libcublas-12-6` / `libcublas-dev-12-6`, not
+  `cuda-cublas-12-6`, so `apt-get install` failed at the toolkit
+  install step and rc.1's Linux x86_64 build never reached `cargo
+  build`. Sub-packages are now `["nvcc","cudart","cudart-dev",
+  "libcublas","libcublas-dev","cccl"]` — the `lib`-prefixed forms
+  are passed through verbatim by the action and resolve correctly.
+- **`release.yml` Windows verify step couldn't load `llama.dll` from `backends/`**
+  (`.github/workflows/release.yml`). `dl-backends` builds link the
+  daemon against `llama.dll`, which `build.rs` stages into
+  `backends/`. The Windows DLL loader resolves imported DLLs at
+  process startup from the exe's own dir + PATH only — it does not
+  search subdirectories. So `inferd-daemon.exe --help` aborted with
+  exit 127 (`STATUS_DLL_NOT_FOUND`) before `main()` could run.
+  `install.ps1` already flattens `backends\\*.dll` next to the exe at
+  install time; the verify step now does the equivalent in-place so
+  it mirrors the post-install layout. Linux + macOS unaffected
+  (`$ORIGIN/backends` and `@loader_path/backends` are baked into the
+  daemon's RPATH).
+
+## [0.3.0-rc.1] - 2026-05-27
+
+### Changed
+
+- **Release tarball for Linux x86_64 now ships `libggml-cuda.so`**
+  (`.github/workflows/release.yml`). The release workflow used to build
+  with `--features inferd-daemon/dl-backends` only on Linux, which left
+  `GGML_CUDA=OFF` in the cmake configure step — the resulting tarball
+  had no CUDA MODULE so the v0.3 runtime accelerator probe always fell
+  through to CPU on NVIDIA hosts. The workflow now installs the CUDA
+  toolkit on the Ubuntu runner (Jimver/cuda-toolkit, pinned by SHA) and
+  builds with `inferd-daemon/dl-backends,inferd-daemon/cuda`. A new
+  staging assertion fails the release if `libggml-cuda.so` is missing
+  from the produced `backends/` dir, and a parallel one for
+  `libggml-metal.{so,dylib}` on `aarch64-apple-darwin`. Per-target
+  features are now declared in the matrix entry's `features:` field
+  rather than hard-coded in the build step.
+
+### Fixed
+
+- **macOS RPATH missing from daemon binary with `dl-backends`**
+  (`crates/inferd-daemon/build.rs`, closes #26). `cargo:rustc-link-arg`
+  emitted by a library crate's build script does NOT propagate to
+  downstream binaries — only `rustc-link-search` and `rustc-link-lib`
+  do. The daemon binary therefore had no `LC_RPATH` entries, and dyld
+  reported "no LC_RPATH's found" at startup. Fixed by adding a
+  `build.rs` to `inferd-daemon` that emits
+  `-Wl,-rpath,@loader_path` and `-Wl,-rpath,@loader_path/backends`
+  directly from the final binary's own link step. The daemon now starts
+  from any directory without `DYLD_LIBRARY_PATH`.
+- **`install-launchagent.sh` missed `.so` backend modules when
+  flattening `backends/`** (`packaging/launchd/install-launchagent.sh`).
+  `ggml_backend_load_all()` uses the `.so` extension on all Unix
+  platforms including macOS; the Metal and CPU backend MODULEs are
+  `libggml-metal.so` and `libggml-cpu.so`. The previous flatten step
+  only copied `*.dylib`, so neither backend was ever loaded and the
+  daemon fell through to "no registered backends → fail". Fixed by
+  using `nullglob` and copying both `*.dylib` and `*.so` from
+  `backends/` into the install dir.
+- **`install-launchagent.sh` passed relative binary path to launchd**
+  (`packaging/launchd/install-launchagent.sh`). launchd resolves a
+  relative `Program` path relative to `/`, not the caller's cwd, so
+  `./target/release/inferd-daemon` silently became
+  `/target/release/inferd-daemon` and the service exited immediately
+  (exit 78 / `ENOEXEC`). The script now resolves `$BIN` to an
+  absolute path immediately after the existence check.
+- **`dl-backends` first-boot config wrote `n_gpu_layers: 0`**
+  (`crates/inferd-daemon/src/config_file.rs`). With dynamic backends the
+  accelerator is picked at runtime; shipping `n_gpu_layers: 0` means
+  Metal is selected but no layers are offloaded, matching CPU speed.
+  The first-boot default for `dl-backends` builds is now `-1` (offload
+  all layers), which is correct for any GPU path (llama.cpp clamps it to
+  0 when no GPU device exists, so CPU-only hosts are unaffected).
+  Operators who want explicit CPU mode can set `n_gpu_layers: 0` in
+  `~/.inferd/config.json` after first boot.
+
+### Added
+
+- **Runtime accelerator probe**
+  (`crates/inferd-engine/src/llamacpp/accelerator.rs`, gated on the
+  new `dl-backends` feature). With `dl-backends` on, the daemon now
+  calls `ggml_backend_load_all()` at first `LlamaCpp::new` and walks
+  the ggml backend registry to pick the strongest backend the host
+  actually has. The cascade is Metal → CUDA → ROCm → Vulkan → CPU;
+  result is cached process-wide. Operators can force a specific
+  pick with `INFERD_FORCE_BACKEND={cpu|metal|cuda|rocm|vulkan}` —
+  useful for forcing CPU on a GPU host for benchmarking or
+  sanity-checking that a particular accelerator's MODULE actually
+  loads. The static-build path (no `dl-backends`) still honours the
+  v0.2.x compile-time pick.
+- **Device-detail surface on the admin `capabilities` frame**:
+  `device_name` (e.g. `"NVIDIA GeForce RTX 4090"`, `"Apple M2 Pro"`)
+  and `vram_total_bytes`, sourced from
+  `ggml_backend_dev_name` / `ggml_backend_dev_memory` once
+  `ggml_backend_load_all` has run. `inferdctl doctor` renders these
+  on a new `device:` line when present. Backwards-additive on the
+  admin wire — fields are omitted when null, and older subscribers
+  ignore unknown keys per `docs/protocol-v1.md`. CPU path and
+  cloud adapters keep both fields `None`.
+- **Backend libraries staged into `target/<profile>/backends/`**
+  (`crates/inferd-engine/build.rs`, closes #24). On the
+  `dl-backends` build path, build.rs now copies every shared +
+  MODULE library produced by cmake (`libllama`, `libggml`,
+  `libggml-base`, every `ggml-cpu-<variant>`, plus whichever
+  accelerator MODULEs were enabled — `ggml-metal`, `ggml-cuda`,
+  `ggml-vulkan`, `ggml-hip`) into a stable
+  `<workspace target>/<profile>/backends/` path. Releases (Phase
+  5b) and platform install scripts (Phase 5d) need a predictable
+  staging location; cmake-rs's hash-suffixed `OUT_DIR` is not it.
+  Emits `INFERD_BACKENDS_DIR` as a `cargo:rustc-env` for downstream
+  binaries that want to find the staged dir without re-deriving the
+  same path. Static-build path is untouched (no shared artefacts to
+  stage).
+- **Release tarballs ship a `backends/` subdir**
+  (`.github/workflows/release.yml`, closes #25). The release
+  workflow now builds the daemon with `inferd-daemon/dl-backends`
+  (was `inferd-daemon/llamacpp`) and bundles
+  `target/<target>/release/backends/` next to the daemon binary in
+  every platform tarball. Adds a verification step that fails the
+  release loudly if the `backends/` dir is missing or near-empty —
+  the silent-mock-tarball failure mode (v0.1.1, v0.1.4) but at the
+  dl-backends layer. End users extract one tarball, run
+  `./inferd-daemon`, and libllama dlopen's the right ggml backend
+  from the tarball's own `backends/` dir via `$ORIGIN` /
+  `@loader_path` RPATH — no system-wide install required.
+- **CI matrix exercises the `dl-backends` path**
+  (`.github/workflows/ci.yml`, closes #131). New `dl-backends` job
+  runs `cargo clippy + test` on Linux/macOS/Windows with
+  `inferd-engine/dl-backends`, then asserts
+  `target/debug/backends/` is populated by `stage_backends_dir`.
+  Catches regressions where someone breaks the staging hook or the
+  shared-build cmake config without exercising the static
+  `llamacpp` job. The `v0.3-dev` branch is added to the push +
+  pull-request triggers so v0.3 work runs on every commit.
+- **Install scripts handle the `backends/` co-location requirement**
+  (closes #27). `ggml_backend_load_all()` only searches the
+  executable's own directory, not subdirs — so the libs need to
+  live next to the daemon, not under `backends/`. Each platform
+  install path now handles this:
+  - `packaging/windows/install.ps1`: when `-SourceBinary` is given,
+    copies `<source>\backends\*.dll` into `%LOCALAPPDATA%\inferd\`
+    next to `inferd-daemon.exe`.
+  - `packaging/launchd/install-launchagent.sh`: detects a
+    `backends/` sibling of the binary; if `<bindir>/libllama.dylib`
+    is missing, flattens `backends/*.dylib` into `<bindir>/`. Refuses
+    to write to dirs the user doesn't own.
+  - `packaging/systemd/inferd.service` (Linux): unchanged unit, but
+    the packaging README now documents the
+    `cp backends/* ~/.local/bin/` step alongside the binary copy.
+  Daemon binary now also has `RPATH=$ORIGIN` (Linux) /
+  `@loader_path` (macOS) baked in at link time
+  (`crates/inferd-engine/build.rs`), so libllama+ggml-* load from
+  the install dir without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
+  gymnastics.
+
+### Fixed
+
+- **Static `llamacpp` build path was broken on `v0.3-dev`**
+  (`crates/inferd-engine/build.rs`). Phase 5a gated the
+  `stage_backends_dir` helper with `#[cfg(feature = "dl-backends")]`
+  to silence an unused-function lint, but the call site still ran
+  the function unconditionally behind the runtime bool
+  `if dl_backends { stage_backends_dir(…) }` — `cfg!()` doesn't
+  prevent rustc from resolving the symbol. Result: the static CI
+  job (`cargo clippy --features inferd-engine/llamacpp`) failed
+  with `cannot find function stage_backends_dir in this scope` on
+  Linux + macOS. Rewrote both the staging call and the matching
+  `cargo:rustc-link-arg=-Wl,-rpath,…` lines to live inside one
+  `#[cfg(feature = "dl-backends")] { … }` block so rustc only sees
+  them when the feature is on.
+
+### Changed
+
+- **Workspace bumped to `0.3.0-dev`.** v0.3 lands runtime accelerator
+  detection per [ADR 0019](docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md):
+  Metal / CUDA / ROCm / Vulkan / CPU cascade picked at boot via
+  llama.cpp's `GGML_BACKEND_DL` dynamic-loader path. v0.2.x ships
+  CPU + platform-BLAS only; operators on GPU hardware were leaving an
+  order of magnitude of throughput on the table. NPU paths
+  (OpenVINO / ANE / DirectML-NPU / QNN) deliberately excluded — LLM
+  decode lags CPU+SIMD on every shipping NPU in 2026.
+
+## [0.2.4] - 2026-05-25
+
+Single-bug release: any embed input over ~512 tokens (~2 KB
+English) was crashing the daemon and triggering a systemd restart
+loop. Real bug reported from cordon-filter integration with
+EmbeddingGemma 300M (issue #20). v0.2.4 makes the embed pathway
+robust: oversized inputs are rejected with a structured error and
+the daemon stays alive; inputs that fit the configured embed
+context (default 2048) flow through without hitting the libllama
+encoder assert.
+
+### Fixed
+
+- **Embed: oversized inputs no longer abort the daemon**
+  (`crates/inferd-engine/src/llamacpp/backend.rs`, closes #20).
+  libllama's encoder asserts `n_ubatch >= n_tokens` and triggers
+  `SIGABRT` (taking the whole daemon down) when an embed input
+  tokenises beyond `n_ubatch`. The default `n_ubatch=512` meant a
+  single ~2 KB English string was enough to crash inferd under
+  modest batched embed load (e.g. cordon-filter sending 32 inputs
+  per frame). Two-part fix: (1) the embed context now sets
+  `n_batch = n_ubatch = embed_n_ctx`, so any input that fits in
+  the configured embed context window also fits in one ubatch
+  (raises the practical ceiling from ~512 to 2048 tokens with
+  EmbeddingGemma 300M defaults); (2) `run_embed` now tokenises
+  each input first and returns
+  `EmbedError::InvalidRequest("input exceeds embed context: T
+  tokens > n_ubatch N")` for anything still too large — mapped on
+  the wire to `code: invalid_request` so the connection stays
+  open and the caller sees a structured per-input error instead
+  of a closed socket.
+
+## [0.2.3] - 2026-05-23
+
+Linux post-v0.2.2 follow-up: the v0.2.2 systemd `--user` unit set
+`ProtectHome=read-only`, which blocked the daemon's first-boot
+auto-pull path on Linux (the GGUF blobs and the default-config
+write both live under `$HOME`). Plus a small DX fix that closes the
+last of the v0.2.1 validation findings.
+
+### Added
+
+- **`--llamacpp-embed` / `--llamacpp-embed-pooling` /
+  `--llamacpp-embed-n-ctx` CLI flags**
+  (`crates/inferd-daemon/src/config.rs`,
+  `crates/inferd-daemon/src/main.rs`). Closes #16. The legacy
+  single-model config shape (`{ "model": {...} }`) and dev-mode
+  (no config file) had no path to enable embed: `resolved_backends()`
+  hard-coded `embed: false` when promoting the legacy shape, and the
+  CLI-only llamacpp builder did the same. The new flags mirror the
+  existing `--n-ctx` / `--n-gpu-layers` pattern: when set, they flow
+  into both the legacy promotion path (overriding the hard-coded
+  `embed: false`) and the dev-mode path. Multi-backend configs
+  (`backends:`) keep full per-entry control — the CLI override only
+  fires when the config used the legacy `model:` shape.
+
+### Fixed
+
+- **systemd `--user` unit: carve out CAS store + config dir under
+  `ProtectHome=read-only`** (`packaging/systemd/inferd.service`,
+  closes #18, PR #19). The v0.2.2 unit set
+  `ProtectHome=read-only`, which blocked the daemon's first-boot
+  auto-pull path: the CAS store under `~/.local/share/models/`
+  (and the default config write to `~/.inferd/config.json`) sit
+  inside `$HOME`, and read-only home blocks both. The directive
+  defeated the v0.2.2 "install = work" contract on Linux. Replaces
+  the read-only lock with a `ReadWritePaths=` carve-out for the
+  two paths the daemon legitimately writes — keeps `ProtectHome=`
+  blast-radius reduction across the rest of `$HOME` (ssh keys,
+  browser data, shell history) where it actually matters. Also
+  corrects an incorrect comment: `ReadWritePaths=` is honoured
+  under `ProtectHome=` alone on systemd >= 232; it does **not**
+  require `ProtectSystem=strict`.
+
+## [0.2.2] - 2026-05-23
+
+The "install = work" release. v0.2.0 / v0.2.1 shipped binaries that
+required hand-editing `~/.inferd/config.json`, running `inferdctl pull`
+before first boot, or passing `--backend llamacpp` on the command line
+to actually do real inference. v0.2.2 makes a fresh install
+(installer → real generate **and** real embed work) the contract:
+no mock, no manual config, no pull-first preconditions, no flag
+dance. Validated end-to-end on Linux (WSL), macOS Apple Silicon, and
+Windows 11 before tag.
+
+### Added
+
+- **First-boot default multi-backend config**
+  (`crates/inferd-daemon/src/config.rs`,
+  `crates/inferd-daemon/src/main.rs`). When the daemon starts and no
+  config file exists, it atomically writes a pinned default at
+  `~/.inferd/config.json` declaring two real llamacpp backends:
+  `gemma-4-e4b` (generate, ~5.1 GB) and `embeddinggemma-300m`
+  (embed, ~313 MiB), both with `auto_pull = true` and pinned
+  SHA-256s. Operators no longer have to author a config by hand to
+  get inference; the next daemon boot sees the file, fetches both
+  blobs into the CAS store, and brings up both backends. Closes
+  the install-time DX gap that made every prior v0.2.x cut feel
+  like a developer build.
+
+- **Capability-aware embed routing**
+  (`crates/inferd-daemon/src/router.rs`,
+  `crates/inferd-daemon/src/lifecycle_embed.rs`). The router now
+  exposes `dispatch_embed()` which filters registered backends by
+  `capabilities().embed` so embed requests skip generate-only
+  backends entirely, instead of the previous "first registered
+  backend wins, embed errors out at the backend layer" path. Two
+  new tests use a `GenerateOnly` mock wrapper that overrides
+  `capabilities().embed = false` to exercise the dispatch filter.
+
+- **`packaging/windows/uninstall.ps1`** (new). Removes the Startup
+  shortcut, stops the running daemon, and (with `-Purge`) deletes
+  the staged binary, lock, logs, and `~/.inferd/config.json`. Models
+  in the CAS store at `%LOCALAPPDATA%\models\` are intentionally
+  left intact — re-pulling multi-GB blobs is slow and the operator
+  can wipe the directory themselves.
+
+- **`packaging/windows/cleanup-legacy-service.ps1`** (new) — one-shot
+  cleanup helper for operators upgrading from a v0.2.1 install whose
+  SCM service was registered with the hardened SDDL that strips
+  `DELETE`/`WRITE_DAC`/`WRITE_OWNER` from Administrators. The script
+  self-elevates via UAC, takes ownership of the
+  `HKLM:\SYSTEM\CurrentControlSet\Services\inferd-daemon` registry
+  key, grants Administrators `FullControl`, deletes the key, and
+  prints the reboot-to-flush-SCM-cache instruction. Required because
+  the bad SDDL blocks `sc.exe delete` even when run elevated, so
+  there is no in-band way for an operator to remove the legacy
+  registration without registry-level surgery. The new `install.ps1`
+  surfaces a warning pointing at this script when it detects a
+  legacy registration during install.
+
+### Changed
+
+- **`--backend` is now `Option<BackendKind>`**
+  (`crates/inferd-daemon/src/main.rs`). Previously the clap derive
+  defaulted to `BackendKind::Mock` when the flag was unset, which
+  silently short-circuited config-file backend loading and shipped
+  a mock daemon to operators who thought they had llamacpp wired up.
+  Now: omitted flag → defer to `~/.inferd/config.json`; explicit
+  `--backend mock` → mock (useful in test rigs where an unrelated
+  config file is on disk); explicit non-mock → CLI-flag-only path,
+  config `backends:` ignored. This is the change that lets the
+  default-config + Startup-shortcut combo actually serve real
+  inference on first boot.
+
+- **Drop `--backend mock` and pull-first precondition from all 3
+  install manifests** (`packaging/launchd/io.inferd.daemon.plist`,
+  `packaging/launchd/install-launchagent.sh`,
+  `packaging/systemd/inferd.service`,
+  `packaging/windows/install.ps1`). The macOS LaunchAgent template
+  previously had `__BACKEND__` / `__MODEL_PATH__` placeholders the
+  install script never substituted, so the daemon defaulted to the
+  mock backend even after `inferdctl pull` (#9 root cause carried
+  into v0.2). The macOS install script also required `inferdctl
+  pull` to have run first as a precondition, breaking the install =
+  work contract. Both gone in v0.2.2 — installer just runs the
+  daemon with the default config.
+
+- **`--embed` enabled by default in all 3 install manifests**
+  (`packaging/launchd/io.inferd.daemon.plist`,
+  `packaging/systemd/inferd.service`,
+  `packaging/windows/install.ps1`). The embed socket bind is gated
+  on `--embed` per ADR 0017; without it a fresh install never binds
+  the embed pipe and operators see "no embed-capable backend
+  available" on first embed call. Each manifest now passes `--embed`
+  + an explicit `--embed-addr` matching the platform default.
+
+- **Windows install: drop SCM service, use Startup-folder shortcut**
+  (`packaging/windows/install.ps1`, new `packaging/windows/uninstall.ps1`,
+  `packaging/README.md`, `.github/workflows/release.yml`). The previous
+  installer registered an SCM service via `sc.exe create`. That path
+  can't work as written: the daemon binary is a foreground console
+  app with no `StartServiceCtrlDispatcher` registration, so SCM
+  killed it after the 30-second start timeout (Event 7000/7009).
+  Beyond the structural mismatch, the install required elevation,
+  the staged binary lived in `%LOCALAPPDATA%` (NetworkService can't
+  read it without an `icacls` grant), and the SDDL stripped
+  `DELETE`/`WRITE_DAC`/`WRITE_OWNER` from Administrators — locking
+  operators out of `sc.exe delete inferd-daemon` even when elevated.
+  The new installer creates a `.lnk` in `shell:startup` pointing at
+  `%LOCALAPPDATA%\inferd\inferd-daemon.exe`, so the daemon launches
+  on every login as the current user. **No elevation required.**
+  Matches the macOS LaunchAgent and Linux systemd --user posture:
+  per-user, no SCM, stops at logout. The new `uninstall.ps1` removes
+  the shortcut, stops the running daemon, and (with `-Purge`)
+  deletes the staged binary, lock, logs, and config. The hardening
+  table in `packaging/README.md` is updated to drop the `sc.exe sdset`
+  service-ACL row that no longer applies.
+
+### Fixed
+
+- **`inferdctl status` tolerates v0.2 capabilities frame; surfaces
+  manifest path on parse error** (`crates/inferd/src/main.rs`). The
+  v0.2.0 daemon began emitting a `capabilities` admin frame before
+  the existing `status` frame; the v0.1 CLI parser treated unknown
+  frames as fatal and exited non-zero. Now the CLI ignores
+  forward-compatible frame types and prints which manifest path
+  failed parsing when it does encounter a malformed frame, instead
+  of a bare serde error.
+
+- **`ureq` TLS: load OS trust store via `tls` + `native-certs`** (`crates/inferd-daemon/Cargo.toml`).
+  The previous `features = ["tls"]` used rustls with the bundled `webpki-roots` only, which
+  does not see system-installed CA certificates (corporate proxies with TLS interception, internal
+  CAs). First attempt swapped to `native-tls` + `native-certs`, but ureq 2.x's `native-tls` feature
+  requires explicit `.tls_connector(Arc<TlsConnector>)` glue on `AgentBuilder` that we don't have —
+  Windows builds errored at fetch time with `Unknown Scheme: cannot make HTTPS request because no
+  TLS backend is configured`. Final shape pairs ureq's `tls` (rustls, auto-initialized) with
+  `native-certs` (rustls-native-certs feeds the OS trust roots into rustls). Works across all three
+  platforms with no glue code, same observable behaviour as `curl` for system-trusted CAs.
+
 ## [0.2.1] - 2026-05-22
 
 ### Fixed

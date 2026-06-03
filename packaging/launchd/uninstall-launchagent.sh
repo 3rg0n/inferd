@@ -25,4 +25,12 @@ else
     echo "$DEST already absent."
 fi
 
+# ADR 0019 / phase 5d: the install script flattened `backends/*.dylib`
+# next to the daemon binary. We don't remove them here because we
+# don't know where the operator put the daemon — the plist isn't read
+# back, and removing the wrong libllama.dylib could break unrelated
+# software. Operators wanting to fully clean up a release-tarball
+# install can rm -rf the extraction dir; the plist is the only thing
+# this script tracks.
+
 echo "Uninstall complete."

@@ -9,6 +9,9 @@ crates/*/fuzz/corpus/
 crates/*/fuzz/artifacts/
 crates/*/fuzz/Cargo.lock
 
+# Local-only scratch (validation scripts, tarball stagings, etc).
+.local/
+
 # IDE / OS
 .vscode/
 .idea/

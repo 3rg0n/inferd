@@ -192,8 +192,13 @@ impl ModelStore {
         let path = self.manifest_path(name);
         match File::open(&path) {
             Ok(file) => {
-                let manifest: Manifest = serde_json::from_reader(BufReader::new(file))
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let manifest: Manifest =
+                    serde_json::from_reader(BufReader::new(file)).map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("malformed manifest at {}: {e}", path.display()),
+                        )
+                    })?;
                 Ok(Some(manifest))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),

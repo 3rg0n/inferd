@@ -85,14 +85,24 @@ pub struct AdminEvent {
     /// (capabilities phase).
     #[serde(default)]
     pub embed: Option<bool>,
-    /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
-    /// / `"vulkan"` / `"rocm"` (capabilities phase).
+    /// Active GGML accelerator: `"cpu"` / `"cuda"` / `"metal"` /
+    /// `"vulkan"` / `"rocm"` (capabilities phase). Runtime-probed in
+    /// `dl-backends` builds (v0.3+); compile-time in v0.2.x.
     #[serde(default)]
     pub accelerator: Option<String>,
     /// Layers offloaded to the accelerator at runtime (capabilities
     /// phase). 0 means CPU-only at runtime regardless of `accelerator`.
     #[serde(default)]
     pub gpu_layers: Option<u32>,
+    /// Human-readable device name reported by ggml (capabilities
+    /// phase). `None` on the CPU path or when the active backend
+    /// exposes no device.
+    #[serde(default)]
+    pub device_name: Option<String>,
+    /// Total VRAM (or unified memory budget) in bytes (capabilities
+    /// phase). `None` when the backend doesn't report a total.
+    #[serde(default)]
+    pub vram_total_bytes: Option<u64>,
 }
 
 /// Errors produced by the admin client.

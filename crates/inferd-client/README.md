@@ -3,9 +3,11 @@
 Rust client for the [inferd](https://github.com/3rg0n/inferd)
 local-inference daemon.
 
-NDJSON-over-IPC. Wire protocol frozen as v1; full spec at
-[`docs/protocol-v1.md`](https://github.com/3rg0n/inferd/blob/main/docs/protocol-v1.md)
-in the upstream repo.
+NDJSON-over-IPC. Three frozen wire surfaces, each on its own socket:
+v1 text generation (`Client`, spec at
+[`docs/protocol-v1.md`](https://github.com/3rg0n/inferd/blob/main/docs/protocol-v1.md)),
+v2 typed content blocks / attachments / tools (`ClientV2`, ADR 0015),
+and embeddings (`EmbedClient`, ADR 0017).
 
 ## Install the daemon first
 
@@ -113,14 +115,15 @@ contract:
 
 ```toml
 [dependencies]
-inferd-client = "0.1"
+inferd-client = "0.3"
 ```
 
-`inferd-client 0.1.x` always uses `inferd-proto 0.1.x` and talks
-to `inferd-daemon 0.1.x`. The published patch versions move in
+`inferd-client 0.3.x` always uses `inferd-proto 0.3.x` and talks
+to `inferd-daemon 0.3.x`. The published patch versions move in
 lockstep; the crate-level `=`-pin keeps the wire contract exact
-across the workspace at build time. Upstream protocol-v1 changes
-are backwards-additive only; breaking changes go to v2 on a
+across the workspace at build time. Each shipped wire surface
+(v1 / v2 / embed) is frozen: changes within a surface are
+backwards-additive only; breaking changes go to a successor on a
 separate socket.
 
 ## Compatibility

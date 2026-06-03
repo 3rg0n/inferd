@@ -16,10 +16,15 @@ name: Release
 # setup difference vs the x64 image. Held until that's debugged;
 # see #63 for the issue.
 #
-# Builds ship with the `llamacpp` feature so the binary supports
-# real inference out of the box (`--backend llamacpp`). Without
-# this, downloaded tarballs can only run the mock backend, which
-# is not what end users want from a release.
+# Builds ship with the `dl-backends` feature (ADR 0019, v0.3) so
+# the binary supports real inference out of the box, with the
+# strongest available ggml backend (Metal / CUDA / ROCm / Vulkan /
+# CPU) picked at runtime. Tarballs include a `backends/` subdir
+# with the staged shared+MODULE libs (libllama, libggml,
+# libggml-base, ggml-cpu-* CPU variants, plus per-platform
+# accelerator MODULEs); the daemon's RPATH (`$ORIGIN` /
+# `@loader_path`) means it loads them from next-to-the-binary at
+# runtime, no system-wide install required.
 #
 # aarch64-linux uses GitHub's native arm64 runner
 # (`ubuntu-24.04-arm`, free for public repos since January 2025).
@@ -47,18 +52,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x86_64 Linux ships dl-backends + cuda. nvcc + cudart for the
+          # cuda MODULE are installed via the Jimver/cuda-toolkit step
+          # below (only on this matrix entry). Other targets stay on
+          # dl-backends alone (CPU + per-arch accelerator: Metal on
+          # macOS, none extra on aarch64-linux or Windows for now).
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            features: inferd-daemon/dl-backends,inferd-daemon/cuda
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
+            features: inferd-daemon/dl-backends
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            features: inferd-daemon/dl-backends
+          # x86_64 Windows ships dl-backends + cuda, same as Linux. The
+          # CUDA toolkit (nvcc + cudart + cublas) is installed via the
+          # Jimver/cuda-toolkit step below (gated to this entry).
+          # ggml-cuda.dll is staged by build.rs's stage_backends_dir; the
+          # CUDA redist DLLs are bundled next to the exe by the Windows
+          # bundling step. Hosts without an NVIDIA driver fall through to
+          # CPU at the runtime probe (ADR 0019).
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            features: inferd-daemon/dl-backends,inferd-daemon/cuda
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
@@ -78,6 +99,62 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install llvm
 
+      # CUDA toolkit for x86_64-linux only — needed because that target's
+      # `features:` includes inferd-daemon/cuda, which flips
+      # GGML_CUDA=ON and asks build.rs to compile libggml-cuda.so via
+      # nvcc. ubuntu-latest = 24.04 (glibc 2.39) which is compatible
+      # with CUDA 12.6's bundled headers.
+      #
+      # The runner image already provides gcc-13 as default which CUDA
+      # 12.6 supports. Sub-packages are the minimum to compile +
+      # link a runtime-loadable libggml-cuda.so: nvcc for the device
+      # compiler, cudart for cudaMalloc/cudaMemcpy, cublas for the
+      # GEMM kernels ggml-cuda calls into, plus the cccl headers
+      # ggml-cuda's templates need.
+      - name: Install CUDA toolkit (Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          # Jimver always rewrites sub-package names to
+          # `cuda-<name>-<MAJOR>-<MINOR>`. That works for nvcc /
+          # cudart / cccl (NVIDIA does ship `cuda-nvcc-12-6` etc) but
+          # fails for cublas — CUDA 12.x's cublas packages are
+          # `libcublas-12-6` / `libcublas-dev-12-6` (NO `cuda-`
+          # prefix), and Jimver has no escape hatch to pass them
+          # through verbatim. Both rc.1 (`cuda-cublas-12-6`) and rc.2
+          # (`cuda-libcublas-12-6`) tried it via Jimver and apt
+          # rejected both with "Unable to locate package". The
+          # follow-up step below installs cublas via plain apt-get
+          # against the NVIDIA repo Jimver has already configured.
+          sub-packages: '["nvcc","cudart","cudart-dev","cccl"]'
+          linux-local-args: '["--toolkit"]'
+
+      - name: Install cuBLAS (Linux x86_64 only, post-Jimver)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          # ggml-cuda links against cublas for GEMM kernels; both the
+          # runtime and dev (headers) packages are needed because the
+          # MODULE build runs nvcc + g++ which #include cublas_v2.h.
+          sudo apt-get install -y libcublas-12-6 libcublas-dev-12-6
+
+      # CUDA toolkit for x86_64-windows. Same role as the Linux step:
+      # that target's `features` includes inferd-daemon/cuda, so build.rs
+      # flips GGML_CUDA=ON and cmake compiles ggml-cuda.dll via nvcc.
+      # Unlike Linux, the Windows network installer ships cublas as a
+      # first-class sub-package (`cublas` / `libcublas`), so no post-step
+      # apt workaround is needed — Jimver resolves them directly. The
+      # action exports CUDA_PATH so cmake's FindCUDAToolkit locates nvcc.
+      - name: Install CUDA toolkit (Windows x86_64 only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","visual_studio_integration"]'
+
       # No rust-cache for release builds. Release runs are rare,
       # correctness > speed, and we've now seen Swatinem's cache
       # serve a mock-only target dir for a llamacpp build twice
@@ -87,16 +164,26 @@ jobs:
       # scratch — adds ~5 min per platform, eliminates the
       # silent-mock-tarball failure mode.
 
-      - name: Build daemon (with llamacpp)
-        # Use `inferd-daemon/llamacpp` (the daemon's own feature) not
-        # `inferd-engine/llamacpp`. The daemon's `llamacpp` feature
-        # activates `inferd-engine/llamacpp` via dep-feature forwarding
-        # AND sets `cfg(feature = "llamacpp")` in the daemon crate so the
+      - name: Build daemon (with dl-backends)
+        # Use `inferd-daemon/dl-backends` (the daemon's own feature) not
+        # `inferd-engine/dl-backends`. The daemon's `dl-backends` feature
+        # activates the engine's `dl-backends` via dep-feature forwarding,
+        # AND it implies the daemon's `llamacpp` feature so the
         # `BackendKind::Llamacpp` match arm compiles in. Passing only
-        # `inferd-engine/llamacpp` compiles the engine code but leaves the
-        # daemon arm gated out — resulting in a binary that rejects
+        # `inferd-engine/dl-backends` compiles the engine code but leaves
+        # the daemon arm gated out — resulting in a binary that rejects
         # `--backend llamacpp` at runtime.
-        run: cargo build --release --bin inferd-daemon --features inferd-daemon/llamacpp --target ${{ matrix.target }}
+        #
+        # ADR 0019: dl-backends builds libllama as a shared lib and
+        # ships every ggml backend (CPU variants + accelerators) as
+        # MODULE libs that libllama dlopen's at runtime. The
+        # build.rs `stage_backends_dir` step copies them all into
+        # `target/<target>/release/backends/` for the staging step
+        # below to bundle.
+        #
+        # Per-target features come from the matrix entry (some targets
+        # add accelerator features like `cuda` on x86_64-linux).
+        run: cargo build --release --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}
 
       - name: Build inferdctl CLI
         # Single CLI binary in the gh / kubectl shape: subcommands
@@ -126,18 +213,396 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rel="target/${{ matrix.target }}/release"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            bin="target/${{ matrix.target }}/release/inferd-daemon.exe"
-          else
-            bin="target/${{ matrix.target }}/release/inferd-daemon"
+            bin="$rel/inferd-daemon.exe"
+            # dl-backends links the daemon against llama.dll, which
+            # build.rs stages into $rel/backends/. Windows resolves
+            # imported DLLs at process startup from the exe's own dir +
+            # PATH — it does NOT search subdirs. So `inferd-daemon.exe
+            # --help` fails to start (exit 127, "0xC0000135 not
+            # found") with llama.dll one level down. install.ps1
+            # already flattens backends/*.dll next to the exe at
+            # install time; do the equivalent here so the verify step
+            # mirrors what real users see post-install.
+            cp -v "$rel"/backends/*.dll "$rel/" 2>/dev/null || true
           fi
+          [ "${{ runner.os }}" = "Windows" ] || bin="$rel/inferd-daemon"
           ls -la "$bin"
           if ! "$bin" --help 2>&1 | grep -qE 'llamacpp'; then
             echo "FAIL: built binary does NOT advertise --backend llamacpp" >&2
-            "$bin" --help >&2
+            "$bin" --help >&2 || true
             exit 1
           fi
           echo "OK: --backend llamacpp present in CLI surface"
+
+      - name: Verify dl-backends staging populated
+        # ADR 0019 / phase 5b. Asserts build.rs's stage_backends_dir
+        # actually ran and produced runtime-loadable libs. Catches the
+        # silent regression where someone flips back to `--features
+        # inferd-daemon/llamacpp` (static path) by accident — that
+        # would build a working binary but ship a tarball with no
+        # backends, which falls through to "no backend registered" at
+        # runtime.
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          if [ ! -d "$dir" ]; then
+            echo "FAIL: $dir does not exist" >&2
+            exit 1
+          fi
+          count=$(ls -1 "$dir" 2>/dev/null | wc -l)
+          if [ "$count" -lt 2 ]; then
+            echo "FAIL: $dir has $count file(s); expected ≥2 (libllama + at least one ggml-cpu variant)" >&2
+            ls -la "$dir" >&2 || true
+            exit 1
+          fi
+          echo "OK: $dir has $count staged libraries"
+          ls -la "$dir"
+
+      # Per-target accelerator MODULE check. The point of enabling
+      # `cuda` on x86_64-linux is to ship `libggml-cuda.so` in the
+      # tarball — if it's missing, the runtime probe falls back to CPU
+      # on every NVIDIA host that downloads the tarball, defeating the
+      # whole runtime-accelerator-detection promise (ADR 0019). Same
+      # logic applies to Metal on aarch64-darwin.
+      - name: Verify accelerator MODULE present (Linux x86_64 → CUDA)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          if ! ls "$dir" | grep -q '^libggml-cuda\.so$'; then
+            echo "FAIL: libggml-cuda.so missing from $dir — CUDA build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: libggml-cuda.so present in $dir"
+
+      - name: Verify accelerator MODULE present (macOS arm64 → Metal)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          # Mac Claude found that ggml_backend_load_all uses .so on all
+          # Unix targets (macOS included) — install-launchagent.sh
+          # flattens both *.dylib and *.so. Either name is acceptable
+          # here as long as a metal MODULE shipped.
+          if ! ls "$dir" | grep -qE '^libggml-metal\.(so|dylib)$'; then
+            echo "FAIL: libggml-metal.{so,dylib} missing from $dir — Metal build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: libggml-metal MODULE present in $dir"
+
+      - name: Verify accelerator MODULE present (Windows x86_64 → CUDA)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release/backends"
+          # On Windows the ggml CUDA MODULE is `ggml-cuda.dll` (no `lib`
+          # prefix, unlike the Linux `libggml-cuda.so`). Same failure
+          # mode as the Linux gate: a missing MODULE means the CUDA build
+          # silently produced a CPU-only tarball.
+          if ! ls "$dir" | grep -q '^ggml-cuda\.dll$'; then
+            echo "FAIL: ggml-cuda.dll missing from $dir — CUDA build silently produced CPU-only tarball" >&2
+            ls -la "$dir" >&2
+            exit 1
+          fi
+          echo "OK: ggml-cuda.dll present in $dir"
+
+      # Bundle the CUDA runtime libs (libcudart, libcublas, libcublasLt)
+      # next to libggml-cuda.so. Without this, the daemon's runtime
+      # accelerator probe (ADR 0019) silently falls back to CPU on every
+      # NVIDIA host that downloads the tarball: ggml uses dlopen() on the
+      # MODULE and dlopen quietly fails with "libcudart.so.12: cannot open
+      # shared object file" if the deps aren't resolvable. Bundling the
+      # CUDA runtime libs into backends/ alongside the MODULE — combined
+      # with the $ORIGIN RPATH baked into libggml-cuda.so by ggml's
+      # CMake — means dlopen finds them with no system-wide CUDA install
+      # required on the consumer machine.
+      #
+      # NVIDIA's EULA explicitly permits redistribution of these
+      # specific runtime libs (cuda-redist list:
+      # https://docs.nvidia.com/cuda/eula/#attachment-a). We only ship
+      # libcudart.so.12 / libcublas.so.12 / libcublasLt.so.12 — not the
+      # toolkit, not nvcc.
+      #
+      # Discovery is via `ldd libggml-cuda.so | grep "not found"`: we
+      # find every dep that doesn't resolve in the staging dir, locate
+      # the matching .so under CUDA_PATH/lib64 or the system lib dir,
+      # and copy it (dereferencing symlinks via -L so the bundled file
+      # is the actual ELF). After bundling, re-run ldd inside the dir
+      # and fail if any dep still doesn't resolve.
+      - name: Bundle CUDA runtime libs (Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          backends_dir="target/${{ matrix.target }}/release/backends"
+          module="$backends_dir/libggml-cuda.so"
+          if [ ! -f "$module" ]; then
+            echo "FAIL: $module missing — earlier step should have caught this" >&2
+            exit 1
+          fi
+
+          # patchelf forces DT_RUNPATH=$ORIGIN on libggml-cuda.so so the
+          # loader resolves NEEDED SONAMEs from the lib's own dir (where
+          # we'll bundle them below). ggml's CMake usually does this
+          # already, but BUILD_RPATH_USE_ORIGIN/INSTALL_RPATH behaviour
+          # is fiddly. patchelf is idempotent: if $ORIGIN is already in
+          # RUNPATH the second call is a no-op.
+          if ! command -v patchelf >/dev/null 2>&1; then
+            sudo apt-get install -y patchelf
+          fi
+          patchelf --set-rpath '$ORIGIN' "$module"
+
+          # Where to look for redist libs. Jimver/cuda-toolkit installs
+          # under /usr/local/cuda-<ver>; cublas is installed via apt to
+          # /usr/lib/x86_64-linux-gnu/. Both are searched in order.
+          search_dirs=()
+          if [ -n "${CUDA_PATH:-}" ] && [ -d "$CUDA_PATH/lib64" ]; then
+            search_dirs+=("$CUDA_PATH/lib64")
+          fi
+          if [ -d "/usr/local/cuda-12.6/lib64" ]; then
+            search_dirs+=("/usr/local/cuda-12.6/lib64")
+          fi
+          if [ -d "/usr/local/cuda-12.6/targets/x86_64-linux/lib" ]; then
+            search_dirs+=("/usr/local/cuda-12.6/targets/x86_64-linux/lib")
+          fi
+          if [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+            search_dirs+=("/usr/lib/x86_64-linux-gnu")
+          fi
+
+          # Driver-provided libs that we must NEVER bundle. NVIDIA's
+          # EULA forbids redistributing them; they're version-locked
+          # to the user's installed driver and resolved at runtime
+          # by the driver install (/usr/lib/wsl/lib/libcuda.so.1 on
+          # WSL, /usr/lib/x86_64-linux-gnu/libcuda.so.1 on bare
+          # metal). Hosts without an NVIDIA driver legitimately
+          # don't resolve these, and the accelerator probe correctly
+          # falls through to CPU.
+          driver_skiplist="libcuda.so.1 libnvidia-ml.so.1"
+
+          # System libs (glibc family + libstdc++/libgcc) that we must
+          # NEVER bundle either. These resolve from the CONSUMER's own
+          # glibc at runtime. Bundling the runner's copies is actively
+          # harmful: libggml-cuda.so's RUNPATH is `$ORIGIN`, so a
+          # bundled libc.so.6 would be *preferred* over the host's —
+          # and the runner's glibc is almost never bit-identical to the
+          # consumer's. The mismatch surfaces as the loader pulling a
+          # stale libc.so.6 that the host's libdl/libpthread/librt then
+          # fail against with `undefined symbol: __nptl_change_stack_perm,
+          # version GLIBC_PRIVATE` (caught in the rc.7 WSL validation).
+          # The final verification pass below already treats these as
+          # host-resolved; this matching predicate keeps the COPY loop
+          # from staging them in the first place.
+          is_system_lib() {
+            case "$1" in
+              libc.so.*|libm.so.*|libdl.so.*|librt.so.*|libpthread.so.*|libstdc++.so.*|libgcc_s.so.*|ld-linux-*.so.*)
+                return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          # Walk DT_NEEDED transitively via readelf — NOT ldd. ldd
+          # consults /etc/ld.so.cache, which on the GHA runner
+          # contains /etc/ld.so.conf.d/cuda-12-6.conf entries pointing
+          # at the toolkit install dir, so it falsely "resolves" libs
+          # the consumer host won't have. readelf -d reads NEEDED
+          # straight from the ELF dynamic section — it doesn't lie.
+          #
+          # Algorithm: BFS from libggml-cuda.so. For every NEEDED
+          # SONAME not yet in backends/ and not in the driver
+          # skiplist, locate it under search_dirs and copy under its
+          # SONAME (with -L to dereference the version symlink so
+          # the bundled file is the actual ELF). After copying,
+          # enqueue its own NEEDED entries. Loop until the queue
+          # empties — gives us the full transitive closure
+          # (libcublas → libcublasLt, etc).
+          declare -A bundled
+          declare -A on_skiplist
+          for s in $driver_skiplist; do on_skiplist[$s]=1; done
+
+          # Seed queue with libggml-cuda.so's direct NEEDED entries.
+          mapfile -t queue < <(readelf -d "$module" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+
+          while [ "${#queue[@]}" -gt 0 ]; do
+            soname="${queue[0]}"
+            queue=("${queue[@]:1}")
+
+            # Already bundled? Skip.
+            if [ -n "${bundled[$soname]:-}" ]; then continue; fi
+            # Driver lib? Skip.
+            if [ -n "${on_skiplist[$soname]:-}" ]; then
+              echo "skip: $soname is driver-provided (resolved at runtime)"
+              bundled[$soname]=skip
+              continue
+            fi
+            # System lib (glibc family / libstdc++ / libgcc)? Skip —
+            # MUST resolve from the consumer's own glibc, never from a
+            # bundled copy (see is_system_lib comment above). We don't
+            # even walk its NEEDED: the host loader owns that subtree.
+            if is_system_lib "$soname"; then
+              echo "skip: $soname is a system lib (resolved by consumer glibc)"
+              bundled[$soname]=system
+              continue
+            fi
+            # Already present in backends/ (e.g. libllama.so, ggml-*)?
+            # Then it was staged by build.rs, no copy needed; still
+            # walk its NEEDED for transitive closure.
+            if [ -e "$backends_dir/$soname" ]; then
+              bundled[$soname]=staged
+            else
+              # Locate the lib under search_dirs.
+              found=""
+              for d in "${search_dirs[@]}"; do
+                if [ -e "$d/$soname" ]; then found="$d/$soname"; break; fi
+              done
+              if [ -z "$found" ]; then
+                echo "FAIL: could not locate $soname in any of ${search_dirs[*]}" >&2
+                exit 1
+              fi
+              cp -Lv "$found" "$backends_dir/$soname"
+              bundled[$soname]=copied
+            fi
+
+            # Walk NEEDED of the bundled/staged lib for transitive deps.
+            mapfile -t deps < <(readelf -d "$backends_dir/$soname" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+            for dep in "${deps[@]}"; do queue+=("$dep"); done
+          done
+
+          echo "--- bundle decisions ---"
+          for k in "${!bundled[@]}"; do echo "  $k -> ${bundled[$k]}"; done
+
+          # Final verification: walk NEEDED again from libggml-cuda.so
+          # transitively and assert every SONAME is either present in
+          # backends/ or on the driver skiplist. This catches a class
+          # of bug where the loop above missed a transitive dep.
+          declare -A seen
+          stack=("$module")
+          while [ "${#stack[@]}" -gt 0 ]; do
+            cur="${stack[-1]}"
+            unset 'stack[-1]'
+            mapfile -t deps < <(readelf -d "$cur" | awk '/NEEDED/ { gsub(/\[|\]/, "", $5); print $5 }')
+            for dep in "${deps[@]}"; do
+              if [ -n "${seen[$dep]:-}" ]; then continue; fi
+              seen[$dep]=1
+              if [ -n "${on_skiplist[$dep]:-}" ]; then continue; fi
+              if [ -e "$backends_dir/$dep" ]; then
+                stack+=("$backends_dir/$dep")
+              else
+                # Some NEEDEDs are libc/libstdc++/libm — those resolve
+                # via the consumer's glibc and don't need bundling.
+                # Allow common system libs through.
+                case "$dep" in
+                  libc.so.*|libm.so.*|libdl.so.*|librt.so.*|libpthread.so.*|libstdc++.so.*|libgcc_s.so.*|ld-linux-*.so.*)
+                    ;;
+                  *)
+                    echo "FAIL: $dep missing from backends/ and not a system lib or driver lib" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+            done
+          done
+          echo "OK: libggml-cuda.so transitive closure resolves under backends/ + driver skiplist + system libs"
+          ls -la "$backends_dir"
+
+      # Bundle the CUDA runtime DLLs (cudart / cublas / cublasLt) next to
+      # ggml-cuda.dll. Same rationale as the Linux step: without them the
+      # runtime probe silently falls back to CPU on every NVIDIA host,
+      # because Windows' LoadLibrary can't resolve ggml-cuda.dll's imports.
+      # Windows is simpler than Linux here — no RPATH/$ORIGIN: the loader
+      # searches the DLL's own directory, and install.ps1 flattens
+      # backends\*.dll next to the exe, so co-locating the redist DLLs in
+      # backends\ is sufficient.
+      #
+      # NVIDIA's EULA permits redistributing the CUDA runtime libraries
+      # (cuda-redist). We ship only cudart64_12 / cublas64_12 /
+      # cublasLt64_12. The driver-provided `nvcuda.dll` is NEVER bundled
+      # (EULA-forbidden, version-locked to the user's driver, resolved
+      # from System32 at runtime) — the same posture as libcuda.so.1 on
+      # Linux.
+      - name: Bundle CUDA runtime DLLs (Windows x86_64 only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $backendsDir = "target/${{ matrix.target }}/release/backends"
+          $module = Join-Path $backendsDir "ggml-cuda.dll"
+          if (-not (Test-Path $module)) {
+              Write-Error "FAIL: $module missing — earlier step should have caught this"
+          }
+
+          # CUDA_PATH is exported by the Jimver toolkit step. The redist
+          # DLLs live under its bin\.
+          $cudaBin = Join-Path $env:CUDA_PATH "bin"
+          if (-not (Test-Path $cudaBin)) {
+              Write-Error "FAIL: CUDA bin dir not found at $cudaBin (CUDA_PATH=$env:CUDA_PATH)"
+          }
+
+          # ggml-cuda.dll's redistributable imports. Versioned DLL names
+          # are stable across CUDA 12.x (the SONAME-equivalent on Windows
+          # is the file name). cublas pulls in cublasLt. We copy by glob
+          # so a 12.x point bump (cudart64_12.dll) still matches.
+          $redistGlobs = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
+          foreach ($glob in $redistGlobs) {
+              $hits = Get-ChildItem -Path (Join-Path $cudaBin $glob) -ErrorAction SilentlyContinue
+              if (-not $hits) {
+                  Write-Error "FAIL: no CUDA redist DLL matching '$glob' under $cudaBin"
+              }
+              foreach ($f in $hits) {
+                  Write-Host "bundling $($f.Name) -> $backendsDir"
+                  Copy-Item -Path $f.FullName -Destination $backendsDir -Force
+              }
+          }
+
+          # Verify ggml-cuda.dll's imports resolve under backends\ + the
+          # driver skiplist + system DLLs. dumpbin ships with MSVC (on
+          # PATH inside the windows-latest image's VS dev environment;
+          # fall back to a known location if not).
+          $dumpbin = (Get-Command dumpbin -ErrorAction SilentlyContinue).Source
+          if (-not $dumpbin) {
+              $pf86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+              $vswhere = Join-Path $pf86 "Microsoft Visual Studio\Installer\vswhere.exe"
+              if (Test-Path $vswhere) {
+                  $vsPath = & $vswhere -latest -property installationPath
+                  $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                             Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1 -ExpandProperty FullName
+              }
+          }
+          # Driver-provided / system DLLs that resolve at runtime and must
+          # NOT be bundled. nvcuda.dll is the driver (EULA); the rest are
+          # OS / MSVC runtime DLLs present on any Windows host.
+          $allowed = @(
+              "nvcuda.dll",        # NVIDIA driver — System32, never bundled
+              "kernel32.dll","ntdll.dll","user32.dll","advapi32.dll",
+              "msvcrt.dll","ucrtbase.dll","vcruntime140.dll","vcruntime140_1.dll",
+              "msvcp140.dll","api-ms-win-*.dll","bcrypt.dll","dbghelp.dll"
+          )
+          if ($dumpbin) {
+              $deps = & $dumpbin /dependents $module |
+                      Select-String -Pattern '^\s+(\S+\.dll)' |
+                      ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() }
+              foreach ($dep in $deps) {
+                  if (Test-Path (Join-Path $backendsDir $dep)) { continue }
+                  $isAllowed = $false
+                  foreach ($a in $allowed) {
+                      if ($dep -like $a.ToLower()) { $isAllowed = $true; break }
+                  }
+                  if (-not $isAllowed) {
+                      Write-Error "FAIL: $dep imported by ggml-cuda.dll is not bundled, not a driver DLL, and not a known system DLL"
+                  }
+              }
+              Write-Host "OK: ggml-cuda.dll imports resolve under backends\ + driver skiplist + system DLLs"
+          } else {
+              Write-Warning "dumpbin not found; skipped import-closure verification (DLLs were still bundled)"
+          }
+          Get-ChildItem $backendsDir | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Stage release contents
         shell: bash
@@ -146,11 +611,27 @@ jobs:
           stage="staging/inferd-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "$stage"
           cp README.md LICENSE CHANGELOG.md "$stage/"
+          # ADR 0019: bundle the dl-backends staging dir produced by
+          # build.rs (`stage_backends_dir`). The whole `backends/`
+          # subtree must ship next to the daemon binary — libllama
+          # has RPATH `$ORIGIN` / `@loader_path` baked in, so it
+          # loads MODULE libs from `<bin dir>/` and friends. Fail
+          # loudly if the dir is missing: a release tarball without
+          # backends would silently fall back to "no backend
+          # registered" at runtime.
+          backends_src="target/${{ matrix.target }}/release/backends"
+          if [ ! -d "$backends_src" ] || [ -z "$(ls -A "$backends_src" 2>/dev/null)" ]; then
+            echo "FAIL: $backends_src missing or empty — dl-backends staging didn't run" >&2
+            exit 1
+          fi
+          cp -r "$backends_src" "$stage/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
             cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/windows/install.ps1 "$stage/packaging/"
+            cp packaging/windows/uninstall.ps1 "$stage/packaging/"
+            cp packaging/windows/cleanup-legacy-service.ps1 "$stage/packaging/"
             cp packaging/README.md "$stage/packaging/"
           else
             cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"
@@ -169,7 +650,10 @@ jobs:
                 ;;
             esac
           fi
+          echo "--- stage root ---"
           ls -la "$stage"
+          echo "--- backends/ ---"
+          ls -la "$stage/backends"
 
       - name: Pack tar.gz
         if: matrix.archive == 'tar.gz'

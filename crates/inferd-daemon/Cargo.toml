@@ -20,6 +20,12 @@ default = []
 # drop the GPU features.
 llamacpp             = ["inferd-engine/llamacpp"]
 llamacpp-integration = ["llamacpp", "inferd-engine/llamacpp-integration"]
+# v0.3 / ADR 0019: dynamic-loader path. libllama becomes a shared
+# library; ggml backends become MODULE libs dlopen'd at runtime;
+# inferd-daemon picks the strongest available accelerator at boot.
+# Implies daemon-side `llamacpp` so `--backend llamacpp` is wired
+# through to the engine adapter.
+dl-backends          = ["llamacpp", "inferd-engine/dl-backends"]
 cuda     = ["inferd-engine/cuda"]
 metal    = ["inferd-engine/metal"]
 vulkan   = ["inferd-engine/vulkan"]
@@ -38,8 +44,8 @@ bedrock  = ["inferd-engine/bedrock"]
 security = []
 
 [dependencies]
-inferd-proto  = { path = "../inferd-proto", version = "=0.2.1" }
-inferd-engine = { path = "../inferd-engine", version = "=0.2.1" }
+inferd-proto  = { path = "../inferd-proto", version = "=0.3.0" }
+inferd-engine = { path = "../inferd-engine", version = "=0.3.0" }
 tokio               = { workspace = true }
 tokio-stream        = "0.1"
 serde               = { workspace = true }
@@ -58,7 +64,7 @@ sha2                = { workspace = true }
 # Narrow scope: one URL, one SHA, one file. Operators wanting fancier
 # transports (proxies, custom DNS) wget the file themselves and drop
 # it in models_dir.
-ureq                = { version = "2", default-features = false, features = ["tls"] }
+ureq                = { version = "2", default-features = false, features = ["tls", "native-certs"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["fs", "user", "socket"] }
@@ -69,6 +75,7 @@ windows-sys = { version = "0.52", features = [
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
+  "Win32_System_Console",
   "Win32_System_Memory",
   "Win32_System_Pipes",
   "Win32_System_Threading",

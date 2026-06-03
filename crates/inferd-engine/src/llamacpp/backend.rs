@@ -179,20 +179,68 @@ pub struct LlamaCpp {
     state: Arc<Mutex<State>>,
 }
 
-/// Compile-time GGML backend the engine was built against. Reflects
-/// the cargo features active at build time (`cuda` / `metal` /
-/// `vulkan` / `rocm` — at most one is meaningful per build).
-const fn compile_time_accelerator_kind() -> AcceleratorKind {
-    if cfg!(feature = "cuda") {
-        AcceleratorKind::Cuda
-    } else if cfg!(feature = "metal") {
-        AcceleratorKind::Metal
-    } else if cfg!(feature = "vulkan") {
-        AcceleratorKind::Vulkan
-    } else if cfg!(feature = "rocm") {
-        AcceleratorKind::Rocm
-    } else {
-        AcceleratorKind::Cpu
+/// Pick the active GGML accelerator.
+///
+/// With `dl-backends` on (v0.3 / ADR 0019): runtime probe of the ggml
+/// backend registry. `ggml_backend_load_all` dlopens every MODULE
+/// shipped next to the daemon binary; the probe walks the registered
+/// list and picks per the cascade Metal > CUDA > ROCm > Vulkan > CPU.
+/// Operators can force a specific backend via the
+/// `INFERD_FORCE_BACKEND` env var. Result is cached process-wide.
+///
+/// Without `dl-backends` (v0.2.x compatibility path): static-build
+/// shape, single accelerator picked at compile time per the
+/// `cuda` / `metal` / `vulkan` / `rocm` cargo features.
+fn pick_accelerator_kind() -> AcceleratorKind {
+    #[cfg(feature = "dl-backends")]
+    {
+        super::accelerator::probe_accelerator()
+    }
+    #[cfg(not(feature = "dl-backends"))]
+    {
+        if cfg!(feature = "cuda") {
+            AcceleratorKind::Cuda
+        } else if cfg!(feature = "metal") {
+            AcceleratorKind::Metal
+        } else if cfg!(feature = "vulkan") {
+            AcceleratorKind::Vulkan
+        } else if cfg!(feature = "rocm") {
+            AcceleratorKind::Rocm
+        } else {
+            AcceleratorKind::Cpu
+        }
+    }
+}
+
+/// Build the `AcceleratorInfo` that the adapter caches and exposes
+/// through `capabilities()`.
+///
+/// On `dl-backends` builds, walks the ggml device list to find the
+/// device matching `kind` and reads its name + VRAM total. The
+/// CPU branch and the no-match branch both yield `device_name = None,
+/// vram_total_bytes = None`. On the static-build path the device API
+/// is not exercised (the registry only has the one compile-pinned
+/// backend), so the fields stay `None`.
+fn build_accelerator_info(kind: AcceleratorKind, n_gpu_layers: i32) -> AcceleratorInfo {
+    let gpu_layers = n_gpu_layers.max(0) as u32;
+    #[cfg(feature = "dl-backends")]
+    {
+        let details = super::accelerator::probe_device_for_kind(kind);
+        AcceleratorInfo {
+            kind,
+            gpu_layers,
+            device_name: details.name,
+            vram_total_bytes: details.total_bytes,
+        }
+    }
+    #[cfg(not(feature = "dl-backends"))]
+    {
+        AcceleratorInfo {
+            kind,
+            gpu_layers,
+            device_name: None,
+            vram_total_bytes: None,
+        }
     }
 }
 
@@ -224,6 +272,13 @@ struct EmbedContext {
     /// time. Cached so `embed()` can size the output vectors without
     /// re-querying.
     n_embd: u32,
+    /// Physical batch size (`n_ubatch`) of this context. Cached so
+    /// `run_embed` can reject oversized inputs *before* calling
+    /// `llama_encode` — libllama asserts `n_ubatch >= n_tokens` inside
+    /// the encoder and aborts the whole process, so the structured
+    /// rejection is the only path to keep the daemon alive when a
+    /// caller sends a too-long input (issue #20).
+    n_ubatch: u32,
 }
 
 /// Internal capability snapshot used by `Backend::capabilities()`.
@@ -246,10 +301,35 @@ impl LlamaCpp {
     pub fn new(config: LlamaCppConfig) -> Result<Self, LlamaCppError> {
         ensure_backend_init();
 
+        // ADR 0019: with `dl-backends`, the ggml backend registry is
+        // empty until ggml_backend_load_all() dlopens the MODULE libs
+        // shipped next to the daemon. Run the probe *before*
+        // load_model so the model loader sees the registered
+        // accelerators when it decides how to honour `n_gpu_layers`.
+        // probe_accelerator() is cached, so subsequent adapter
+        // constructions reuse the first probe's result. Compile-time
+        // path is a no-op aside from the constant-folded match below.
+        let kind = pick_accelerator_kind();
+
+        // Gate GPU offload on the chosen accelerator. When the probe (or
+        // an `INFERD_FORCE_BACKEND=cpu` override) selects CPU, force
+        // `n_gpu_layers = 0` regardless of the configured value. Without
+        // this, a GPU host whose operator forced CPU still offloads to the
+        // registered GPU device — llama.cpp only clamps the configured
+        // count to 0 when *no* GPU device is present, not when the operator
+        // asked for CPU on a GPU box. This keeps the ADR 0019 escape hatch
+        // honest: forcing CPU actually runs on CPU. Any non-CPU kind passes
+        // the configured value through unchanged (`-1` = offload all).
+        let effective_gpu_layers = if kind == AcceleratorKind::Cpu {
+            0
+        } else {
+            config.n_gpu_layers
+        };
+
         let model = load_model(
             &config.model_path,
             config.model_sha256.as_ref(),
-            config.n_gpu_layers,
+            effective_gpu_layers,
         )?;
 
         // SAFETY: FFI. `model.as_ptr()` is non-null and valid for the
@@ -286,10 +366,7 @@ impl LlamaCpp {
             None => (None, None),
         };
 
-        let accelerator = AcceleratorInfo {
-            kind: compile_time_accelerator_kind(),
-            gpu_layers: config.n_gpu_layers.max(0) as u32,
-        };
+        let accelerator = build_accelerator_info(kind, effective_gpu_layers);
 
         // Resolve a stable, human-meaningful model label. Try GGUF
         // `general.name` metadata first; fall back to the file stem.
@@ -310,6 +387,14 @@ impl LlamaCpp {
             let embed_ctx_ptr = unsafe {
                 let mut params = ffi::llama_context_default_params();
                 params.n_ctx = config.embed_n_ctx;
+                // libllama's encoder asserts `n_ubatch >= n_tokens`. The
+                // default `n_ubatch` is 512, so a single input >512
+                // tokens (~2KB English) fires GGML_ASSERT and aborts the
+                // whole daemon (issue #20). Size the logical and
+                // physical batch to the full context window so any
+                // input that fits in n_ctx also fits in one ubatch.
+                params.n_batch = config.embed_n_ctx;
+                params.n_ubatch = config.embed_n_ctx;
                 params.embeddings = true;
                 params.pooling_type = config.embed_pooling.unwrap_or(ffi::LLAMA_POOLING_TYPE_MEAN);
                 ffi::llama_init_from_model(model.as_ptr(), params)
@@ -322,9 +407,15 @@ impl LlamaCpp {
             if n_embd <= 0 {
                 return Err(LlamaCppError::ContextInit);
             }
+            // SAFETY: FFI; we just allocated embed_ctx and hold it
+            // exclusively. libllama may clamp `n_ubatch` to `n_batch`
+            // or to model limits, so query the actual value rather
+            // than trusting the requested params.
+            let n_ubatch = unsafe { ffi::llama_n_ubatch(embed_ctx.ptr.as_ptr()) };
             Some(EmbedContext {
                 ctx: embed_ctx,
                 n_embd: n_embd as u32,
+                n_ubatch,
             })
         } else {
             None
@@ -455,11 +546,11 @@ impl Backend for LlamaCpp {
                 tools: true,
                 thinking: true,
                 embed,
-                accelerator: self.accelerator,
+                accelerator: self.accelerator.clone(),
             },
             None => BackendCapabilities {
                 embed,
-                accelerator: self.accelerator,
+                accelerator: self.accelerator.clone(),
                 ..BackendCapabilities::default()
             },
         }
@@ -1228,6 +1319,7 @@ fn run_embed(
     let embed = guard.embed.as_ref().ok_or(EmbedError::Unsupported)?;
     let ctx = embed.ctx.ptr.as_ptr();
     let n_embd = embed.n_embd as usize;
+    let n_ubatch = embed.n_ubatch as usize;
 
     if let Some(d) = requested_dim
         && d as usize > n_embd
@@ -1263,6 +1355,19 @@ fn run_embed(
             return Err(EmbedError::InvalidRequest(
                 "input produced zero tokens".into(),
             ));
+        }
+        // Reject oversized inputs *before* calling llama_encode.
+        // libllama asserts `n_ubatch >= n_tokens` inside the encoder
+        // and aborts the whole process on failure (issue #20). The
+        // structured error keeps the daemon alive and gives the
+        // caller a per-input failure they can act on (truncate /
+        // chunk / reject) instead of a closed connection.
+        if tokens.len() > n_ubatch {
+            return Err(EmbedError::InvalidRequest(format!(
+                "input exceeds embed context: {} tokens > n_ubatch {}",
+                tokens.len(),
+                n_ubatch
+            )));
         }
         input_tokens = input_tokens.saturating_add(tokens.len() as u32);
 

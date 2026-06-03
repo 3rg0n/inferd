@@ -49,11 +49,17 @@ pub struct StatusBroadcaster {
     /// `watch` carries the *most recent* event so newcomers don't
     /// need to wait for the next state change.
     snapshot: watch::Sender<StatusEvent>,
-    /// `watch` carries the most recent `Capabilities` event so
-    /// late-connecting one-shot subscribers (e.g. `inferdctl doctor`)
-    /// see capability info even though it was published once at boot.
-    /// `None` until the backend has been constructed.
-    capabilities: watch::Sender<Option<StatusEvent>>,
+    /// `watch` carries the most recent `Capabilities` event *per
+    /// backend*, keyed by backend name, so late-connecting one-shot
+    /// subscribers (e.g. `inferdctl doctor`) see capability info for
+    /// every registered backend even though each was published once at
+    /// boot. A single slot here was wrong for multi-backend daemons:
+    /// the last backend's frame (e.g. an embed backend with
+    /// `vision=false`) overwrote the first's (e.g. a vision-capable
+    /// generate backend), so doctor reported `vision=false` on a daemon
+    /// that could in fact do vision. Empty until the first backend is
+    /// constructed.
+    capabilities: watch::Sender<std::collections::BTreeMap<String, StatusEvent>>,
     /// `broadcast` carries the live event stream. Subscribers receive
     /// every event from the moment they subscribe.
     events: broadcast::Sender<StatusEvent>,
@@ -64,7 +70,7 @@ impl StatusBroadcaster {
     /// initial value is `StatusEvent::Starting`.
     pub fn new(initial: StatusEvent) -> Self {
         let (snapshot, _rx) = watch::channel(initial);
-        let (capabilities, _rx) = watch::channel(None);
+        let (capabilities, _rx) = watch::channel(std::collections::BTreeMap::new());
         let (events, _rx) = broadcast::channel(ADMIN_BROADCAST_CAPACITY);
         Self {
             snapshot,
@@ -80,8 +86,14 @@ impl StatusBroadcaster {
         // of how many receivers are alive — `send` would silently
         // drop the value if no one is currently subscribed, which
         // is wrong for snapshot semantics.
-        if matches!(event, StatusEvent::Capabilities { .. }) {
-            let _ = self.capabilities.send_replace(Some(event.clone()));
+        if let StatusEvent::Capabilities { backend, .. } = &event {
+            // Retain one frame *per backend* so a multi-backend daemon
+            // replays every backend's caps to a late subscriber, rather
+            // than only the last-published one.
+            let key = backend.clone();
+            self.capabilities.send_modify(|map| {
+                map.insert(key, event.clone());
+            });
         } else {
             let _ = self.snapshot.send_replace(event.clone());
         }
@@ -94,11 +106,12 @@ impl StatusBroadcaster {
         self.snapshot.borrow().clone()
     }
 
-    /// Most recent capability advertisement, if any. The admin accept
-    /// loop writes this *before* the snapshot frame so one-shot
-    /// readers see capabilities even when they connect after Ready.
-    pub fn latest_capabilities(&self) -> Option<StatusEvent> {
-        self.capabilities.borrow().clone()
+    /// Most recent capability advertisement for every registered
+    /// backend, in stable (name-sorted) order. The admin accept loop
+    /// writes these *before* the snapshot frame so one-shot readers see
+    /// capabilities for all backends even when they connect after Ready.
+    pub fn latest_capabilities(&self) -> Vec<StatusEvent> {
+        self.capabilities.borrow().values().cloned().collect()
     }
 
     /// Subscribe to the live event stream. The receiver yields every
@@ -137,13 +150,13 @@ fn render_frame(event: &StatusEvent) -> Vec<u8> {
 async fn handle_admin_connection<W: AsyncWrite + Unpin>(
     mut writer: W,
     snapshot: StatusEvent,
-    capabilities: Option<StatusEvent>,
+    capabilities: Vec<StatusEvent>,
     mut rx: broadcast::Receiver<StatusEvent>,
 ) -> io::Result<()> {
-    // 1a. Capability frame (if known) — written before the snapshot
-    // so one-shot subscribers see it.
-    if let Some(caps) = capabilities {
-        writer.write_all(&render_frame(&caps)).await?;
+    // 1a. Capability frames (one per backend, if known) — written
+    // before the snapshot so one-shot subscribers see them.
+    for caps in &capabilities {
+        writer.write_all(&render_frame(caps)).await?;
     }
     // 1b. Snapshot frame.
     writer.write_all(&render_frame(&snapshot)).await?;
@@ -330,23 +343,28 @@ mod tests {
             embed: false,
             accelerator: "cuda".into(),
             gpu_layers: 99,
+            device_name: Some("NVIDIA GeForce RTX 4090".into()),
+            vram_total_bytes: Some(24 * 1024 * 1024 * 1024),
         });
         // Snapshot is still Starting — Capabilities lives outside it.
         match b.current() {
             StatusEvent::Starting => {}
             other => panic!("expected Starting in snapshot, got {other:?}"),
         }
-        // Capabilities is recorded for the connect prefix.
-        match b.latest_capabilities() {
-            Some(StatusEvent::Capabilities {
+        // Capabilities is recorded for the connect prefix — one entry
+        // per backend.
+        let caps = b.latest_capabilities();
+        assert_eq!(caps.len(), 1, "expected one backend's caps");
+        match &caps[0] {
+            StatusEvent::Capabilities {
                 backend,
                 accelerator,
                 gpu_layers,
                 ..
-            }) => {
+            } => {
                 assert_eq!(backend, "llamacpp");
                 assert_eq!(accelerator, "cuda");
-                assert_eq!(gpu_layers, 99);
+                assert_eq!(*gpu_layers, 99);
             }
             other => panic!("expected Capabilities, got {other:?}"),
         }
@@ -366,6 +384,8 @@ mod tests {
             embed: false,
             accelerator: "cpu".into(),
             gpu_layers: 0,
+            device_name: None,
+            vram_total_bytes: None,
         });
         b.publish(StatusEvent::Ready);
 
@@ -398,6 +418,54 @@ mod tests {
 
         drop(client_side);
         let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
+    }
+
+    #[test]
+    fn multi_backend_caps_are_retained_per_backend() {
+        // Regression: a single capabilities slot let the last-published
+        // backend overwrite earlier ones, so a daemon with a
+        // vision-capable generate backend + an embed backend reported
+        // only the embed backend's caps (vision=false) to doctor.
+        let b = StatusBroadcaster::new(StatusEvent::Starting);
+        b.publish(StatusEvent::Capabilities {
+            backend: "gemma-4-e4b".into(),
+            v2: true,
+            vision: true,
+            audio: true,
+            tools: true,
+            thinking: true,
+            embed: false,
+            accelerator: "cuda".into(),
+            gpu_layers: 99,
+            device_name: Some("NVIDIA GeForce RTX 5080".into()),
+            vram_total_bytes: Some(16 * 1024 * 1024 * 1024),
+        });
+        b.publish(StatusEvent::Capabilities {
+            backend: "embeddinggemma-300m".into(),
+            v2: false,
+            vision: false,
+            audio: false,
+            tools: false,
+            thinking: false,
+            embed: true,
+            accelerator: "cuda".into(),
+            gpu_layers: 99,
+            device_name: Some("NVIDIA GeForce RTX 5080".into()),
+            vram_total_bytes: Some(16 * 1024 * 1024 * 1024),
+        });
+
+        let caps = b.latest_capabilities();
+        assert_eq!(caps.len(), 2, "both backends' caps must be retained");
+        // The vision-capable backend must still be visible — not
+        // clobbered by the embed backend published after it.
+        let vision_seen = caps.iter().any(|e| {
+            matches!(e, StatusEvent::Capabilities { vision: true, backend, .. } if backend == "gemma-4-e4b")
+        });
+        let embed_seen = caps.iter().any(|e| {
+            matches!(e, StatusEvent::Capabilities { embed: true, backend, .. } if backend == "embeddinggemma-300m")
+        });
+        assert!(vision_seen, "generate backend's vision=true must survive");
+        assert!(embed_seen, "embed backend's embed=true must be present");
     }
 
     #[tokio::test]

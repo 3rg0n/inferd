@@ -54,6 +54,17 @@ use tracing_subscriber::util::SubscriberInitExt;
 async fn main() -> anyhow::Result<()> {
     install_tracing()?;
 
+    // Windows: when launched from the per-user Startup shortcut (or a
+    // double-click), a console-subsystem exe gets a fresh console window
+    // allocated for it, which sits visibly on the desktop showing tracing
+    // output (issue #28). Detach from it now that logging is wired to the
+    // activity log + admin pipe. Only detaches when we OWN the console
+    // (sole attached process); a daemon launched from an interactive shell
+    // shares that shell's console and is left alone so `inferd-daemon` still
+    // prints when run by hand for debugging.
+    #[cfg(windows)]
+    detach_own_console();
+
     let cli = Cli::parse();
     // Note: at-least-one-transport check is deferred until after the
     // config file is loaded — the operator may declare TCP via
@@ -126,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
     // Resolve models + construct backends. Publishes loading_model
     // phase events through the broadcaster. Returns the canonical
     // ordered list (multi-backend per ADR 0007).
-    let backends: Vec<Arc<dyn Backend>> =
+    let (backends, backend_labels): (Vec<Arc<dyn Backend>>, Vec<String>) =
         match build_backends(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
             Ok(b) => b,
             Err(e) => {
@@ -142,10 +153,14 @@ async fn main() -> anyhow::Result<()> {
     // Publish capability snapshot so admin subscribers can introspect
     // multimodal / tools / accelerator posture before Ready (#77).
     // One frame per backend so subscribers see the full router shape.
-    for b in &backends {
+    for (b, label) in backends.iter().zip(backend_labels.iter()) {
         let caps = b.capabilities();
         broadcaster.publish(StatusEvent::Capabilities {
-            backend: b.name().to_string(),
+            // Unique config-entry label (e.g. "gemma-4-e4b"), not
+            // `b.name()` which is the kind ("llamacpp") and collides
+            // across entries — that collision made the caps map drop all
+            // but the last backend (doctor's vision=false bug).
+            backend: label.clone(),
             v2: caps.v2,
             vision: caps.vision,
             audio: caps.audio,
@@ -154,6 +169,8 @@ async fn main() -> anyhow::Result<()> {
             embed: caps.embed,
             accelerator: caps.accelerator.kind.as_str().to_string(),
             gpu_layers: caps.accelerator.gpu_layers,
+            device_name: caps.accelerator.device_name.clone(),
+            vram_total_bytes: caps.accelerator.vram_total_bytes,
         });
     }
 
@@ -518,21 +535,63 @@ async fn spawn_admin_listener(
     }
 }
 
-/// Try to load the operator config file. Returns `None` (and logs at
-/// info level) if the file doesn't exist — that's dev mode against
-/// CLI flags. Returns `Err` only on I/O / parse / validation failure
-/// of an existing file.
+/// Try to load the operator config file.
+///
+/// Behaviour:
+/// - File present → load + validate; log on parse error and return None.
+/// - File absent + `cli_path` was set explicitly → log and return None
+///   (operator pointed at a path that doesn't exist; honour their
+///   intent, don't surprise them by writing a default elsewhere).
+/// - File absent + default path → write the shipped first-boot
+///   default (gemma-4 generate + embeddinggemma-300m embed, both
+///   `auto_pull: true`) and return the loaded result. This is what
+///   makes the install-equals-work contract hold: a fresh user runs
+///   the platform installer and the daemon fetches both blobs and
+///   binds the inference + embed sockets without any hand-editing.
 fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
     let path = cli_path
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(inferd_daemon::config_file::default_config_path);
+    let was_default_path = cli_path.is_none();
+
     match ConfigFile::load(&path) {
         Ok(cfg) => {
             info!(path = %path.display(), "loaded config file");
             Some(cfg)
         }
+        Err(inferd_daemon::config_file::ConfigError::NotFound(_)) if was_default_path => {
+            match inferd_daemon::config_file::write_default_if_missing(&path) {
+                Ok(true) => {
+                    info!(
+                        path = %path.display(),
+                        "no config file at default path; wrote first-boot default \
+                         (gemma-4-e4b + embeddinggemma-300m, auto_pull=true)"
+                    );
+                    match ConfigFile::load(&path) {
+                        Ok(cfg) => Some(cfg),
+                        Err(e) => {
+                            error!(error = %e, "wrote default config but failed to reload");
+                            None
+                        }
+                    }
+                }
+                Ok(false) => {
+                    // Race: another process wrote the file between
+                    // our load attempt and the write. Reload.
+                    ConfigFile::load(&path).ok()
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        path = %path.display(),
+                        "could not write default config; falling back to dev mode"
+                    );
+                    None
+                }
+            }
+        }
         Err(inferd_daemon::config_file::ConfigError::NotFound(_)) => {
-            info!(path = %path.display(), "no config file; using CLI flags only");
+            info!(path = %path.display(), "no config file at explicit path; using CLI flags only");
             None
         }
         Err(e) => {
@@ -584,12 +643,16 @@ fn resolve_v1_transport(
 /// phase events as it goes.
 ///
 /// Dispatch:
-/// - `--backend mock` ignores the config (dev-mode echo daemon).
-/// - When the config file declares `backends:` (or legacy `model:`,
-///   which auto-promotes to a one-element llamacpp list), every entry
-///   is built and the router walks them in order per ADR 0007.
-/// - When no config is present, the CLI-flag path builds a single
-///   backend matching `--backend <kind>` for v0.1.x compatibility.
+/// - No `--backend` flag + config present → use `backends:` from the
+///   config file (or legacy `model:` block, auto-promoted to a single
+///   llamacpp entry). Router walks them in order per ADR 0007.
+/// - No `--backend` flag + no config → fall back to the in-memory
+///   `mock` backend so the daemon still boots in dev mode.
+/// - Explicit `--backend mock` → mock (config ignored; useful in test
+///   rigs that have an unrelated config file on disk).
+/// - Explicit `--backend <kind>` (any non-mock value) → CLI-flag-only
+///   path; config `backends:` are ignored so the operator gets exactly
+///   what they asked for.
 async fn build_backends(
     cli: &Cli,
     #[cfg_attr(
@@ -598,49 +661,85 @@ async fn build_backends(
     )]
     config: Option<&ConfigFile>,
     broadcaster: Arc<StatusBroadcaster>,
-) -> anyhow::Result<Vec<Arc<dyn Backend>>> {
-    match cli.backend {
+) -> anyhow::Result<(Vec<Arc<dyn Backend>>, Vec<String>)> {
+    // Returns the backends AND a parallel list of unique labels — the
+    // config-entry name (e.g. "gemma-4-e4b" / "embeddinggemma-300m"),
+    // not `Backend::name()` which is the *kind* ("llamacpp") and
+    // collides across entries. The labels key the per-backend
+    // capabilities frames so doctor can report each backend distinctly.
+    //
+    // Default path (no --backend): defer to the config file when
+    // present, otherwise fall back to mock. This is the change that
+    // fixes #15 — previously the unset CLI flag silently defaulted to
+    // mock and short-circuited config loading.
+    if cli.backend.is_none() {
+        #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
+        if let Some(cfg) = config {
+            let mut entries = cfg.resolved_backends();
+            // Issue #16: when the config is the legacy single-model
+            // shape (`model:` at top level, not `backends:`),
+            // resolved_backends() promotes it to a one-element list
+            // with embed=false hard-coded. The --llamacpp-embed CLI
+            // flag opts that one entry into embed without forcing the
+            // operator to migrate to the multi-backend `backends:`
+            // shape. We only override on the legacy promotion path
+            // (cfg.model.is_some() && cfg.backends.is_none()) so an
+            // explicit multi-backend config keeps full control.
+            #[cfg(feature = "llamacpp")]
+            if cli.llamacpp_embed
+                && cfg.model.is_some()
+                && cfg.backends.is_none()
+                && let Some(BackendEntry::Llamacpp(e)) = entries.first_mut()
+            {
+                e.embed = true;
+                e.embed_pooling = cli.llamacpp_embed_pooling;
+                e.embed_n_ctx = cli.llamacpp_embed_n_ctx;
+            }
+            if !entries.is_empty() {
+                let auto_pull = cfg.auto_pull;
+                let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
+                let mut labels: Vec<String> = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let label = entry.name().to_string();
+                    let b = build_entry(&entry, cfg, auto_pull, Arc::clone(&broadcaster)).await?;
+                    out.push(b);
+                    labels.push(label);
+                }
+                return Ok((out, labels));
+            }
+        }
+
+        broadcaster.publish(StatusEvent::LoadingModel {
+            phase: LoadPhase::CheckingLocal {
+                path: PathBuf::from("(mock)"),
+            },
+        });
+        return Ok((vec![Arc::new(Mock::new())], vec!["mock".to_string()]));
+    }
+
+    match cli.backend.expect("checked is_none above") {
         BackendKind::Mock => {
             broadcaster.publish(StatusEvent::LoadingModel {
                 phase: LoadPhase::CheckingLocal {
                     path: PathBuf::from("(mock)"),
                 },
             });
-            Ok(vec![Arc::new(Mock::new())])
+            Ok((vec![Arc::new(Mock::new())], vec!["mock".to_string()]))
         }
-        #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
-        _ => {
-            if let Some(cfg) = config {
-                let entries = cfg.resolved_backends();
-                let auto_pull = cfg.auto_pull;
-                let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
-                for entry in entries {
-                    let b = build_entry(&entry, cfg, auto_pull, Arc::clone(&broadcaster)).await?;
-                    out.push(b);
-                }
-                return Ok(out);
-            }
-
-            // No config file: CLI-flag-only path. Single backend
-            // matching `--backend <kind>`.
-            match cli.backend {
-                BackendKind::Mock => unreachable!("handled above"),
-                #[cfg(feature = "llamacpp")]
-                BackendKind::Llamacpp => {
-                    let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
-                    Ok(vec![b])
-                }
-                #[cfg(feature = "openai")]
-                BackendKind::OpenaiCompat => {
-                    let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
-                    Ok(vec![b])
-                }
-                #[cfg(feature = "bedrock")]
-                BackendKind::BedrockInvoke => {
-                    let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
-                    Ok(vec![b])
-                }
-            }
+        #[cfg(feature = "llamacpp")]
+        BackendKind::Llamacpp => {
+            let b = build_llamacpp_cli_only(cli, Arc::clone(&broadcaster)).await?;
+            Ok((vec![b], vec!["llamacpp".to_string()]))
+        }
+        #[cfg(feature = "openai")]
+        BackendKind::OpenaiCompat => {
+            let b = build_openai_compat_cli_only(cli, Arc::clone(&broadcaster))?;
+            Ok((vec![b], vec!["openai-compat".to_string()]))
+        }
+        #[cfg(feature = "bedrock")]
+        BackendKind::BedrockInvoke => {
+            let b = build_bedrock_invoke_cli_only(cli, Arc::clone(&broadcaster))?;
+            Ok((vec![b], vec!["bedrock-invoke".to_string()]))
         }
     }
 }
@@ -959,6 +1058,39 @@ async fn build_llamacpp_entry(
         blob_path
     };
 
+    // Optional multimodal projector (issue #30). When the entry has an
+    // `mmproj` block, fetch it as an additional CAS blob via the same
+    // pinned-URL + constant-time-SHA path as the base model, then hand
+    // its path + expected SHA to the engine so libmtmd loads it and
+    // `capabilities().vision` flips true. None → text-only backend.
+    let (mmproj_path, mmproj_sha256_bytes) = if let Some(mm) = entry.mmproj.as_ref() {
+        let mm_spec: ModelSpec = mm.into();
+        let mm_sha = parse_sha256_hex(&mm.sha256)?;
+        let path = if auto_pull {
+            let spec_clone = mm_spec.clone();
+            let store_clone = store.clone();
+            let bcast = Arc::clone(&broadcaster);
+            tokio::task::spawn_blocking(move || fetch_model(&spec_clone, &store_clone, &bcast))
+                .await
+                .map_err(|e| anyhow::anyhow!("mmproj fetch task join: {e}"))?
+                .map_err(|e| anyhow::anyhow!("mmproj fetch failed for {}: {e}", entry.name))?
+        } else {
+            let blob_path = store.blob_path(&mm_spec.sha256_hex);
+            if !blob_path.exists() {
+                anyhow::bail!(
+                    "mmproj for {} not present in store at {} and auto_pull is disabled. \
+                     Run `inferdctl pull` or set auto_pull: true in config.",
+                    entry.name,
+                    blob_path.display()
+                );
+            }
+            blob_path
+        };
+        (Some(path), Some(mm_sha))
+    } else {
+        (None, None)
+    };
+
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Mmap {
             path: model_path.clone(),
@@ -971,6 +1103,8 @@ async fn build_llamacpp_entry(
     let backend = LlamaCpp::new(LlamaCppConfig {
         model_path,
         model_sha256: Some(model_sha256_bytes),
+        mmproj_path,
+        mmproj_sha256: mmproj_sha256_bytes,
         n_ctx,
         n_gpu_layers,
         embed: entry.embed,
@@ -1024,6 +1158,13 @@ async fn build_llamacpp_cli_only(
         model_sha256: Some(model_sha256_bytes),
         n_ctx: cli.n_ctx,
         n_gpu_layers: cli.n_gpu_layers,
+        // CLI-only path: --llamacpp-embed / --llamacpp-embed-pooling
+        // / --llamacpp-embed-n-ctx flow straight into the config so
+        // dev-mode rigs without a config file can still serve embed.
+        // Issue #16 fix.
+        embed: cli.llamacpp_embed,
+        embed_pooling: cli.llamacpp_embed_pooling,
+        embed_n_ctx: cli.llamacpp_embed_n_ctx,
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;
@@ -1080,6 +1221,36 @@ fn install_tracing() -> anyhow::Result<()> {
         .with(logx_layer)
         .init();
     Ok(())
+}
+
+/// Free a console window the daemon owns, so a Startup-shortcut launch
+/// doesn't leave a tracing window on the desktop (issue #28).
+///
+/// `GetConsoleProcessList` reports how many processes share the attached
+/// console. A console allocated *for us* by `CreateProcess` (the shortcut /
+/// double-click case) lists exactly one PID — ours. A console inherited
+/// from an interactive shell lists at least two (the shell + us), and we
+/// leave that one alone so `inferd-daemon` run by hand still prints to the
+/// terminal. `FreeConsole` only detaches this process from the console; the
+/// file + admin-pipe log sinks installed by `install_tracing` are
+/// unaffected. If no console is attached, `GetConsoleProcessList` returns 0
+/// and we no-op.
+#[cfg(windows)]
+fn detach_own_console() {
+    use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+
+    // SAFETY: GetConsoleProcessList writes up to `len` PIDs into the buffer
+    // and returns the count actually attached (0 if no console). We pass a
+    // small fixed buffer; we only care whether the count is exactly 1.
+    let mut pids = [0u32; 4];
+    let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    if count == 1 {
+        // SAFETY: detaches this process from its console. No further console
+        // I/O is expected; tracing writes to the activity log + admin pipe.
+        unsafe {
+            FreeConsole();
+        }
+    }
 }
 
 /// Wire Ctrl-C (SIGINT on Unix) to N oneshot channels so multiple

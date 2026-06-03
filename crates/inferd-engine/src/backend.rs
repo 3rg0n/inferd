@@ -72,9 +72,20 @@ pub enum TokenEventV2 {
 pub type TokenStreamV2 = Pin<Box<dyn Stream<Item = TokenEventV2> + Send>>;
 
 /// Hardware-acceleration backend the engine adapter is built and
-/// running with. Reflects compile-time GGML feature flags. Pure CPU
-/// builds (no `cuda` / `metal` / `vulkan` / `rocm` features) report
-/// `Cpu`. A build *with* support but where `n_gpu_layers == 0` also
+/// running with.
+///
+/// In a `dl-backends` build (v0.3 / ADR 0019), this is determined at
+/// process start by probing the ggml backend registry once
+/// `ggml_backend_load_all()` has dlopen'd the MODULE libs shipped
+/// next to the daemon. The cascade is Metal → CUDA → ROCm → Vulkan →
+/// CPU; the strongest backend the host actually has wins. The pick
+/// can be overridden with `INFERD_FORCE_BACKEND={cpu|metal|cuda|rocm|vulkan}`.
+///
+/// In the v0.2.x static-build path, this reflects compile-time GGML
+/// feature flags (`cuda` / `metal` / `vulkan` / `rocm` — at most one
+/// is meaningful per build); pure CPU builds report `Cpu`.
+///
+/// A build *with* GPU support but where `n_gpu_layers == 0` also
 /// effectively uses CPU at runtime — see [`AcceleratorInfo::gpu_layers`].
 ///
 /// New variants may be added in future patch releases (NPU, etc.);
@@ -111,21 +122,38 @@ impl AcceleratorKind {
 
 /// Snapshot of the active hardware-acceleration configuration.
 ///
-/// `kind` is the compile-time GGML backend this engine was built with;
+/// `kind` is the chosen GGML backend (runtime-probed in `dl-backends`
+/// builds; compile-time-pinned in v0.2.x static builds);
 /// `gpu_layers` is the runtime configuration the adapter was
-/// constructed with. A backend that compiled with `cuda` but was
-/// configured with `n_gpu_layers = 0` reports `kind = Cuda,
-/// gpu_layers = 0` — i.e. CUDA-capable but currently CPU-bound. The
-/// distinction is useful: it tells consumers the daemon *could*
-/// accelerate if reconfigured, vs. it can never accelerate without a
-/// rebuild.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// constructed with. A backend that probed `Cuda` but was configured
+/// with `n_gpu_layers = 0` reports `kind = Cuda, gpu_layers = 0` —
+/// i.e. CUDA-capable but currently CPU-bound. The distinction is
+/// useful: it tells consumers the daemon *could* accelerate if
+/// reconfigured, vs. there's no GPU module loaded at all.
+///
+/// `device_name` and `vram_total_bytes` are populated when the active
+/// backend exposes at least one device through ggml's device API —
+/// i.e. on `dl-backends` builds with a non-CPU backend selected. They
+/// remain `None` on the CPU path and on adapters that don't go
+/// through libllama (cloud / mock).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AcceleratorInfo {
-    /// Compile-time GGML backend.
+    /// GGML backend the daemon picked.
     pub kind: AcceleratorKind,
     /// Layers offloaded to the accelerator at construction time. 0
     /// means CPU-only at runtime regardless of `kind`.
     pub gpu_layers: u32,
+    /// Human-readable device name reported by ggml (`"NVIDIA GeForce
+    /// RTX 4090"`, `"AMD Radeon RX 7900 XT"`, `"Apple M2 Pro"`, …).
+    /// `None` on the CPU path or when the active backend exposes no
+    /// device.
+    pub device_name: Option<String>,
+    /// Total VRAM (or unified memory budget on Apple Silicon) in
+    /// bytes. `None` when the backend doesn't report a total. Free
+    /// VRAM is intentionally omitted — it changes second-to-second
+    /// and would force the capabilities frame to either lie or
+    /// re-probe on every emit.
+    pub vram_total_bytes: Option<u64>,
 }
 
 /// Per-backend capability advertisement. The daemon consults this on
@@ -138,7 +166,7 @@ pub struct AcceleratorInfo {
 /// shipped are `mock` and `llamacpp`. Both opt-in selectively —
 /// `mock` for tests, `llamacpp` once Phase 3+ wires mtmd / tool
 /// parsing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BackendCapabilities {
     /// `true` if the backend implements `generate_v2` (typed
     /// content blocks, tool definitions). When `false` the daemon's

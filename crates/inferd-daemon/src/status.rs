@@ -61,12 +61,26 @@ pub enum StatusEvent {
         /// Subscribers use this to decide whether to expose embedding
         /// surfaces in their UIs.
         embed: bool,
-        /// Compile-time GGML accelerator: `"cpu"` / `"cuda"` / `"metal"`
-        /// / `"vulkan"` / `"rocm"`.
+        /// Active GGML accelerator: `"cpu"` / `"cuda"` / `"metal"` /
+        /// `"vulkan"` / `"rocm"`. In `dl-backends` builds (v0.3+),
+        /// runtime-probed; in v0.2.x static builds, compile-time.
         accelerator: String,
         /// Layers offloaded to the accelerator at runtime. 0 means
         /// CPU-only regardless of `accelerator`.
         gpu_layers: u32,
+        /// Human-readable device name reported by ggml (e.g.
+        /// `"NVIDIA GeForce RTX 4090"`, `"Apple M2 Pro"`). `None` on
+        /// the CPU path or when the active backend exposes no device
+        /// (e.g. cloud adapters). Backwards-additive: older
+        /// subscribers ignore unknown fields.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        device_name: Option<String>,
+        /// Total VRAM (or unified memory budget on Apple Silicon) in
+        /// bytes. `None` when the backend doesn't report a total.
+        /// Free VRAM is intentionally omitted — it changes
+        /// second-to-second and would force a re-probe on every emit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        vram_total_bytes: Option<u64>,
     },
     /// Inference socket is bound and accepting connections.
     Ready,

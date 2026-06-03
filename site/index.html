@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>inferd — one warm copy, many local consumers</title>
+<meta name="description" content="inferd is a single host-wide local-inference daemon. One warm copy of each model, shared by every tool over NDJSON-over-IPC. Plumbing, not a product.">
+<meta name="theme-color" content="#0e0d0b">
+
+<meta property="og:title" content="inferd — one warm copy, many local consumers">
+<meta property="og:description" content="A single host-wide local-inference daemon. NDJSON-over-IPC. MIT.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://inferd.io/">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300;9..144,400;9..144,500;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="grain" aria-hidden="true"></div>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">⌬</span>
+      <span class="brand-word">inferd</span>
+    </div>
+    <nav class="masthead-nav">
+      <a href="#what">§1 What</a>
+      <a href="#why">§2 Why</a>
+      <a href="#shape">§3 Shape</a>
+      <a href="#install">§4 Install</a>
+      <a href="https://github.com/3rg0n/inferd" class="ext">github ↗</a>
+    </nav>
+  </div>
+  <div class="masthead-rule"></div>
+  <div class="masthead-meta">
+    <span>v0.3.0</span>
+    <span class="dot">·</span>
+    <span>MIT</span>
+    <span class="dot">·</span>
+    <span>Rust</span>
+    <span class="dot">·</span>
+    <span>Linux · macOS · Windows</span>
+    <span class="dot">·</span>
+    <span>Metal · CUDA · ROCm · Vulkan · CPU</span>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <p class="kicker">A technical note on local inference plumbing</p>
+  <h1 class="display">
+    One warm copy.<br>
+    <em>Many</em> local consumers.
+  </h1>
+  <p class="lede">
+    <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small NDJSON-over-IPC protocol. It is plumbing, not a product.
+  </p>
+  <div class="hero-actions">
+    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.3.0</a>
+    <a class="btn ghost" href="https://github.com/3rg0n/inferd">Read the source</a>
+  </div>
+  <pre class="hero-snippet" aria-label="example session"><span class="prompt">$</span> inferdctl doctor
+[ <span class="ok">ok</span> ] config:    loaded ~/.inferd/config.json (auto_pull=true)
+[ <span class="ok">ok</span> ] manifest:  gemma-4-e4b · embeddinggemma-300m
+[ <span class="ok">ok</span> ] admin:     ready
+[ <span class="ok">ok</span> ] backend:   llamacpp accelerator=metal gpu_layers=99 embed=true
+[ <span class="ok">ok</span> ] device:    Apple M2 Pro vram=16.0 GiB</pre>
+</section>
+
+<section id="what" class="section">
+  <div class="section-head">
+    <span class="section-num">§1</span>
+    <h2>What inferd is</h2>
+  </div>
+  <div class="section-body two-col">
+    <div>
+      <p>
+        Most local-AI tools today bundle their own copy of <code>llama.cpp</code>, ship their own model fetcher, and load weights into their own process. Open three such tools and you are paying for three copies of the same thirteen-billion-parameter model in RAM, three different model stores on disk, and three competing fetch paths.
+      </p>
+      <p>
+        inferd inverts that. One daemon holds the warm models — one for generation, one for embeddings — and exposes a small, frozen wire protocol. Every other tool — CLI assistants, IDE plugins, agent runtimes, web apps, middleware — connects as a client. No engine bundling. No second copy. No fight over the GPU.
+      </p>
+    </div>
+    <aside class="callout">
+      <p class="callout-label">In one line</p>
+      <p class="callout-quote">
+        “The daemon's only contract is the wire protocol.”
+      </p>
+      <p class="callout-cite">— <code>CLAUDE.md</code></p>
+    </aside>
+  </div>
+</section>
+
+<section id="why" class="section dark">
+  <div class="section-head">
+    <span class="section-num">§2</span>
+    <h2>Why this exists</h2>
+  </div>
+  <div class="section-body">
+    <ol class="numbered">
+      <li>
+        <h3>RAM is finite, models are large.</h3>
+        <p>A 7B model in 8-bit quantization is ~7&nbsp;GB resident. Two consumers running their own copy means two copies in RAM. Five means a swap-thrashed laptop. One warm copy, shared, means the math stops getting worse the more tools you adopt.</p>
+      </li>
+      <li>
+        <h3>Cold starts ruin local UX.</h3>
+        <p>Loading a model and allocating its KV-cache takes seconds. Doing it at every CLI invocation makes local inference feel slower than a hosted API. inferd loads once, at boot. After that, requests are warm.</p>
+      </li>
+      <li>
+        <h3>Per-app engines drift.</h3>
+        <p>Three vendored copies of <code>llama.cpp</code> means three different versions, three different GGUF compatibility matrices, three different fetch-and-verify implementations. inferd centralises all of it behind a contract that does not care which engine is underneath.</p>
+      </li>
+      <li>
+        <h3>The wire protocol is the product.</h3>
+        <p>NDJSON over a Unix socket on Linux/macOS, a named pipe on Windows. 64&nbsp;MiB per-frame cap. Frozen at v1. Anything on the host that can open a socket can drive it.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="shape" class="section">
+  <div class="section-head">
+    <span class="section-num">§3</span>
+    <h2>The shape of it</h2>
+  </div>
+  <div class="section-body">
+    <pre class="diagram" aria-label="architecture diagram">
+                    ┌──────────────────────────────────────┐
+                    │            user-space tools          │
+                    │  cli · ide plugin · agent · web app  │
+                    └──────────────────────────────────────┘
+                         │       │       │       │
+                         │ ndjson over uds / named pipe
+                         │ frame cap 64 MiB · v1 frozen
+                         ▼       ▼       ▼       ▼
+                    ┌──────────────────────────────────────┐
+                    │                inferd                │
+                    │   admission queue · 1 active + 10    │
+                    │   backend trait · router · activity  │
+                    └──────────────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────┐
+                    │   warm models in memory              │
+                    │   ├─ generate · gemma-4-e4b          │
+                    │   └─ embed    · embeddinggemma-300m  │
+                    │   llama.cpp via FFI (default)        │
+                    └──────────────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────┐
+                    │   runtime accelerator probe (v0.3)   │
+                    │   metal · cuda · rocm · vulkan · cpu │
+                    │   strongest available, picked at boot │
+                    └──────────────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────┐
+                    │  shared content-addressable store    │
+                    │  $MODELS_HOME/blobs/sha256/aa/...    │
+                    └──────────────────────────────────────┘</pre>
+
+    <div class="grid-three">
+      <article class="card">
+        <h3>Generate</h3>
+        <p>Send a <code>messages</code> array, get tokens back as they're produced, terminated by one <code>done</code> frame. No retry, no fallback, no rewriting prompts — the daemon stays out of your way.</p>
+      </article>
+      <article class="card">
+        <h3>Embed</h3>
+        <p>Send text, get a 768-dim vector — or 256-dim via Matryoshka truncation. Bounded inputs return structured errors instead of crashing the daemon (issue #20, fixed in v0.3.0).</p>
+      </article>
+      <article class="card">
+        <h3>Admin</h3>
+        <p>A separate socket exposes ready-state, queue depth, model load progress, and activity events. Progress UIs connect during boot, before the inference socket even opens.</p>
+      </article>
+    </div>
+
+    <details class="frame-example">
+      <summary>One generate request, on the wire</summary>
+<pre><span class="comment">// client → daemon (one NDJSON line)</span>
+{"id":"r1","messages":[{"role":"user","content":"hi"}],"max_tokens":32}
+
+<span class="comment">// daemon → client (streamed)</span>
+{"type":"token","id":"r1","text":"Hello"}
+{"type":"token","id":"r1","text":" there"}
+{"type":"token","id":"r1","text":"!"}
+{"type":"done","id":"r1","content":"Hello there!","usage":{"prompt_tokens":12,"completion_tokens":3},"backend":"llamacpp"}</pre>
+    </details>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">New in v0.3</p>
+      <p>
+        The release tarball ships every ggml backend — Metal, CUDA, ROCm, Vulkan, plus per-CPU-feature variants — as separately loadable shared libraries. At boot, inferd probes the host hardware and picks the strongest backend available. The daemon binary is the same on every machine; the accelerator pick happens at runtime, not at compile time. Operators can override with <code>INFERD_FORCE_BACKEND</code> for benchmarking. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md" class="ext">ADR 0019 ↗</a>
+      </p>
+    </aside>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">Multimodal out of the box</p>
+      <p>
+        The default model is Gemma 4, and inferd pulls its vision projector on first boot — no extra config. Send images on the v2 socket as typed content blocks; the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and answers questions about an image without any setup.
+      </p>
+    </aside>
+  </div>
+</section>
+
+<section id="install" class="section dark">
+  <div class="section-head">
+    <span class="section-num">§4</span>
+    <h2>Install</h2>
+  </div>
+  <div class="section-body">
+    <p class="install-lede">
+      Pre-built tarballs for Linux x86_64, macOS aarch64, and Windows x86_64 are attached to every release. Each platform ships a per-user installer that drops the daemon in your local prefix and registers it with the appropriate init system.
+    </p>
+
+    <div class="install-grid">
+      <article class="install-card">
+        <h3 class="os">Linux</h3>
+        <p class="install-desc">systemd <code>--user</code> unit. No sudo, no system-wide service.</p>
+<pre>tar xzf inferd-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+cd  inferd-v0.3.0-x86_64-unknown-linux-gnu
+mkdir -p ~/.local/bin
+cp inferd-daemon inferdctl backends/* ~/.local/bin/
+mkdir -p ~/.config/systemd/user
+cp packaging/inferd.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now inferd</pre>
+      </article>
+
+      <article class="install-card">
+        <h3 class="os">macOS</h3>
+        <p class="install-desc">launchd <code>LaunchAgent</code>, per-user, Apple Silicon.</p>
+<pre>tar xzf inferd-v0.3.0-aarch64-apple-darwin.tar.gz
+cd  inferd-v0.3.0-aarch64-apple-darwin
+./packaging/install-launchagent.sh ./inferd-daemon</pre>
+      </article>
+
+      <article class="install-card">
+        <h3 class="os">Windows</h3>
+        <p class="install-desc">Per-user Startup-folder shortcut. No SCM service.</p>
+<pre>Expand-Archive inferd-v0.3.0-x86_64-pc-windows-msvc.zip
+cd  inferd-v0.3.0-x86_64-pc-windows-msvc
+powershell -ExecutionPolicy Bypass `
+  -File .\packaging\install.ps1 `
+  -SourceBinary .\inferd-daemon.exe</pre>
+      </article>
+    </div>
+
+    <p class="install-foot">
+      Always verify the SHA-256 of the tarball against the value on the release page before extracting. <a href="https://github.com/3rg0n/inferd/releases/latest" class="ext">Latest release ↗</a>
+    </p>
+  </div>
+</section>
+
+<section class="section invariants rust">
+  <div class="section-head">
+    <span class="section-num">§5</span>
+    <h2>What it isn't</h2>
+  </div>
+  <div class="section-body">
+    <p class="install-lede">
+      inferd has a deliberately small surface. The list of things it will never do is part of the design. These are not feature gaps; they are scope decisions.
+    </p>
+    <ul class="never">
+      <li><span class="never-tag">never</span> An HTTP server. IPC only.</li>
+      <li><span class="never-tag">never</span> An OpenAI-compatible surface in the daemon. Build it as a separate process if you want one.</li>
+      <li><span class="never-tag">never</span> Per-request backend override on the wire. Operators choose backends, callers don't.</li>
+      <li><span class="never-tag">never</span> In-daemon retry, fallback, or mid-stream failover. The caller owns retry.</li>
+      <li><span class="never-tag">never</span> A multi-generate-model warm pool. One generate model per process (an embed model alongside is fine — different role). Need two generate models? Run two daemons.</li>
+      <li><span class="never-tag">never</span> Breaking wire-protocol changes. v1 is frozen. v2 will live on a separate socket.</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="colophon">
+  <div class="colophon-inner">
+    <div class="colophon-block">
+      <p class="colophon-label">Source</p>
+      <p><a href="https://github.com/3rg0n/inferd">github.com/3rg0n/inferd</a></p>
+    </div>
+    <div class="colophon-block">
+      <p class="colophon-label">License</p>
+      <p>MIT</p>
+    </div>
+    <div class="colophon-block">
+      <p class="colophon-label">Status</p>
+      <p>Alpha · v0.3.0</p>
+    </div>
+    <div class="colophon-block">
+      <p class="colophon-label">Set in</p>
+      <p>Fraunces &amp; JetBrains&nbsp;Mono</p>
+    </div>
+  </div>
+  <p class="colophon-footnote">
+    A small piece of plumbing. Built in the open, on the assumption that local inference deserves a shared substrate instead of an arms race of vendored engines.
+  </p>
+</footer>
+
+</body>
+</html>

@@ -140,9 +140,26 @@ fn default_admin_addr() -> PathBuf {
 
 async fn cmd_status(admin_addr: &std::path::Path) -> anyhow::Result<ExitCode> {
     let mut admin = dial_admin(admin_addr).await?;
-    let event = admin.recv().await?;
-    println!("{}", admin_event_to_json(&event));
-    let code = if event.status == "ready" {
+    // The daemon emits a capabilities frame before the lifecycle
+    // snapshot when backend construction has completed. Read up to
+    // two frames and use the non-capabilities frame for the
+    // readiness check; fall back to whatever we got otherwise.
+    let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
+            Ok(Ok(event)) => frames.push(event),
+            _ => break,
+        }
+    }
+    let snapshot = match frames.iter().find(|e| e.status != "capabilities") {
+        Some(e) => e,
+        None => match frames.first() {
+            Some(e) => e,
+            None => anyhow::bail!("no admin frame received within 1s"),
+        },
+    };
+    println!("{}", admin_event_to_json(snapshot));
+    let code = if snapshot.status == "ready" {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -338,8 +355,14 @@ async fn cmd_doctor(
             // through backend construction. If we only see one frame,
             // it's the snapshot (daemon may not have hit Capabilities
             // yet — e.g. still in LoadingModel).
+            // The daemon writes one capabilities frame *per backend*
+            // followed by the snapshot frame on connect (admin.rs). Drain
+            // several frames so a multi-backend daemon's full capability
+            // set is captured, not just the first — a 2-frame read would
+            // miss a vision-capable generate backend behind an embed
+            // backend (and vice versa).
             let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..8 {
                 match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
                     Ok(Ok(event)) => frames.push(event),
                     _ => break,
@@ -355,7 +378,10 @@ async fn cmd_doctor(
                     ),
                 );
             } else {
-                let caps = frames.iter().find(|e| e.status == "capabilities");
+                let caps_frames: Vec<&inferd_client::AdminEvent> = frames
+                    .iter()
+                    .filter(|e| e.status == "capabilities")
+                    .collect();
                 let snapshot = frames
                     .iter()
                     .find(|e| e.status != "capabilities")
@@ -374,7 +400,11 @@ async fn cmd_doctor(
                         }
                     ),
                 );
-                if let Some(c) = caps {
+                // One `backend:` line per registered backend, so a
+                // multi-backend daemon reports e.g. a vision-capable
+                // generate backend AND an embed backend, instead of
+                // whichever frame happened to arrive first.
+                for c in &caps_frames {
                     let backend = c.backend.as_deref().unwrap_or("?");
                     let accel = c.accelerator.as_deref().unwrap_or("?");
                     let gpu_layers = c.gpu_layers.unwrap_or(0);
@@ -393,6 +423,13 @@ async fn cmd_doctor(
                              thinking={thinking} embed={embed}"
                         ),
                     );
+                    if let Some(name) = c.device_name.as_deref() {
+                        let vram = c
+                            .vram_total_bytes
+                            .map(format_bytes_short)
+                            .unwrap_or_else(|| "?".to_string());
+                        report_problem("device", true, &format!("{name} vram={vram}"));
+                    }
                 }
             }
         }
@@ -419,6 +456,27 @@ async fn cmd_doctor(
 }
 
 // --- helpers ----------------------------------------------------------
+
+/// Render a byte count as a short human string (e.g. `"24.0 GiB"`,
+/// `"512 MiB"`). Used by `doctor` to print VRAM totals; the binary
+/// (1024-based) form matches what GPU vendors quote.
+fn format_bytes_short(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    const TIB: u64 = GIB * 1024;
+    if n >= TIB {
+        format!("{:.1} TiB", n as f64 / TIB as f64)
+    } else if n >= GIB {
+        format!("{:.1} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{} MiB", n / MIB)
+    } else if n >= KIB {
+        format!("{} KiB", n / KIB)
+    } else {
+        format!("{n} B")
+    }
+}
 
 /// Render an `AdminEvent` as one-line JSON, mirroring the wire
 /// envelope the daemon publishes. We could just relay the raw

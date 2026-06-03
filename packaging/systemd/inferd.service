@@ -10,8 +10,12 @@
 # documented in the threat model. Anything off this baseline weakens
 # the security posture; change deliberately.
 #
-# v0.1 ships only the `mock` backend by default; for real inference
-# set --backend llamacpp, --model-path, and the model SHA-256 below.
+# Backend selection: this unit deliberately omits `--backend`. With
+# no `--backend` flag the daemon defers to `~/.inferd/config.json`,
+# which is auto-written on first boot and declares real generate +
+# embed llamacpp backends with `auto_pull = true`. Operators who want
+# a different posture (mock for tests, openai-compat, etc.) can either
+# edit the config file or append `--backend <kind>` to ExecStart below.
 
 [Unit]
 Description=inferd local inference daemon
@@ -39,11 +43,21 @@ Type=simple
 # who want a non-default group (e.g. for a service account that
 # shares the daemon) `groupadd inferd-users` first and append
 # `--group inferd-users` to the ExecStart line below.
+# ReadWritePaths= below carves %h/.inferd and %h/.local/share/models out
+# of ProtectHome=read-only. systemd resolves those paths during namespace
+# setup *before* ExecStart runs and aborts with status=226/NAMESPACE if
+# either is missing. On a fresh install they don't exist yet (the daemon
+# normally creates them on first boot), so create them up front. mkdir -p
+# is idempotent and runs unprivileged under the user instance.
+ExecStartPre=/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
 ExecStart=%h/.local/bin/inferd-daemon \
-    --backend mock \
     --lock %t/inferd/inferd.lock \
     --uds %t/inferd/infer.sock \
-    --admin-addr %t/inferd/admin.sock
+    --v2 \
+    --v2-addr %t/inferd/infer.v2.sock \
+    --admin-addr %t/inferd/admin.sock \
+    --embed \
+    --embed-addr %t/inferd/infer.embed.sock
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=10s
@@ -78,6 +92,16 @@ Environment=INFERD_LOG_DIR=%S/inferd/logs
 # (forthcoming).
 NoNewPrivileges=yes
 ProtectHome=read-only
+# ProtectHome=read-only locks $HOME, but the daemon legitimately needs
+# to write the CAS model store at ~/.local/share/models/ (blob writes
+# during auto_pull, manifest updates, working-set link at model load)
+# and ~/.inferd/config.json (default-config write on first boot per
+# default_first_boot_config in crates/inferd-daemon/src/config_file.rs).
+# ReadWritePaths= carves both back out without weakening the rest of
+# $HOME's protection. Note: ReadWritePaths= IS honoured under
+# ProtectHome= alone on systemd >= 232; it does not require
+# ProtectSystem=strict (the older comment was wrong on this point).
+ReadWritePaths=%h/.local/share/models %h/.inferd
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -85,10 +109,6 @@ LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-
-# `ReadWritePaths=` is only meaningful with `ProtectSystem=strict`,
-# which we drop above for per-user reasons. RuntimeDirectory= and
-# StateDirectory= already grant write access where it's needed.
 
 [Install]
 WantedBy=default.target
