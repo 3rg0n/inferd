@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`inferdctl doctor` reported only one backend's capabilities, showing
+  `vision=false` on a multimodal daemon.** Two causes: (1) the admin
+  `StatusBroadcaster` retained capabilities in a single watch slot, so
+  each backend's caps frame overwrote the previous; (2) the caps frame's
+  `backend` field used `Backend::name()` (the *kind*, `"llamacpp"`,
+  identical across entries) rather than the unique config-entry name, so
+  even a keyed map collided. Now retains caps per backend (keyed by the
+  config-entry label), replays one frame per backend on admin connect,
+  and doctor prints a `backend:` line for each — so the vision-capable
+  generate backend shows `vision=true` alongside the embed backend.
+  Found by Mac Claude during rc.12 Metal validation (#32); affected all
+  platforms (display-only — the daemon's actual capabilities were
+  correct).
+
 ### Validation
 
 - **v0.3.0 install=work validation complete** (`docs/v0.3-validation.md`,
