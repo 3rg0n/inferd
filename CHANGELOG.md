@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-03
+
+First stable v0.3 release. Headline: **runtime accelerator detection**
+(ADR 0019) — one binary ships every ggml backend as a loadable module
+and picks the strongest available (Metal / CUDA / ROCm / Vulkan / CPU)
+at boot — and **multimodal by default**, with the reference Gemma 4
+model pulling its vision projector on first boot so a fresh install
+answers questions about images with no extra config.
+
+install=work validation is complete on every shipped target with real
+hardware: Windows x86_64 CPU + CUDA (RTX 5080), Linux x86_64 CPU + CUDA
+(RTX 5080 / WSL), and macOS arm64 Metal (Apple M1) — each a
+fresh-machine install that auto-pulls the models and serves real
+generate + embed + a real v2 image round-trip. See
+`docs/v0.3-validation.md`. ADR 0019 is accepted.
+
+This section ratifies the cumulative work detailed in the
+`0.3.0-rc.1` … `0.3.0-rc.13` entries below; no code changes between
+`0.3.0-rc.13` and `0.3.0` beyond the version bump.
+
 ## [0.3.0-rc.13] - 2026-06-03
 
 ### Fixed
