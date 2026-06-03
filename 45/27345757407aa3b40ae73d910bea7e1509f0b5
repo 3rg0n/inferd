@@ -1,0 +1,23 @@
+docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md
+  s_126aec4081f728::t_0eeae84f08c936 3,5-7
+docs/adr/README.md
+  s_126aec4081f728::t_7d627f60827fde 26
+site/index.html
+  s_126aec4081f728::t_a8e81f65efda38 202-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "4527345757407aa3b40ae73d910bea7e1509f0b5",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
