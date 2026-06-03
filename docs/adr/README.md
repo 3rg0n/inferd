@@ -24,6 +24,7 @@ implementation choices aren't.
 | [0017](0017-embeddings-on-a-third-socket.md) | Embeddings on a third socket — NDJSON, not HTTP | Accepted |
 | [0018](0018-cli-renamed-to-inferdctl.md) | CLI binary renamed back to `inferdctl` (crates.io squat + operator disambiguation) | Accepted |
 | [0019](0019-runtime-accelerator-detection-via-ggml-backend-dl.md) | Runtime accelerator detection via `GGML_BACKEND_DL` (Metal / CUDA / ROCm / Vulkan / CPU cascade, no NPU) | Proposed |
+| [0020](0020-inferd-http-bridge-is-a-separate-process.md) | The HTTP/OpenAI-compat bridge is a separate process, not in the daemon (two surfaces: OpenAI-compat + native-over-network) | Accepted |
 
 ## Writing a new ADR
 
