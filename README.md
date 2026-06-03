@@ -6,15 +6,21 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: alpha.** v0.1.0-alpha.0 of `inferd-proto` and `inferd-client`
-is on crates.io. The daemon binary ships via GitHub releases. See
-`docs/plan-v0.1.md` for the design and `context.md` for the hand-off
-brief to first-time contributors.
+**Status: v0.3.** `inferd-proto` and `inferd-client` are on crates.io;
+the daemon binary ships via GitHub releases for Linux x86_64, macOS
+aarch64, and Windows x86_64. See `context.md` for the hand-off brief to
+first-time contributors and `docs/adr/` for the design decisions.
 
 inferd is a single host-wide Rust service that owns the hard parts of
 running a local LLM — loading the model, holding it warm, multiplexing
-requests, swapping backends — so that every app on the machine shares
-one daemon instead of spawning its own.
+requests, swapping backends, picking the right accelerator — so that
+every app on the machine shares one daemon instead of spawning its own.
+
+Since v0.3 the daemon picks the strongest available compute backend
+(Metal / CUDA / ROCm / Vulkan / CPU) at runtime from a single binary
+(ADR 0019), and ships multimodal by default — the reference Gemma 4
+model pulls its vision projector on first boot, so a fresh install
+answers questions about images with no extra config.
 
 ## Why
 
@@ -48,20 +54,28 @@ inference daemon; they connect to inferd.
 
 ## Scope
 
-v0.1:
+What ships today (v0.3):
 
-- One backend: local llama.cpp via FFI, Gemma 4 E4B as the reference
-  model.
-- Frozen wire protocol v1 — `docs/protocol-v1.md`. NDJSON over IPC.
-- Rust client crate (`inferd-client`) published to crates.io.
-- Hand-written Go client (`clients/go/`); Python and TypeScript
-  clients to follow.
+- **Local llama.cpp via FFI**, Gemma 4 E4B as the reference model —
+  multimodal by default (vision projector pulled on first boot).
+- **Runtime accelerator detection** (ADR 0019): one binary ships every
+  ggml backend as a loadable module and picks the strongest at boot.
+- **Three frozen wire surfaces**, each on its own socket: v1 text
+  generation (`docs/protocol-v1.md`), v2 typed content blocks /
+  attachments / tools (ADR 0015), and embeddings (ADR 0017). NDJSON
+  over IPC throughout.
+- **Cloud backend adapters** behind the same `Backend` trait —
+  `openai-compat` (vLLM, LM Studio, LocalAI, llama.cpp's HTTP server,
+  OpenAI/Anthropic) and `bedrock-invoke` — feature-gated, outbound
+  HTTPS only (ADR 0006).
+- **Rust client** (`inferd-client`) on crates.io; hand-written Go,
+  Python, and TypeScript clients in `clients/`.
+- **`inferdctl`** CLI: `status` / `watch` / `pull` / `doctor`.
 
-v0.2 adds backend adapters for OpenAI-compatible servers (vLLM,
-LM Studio, LocalAI, llama.cpp's HTTP server, and OpenAI/Anthropic/
-Bedrock proper) behind the same `Backend` trait — turning inferd
-into a local model-proxy-gateway whose backend is transparent to
-every consumer that talks to it.
+Everything is one host-wide daemon: apps connect to inferd instead of
+bundling their own engine. HTTP / OpenAI-compat *server* surfaces stay
+out of the daemon by design (ADR 0006) and live as separate
+ecosystem-extension processes (ADR 0020).
 
 ## Layout
 
@@ -84,22 +98,33 @@ inferd/
 
 ## Install
 
+Download the tarball for your platform from the
+[releases page](https://github.com/3rg0n/inferd/releases) and run the
+bundled per-user installer. **No elevation** on any platform — inferd
+runs as a per-user service (systemd `--user` / launchd LaunchAgent /
+Windows Startup-folder), stops at logout, and never touches a
+system-wide service. On first boot it writes `~/.inferd/config.json`
+and auto-pulls the reference model + embedding model + vision projector
+into the shared model store; watch with `inferdctl watch`.
+
 ### Linux
 
-inferd ships a per-user systemd unit at
-`packaging/systemd/inferd.service`. Install:
-
 ```sh
-install -Dm755 inferd-daemon ~/.local/bin/inferd-daemon
-install -Dm644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
+tar xzf inferd-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+cd inferd-v0.3.0-x86_64-unknown-linux-gnu
+mkdir -p ~/.local/bin ~/.config/systemd/user
+cp -f inferd-daemon inferdctl ~/.local/bin/
+cp -f backends/* ~/.local/bin/            # ggml backend modules ($ORIGIN RPATH)
+cp -f packaging/inferd.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now inferd
+inferdctl watch                            # first-boot model pull
 ```
 
 The unit declares `RuntimeDirectory=inferd`, so systemd creates
-`/run/user/<uid>/inferd/` with the right ownership before
-`ExecStart`. Sockets and the lock file live there. The unit also
-applies the hardening directives documented in `THREAT_MODEL.md` F-16.
+`/run/user/<uid>/inferd/` with the right ownership before `ExecStart`;
+sockets and the lock file live there. It applies the hardening
+directives documented in `THREAT_MODEL.md` F-16.
 
 > **Why not `/run/inferd/`?** That directory is for system daemons
 > running as root. `systemd --user` cannot write there. inferd
@@ -127,26 +152,34 @@ sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'   # per-boot
 Or persistently, add `[interop] enabled = false` to `/etc/wsl.conf`
 and run `wsl.exe --shutdown` from Windows.
 
-### macOS
-
-Install the LaunchAgent at `packaging/launchd/io.inferd.daemon.plist`:
+### macOS (Apple Silicon)
 
 ```sh
-install -m755 inferd-daemon ~/Library/LaunchAgents/inferd-daemon
-install -m644 packaging/launchd/io.inferd.daemon.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/io.inferd.daemon.plist
+tar xzf inferd-v0.3.0-aarch64-apple-darwin.tar.gz
+cd inferd-v0.3.0-aarch64-apple-darwin
+./packaging/launchd/install-launchagent.sh ./inferd-daemon
+inferdctl watch
 ```
+
+The script flattens the `backends/` modules next to the daemon
+(`@loader_path` RPATH resolves them), installs the LaunchAgent, and
+bootstraps it. The probe picks Metal on Apple Silicon.
 
 ### Windows
 
-Run the elevated installer:
-
 ```powershell
-.\packaging\windows\install.ps1
+Expand-Archive inferd-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+cd inferd-v0.3.0-x86_64-pc-windows-msvc
+powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
+    -SourceBinary .\inferd-daemon.exe
+inferdctl watch
 ```
 
-This installs the binary, creates the service via `sc.exe`, and
-sets the named-pipe ACL to grant the current user only.
+Per-user, **no elevation**: the installer stages the binary +
+`backends\` DLLs into `%LOCALAPPDATA%\inferd`, registers a Startup-
+folder shortcut, and launches the daemon (named pipes, default DACL
+granting the current user). The CUDA build resolves its redist DLLs
+next to the exe; no system-wide CUDA install needed.
 
 ## License
 
