@@ -82,13 +82,13 @@ type Usage struct {
 type Response struct {
 	ID         string       `json:"id"`
 	Type       ResponseType `json:"type"`
-	Status     string       `json:"status,omitempty"`     // status only
-	Content    string       `json:"content,omitempty"`    // token, done
-	Usage      *Usage       `json:"usage,omitempty"`      // done
+	Status     string       `json:"status,omitempty"`      // status only
+	Content    string       `json:"content,omitempty"`     // token, done
+	Usage      *Usage       `json:"usage,omitempty"`       // done
 	StopReason StopReason   `json:"stop_reason,omitempty"` // done
-	Backend    string       `json:"backend,omitempty"`    // done — diagnostic only
-	Code       ErrorCode    `json:"code,omitempty"`       // error
-	Message    string       `json:"message,omitempty"`    // error
+	Backend    string       `json:"backend,omitempty"`     // done — diagnostic only
+	Code       ErrorCode    `json:"code,omitempty"`        // error
+	Message    string       `json:"message,omitempty"`     // error
 }
 
 // IsTerminal reports whether this frame ends a request stream.

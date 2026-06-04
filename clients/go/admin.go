@@ -41,19 +41,47 @@ type AdminEvent struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Phase-specific detail keys, flattened on the wire per the spec.
-	Path             string `json:"path,omitempty"`
-	DownloadedBytes  int64  `json:"downloaded_bytes,omitempty"`
-	TotalBytes       *int64 `json:"total_bytes,omitempty"` // pointer: null = unknown
-	SourceURL        string `json:"source_url,omitempty"`
-	ExpectedSHA256   string `json:"expected_sha256,omitempty"`
-	ActualSHA256     string `json:"actual_sha256,omitempty"`
-	QuarantinePath   string `json:"quarantine_path,omitempty"`
-	NCtx             int    `json:"n_ctx,omitempty"`
+	Path            string `json:"path,omitempty"`
+	DownloadedBytes int64  `json:"downloaded_bytes,omitempty"`
+	TotalBytes      *int64 `json:"total_bytes,omitempty"` // pointer: null = unknown
+	SourceURL       string `json:"source_url,omitempty"`
+	ExpectedSHA256  string `json:"expected_sha256,omitempty"`
+	ActualSHA256    string `json:"actual_sha256,omitempty"`
+	QuarantinePath  string `json:"quarantine_path,omitempty"`
+	NCtx            int    `json:"n_ctx,omitempty"`
+
+	// Capability keys, set on `status: "capabilities"` frames (one per
+	// registered backend; the daemon emits these on connect before the
+	// lifecycle snapshot). Pointer-typed so absence (any non-capabilities
+	// frame) is distinguishable from an explicit false. Consumers gate
+	// multimodal dispatch on Vision/Audio: dial the v2 socket and send
+	// image/audio attachments only when the relevant capability is true.
+	Backend  string `json:"backend,omitempty"`
+	V2       *bool  `json:"v2,omitempty"`
+	Vision   *bool  `json:"vision,omitempty"`
+	Audio    *bool  `json:"audio,omitempty"`
+	Tools    *bool  `json:"tools,omitempty"`
+	Thinking *bool  `json:"thinking,omitempty"`
+	Embed    *bool  `json:"embed,omitempty"`
 
 	// Extra holds any keys we don't recognise. Per the spec, clients
 	// MUST ignore unknown keys without erroring; surfacing them here
 	// lets diagnostic-curious consumers display them anyway.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// IsCapabilities reports whether this frame is a backend capability
+// advertisement (the daemon emits one per registered backend on
+// connect, ahead of the lifecycle snapshot).
+func (e AdminEvent) IsCapabilities() bool {
+	return e.Status == "capabilities"
+}
+
+// SupportsVision reports whether this capabilities frame advertises
+// vision support. False for non-capabilities frames or when the field
+// is absent.
+func (e AdminEvent) SupportsVision() bool {
+	return e.Vision != nil && *e.Vision
 }
 
 // DialAdmin opens a read-only connection to the inferd admin socket

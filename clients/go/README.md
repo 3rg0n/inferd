@@ -8,7 +8,13 @@ import inferd "github.com/3rg0n/inferd/clients/go"
 ```
 
 Single flat package — same shape as `lib/pq` / `pgx`. No
-`proto/v1` + `client` subdivision in v0.1.
+`proto/v1` + `client` subdivision.
+
+Covers all three frozen wire surfaces: v1 text generation
+(`Client.Generate`), v2 typed content blocks / attachments / tools
+(`Client.GenerateV2`, ADR 0015), and the admin lifecycle stream
+(`AdminClient`). v2 is what you use for **multimodal** — sending images
+to a vision-capable daemon.
 
 ## Quickstart
 
@@ -45,6 +51,60 @@ for frame := range stream {
     }
 }
 ```
+
+## Multimodal (v2)
+
+The v2 surface binds on a **separate socket** from v1 — dial it with
+the same `DialUDS` / `DialPipe` / `DialTCP` pointed at the v2 path
+(`DefaultInferV2Addr()` returns the platform default), then call
+`GenerateV2`. Send images as typed content blocks plus a top-level
+attachment table; per ADR 0016 the consumer decodes the image to raw
+interleaved RGB (`width*height*3` bytes, no alpha) before sending — the
+daemon links no image codec.
+
+```go
+// Gate on the daemon advertising vision before dispatching. The admin
+// stream emits one capabilities frame per backend.
+admin, _ := inferd.DialAdmin(ctx, "")
+defer admin.Close()
+vision := false
+for i := 0; i < 8; i++ {
+    ev, err := admin.Recv(ctx)
+    if err != nil { break }
+    if ev.IsCapabilities() && ev.SupportsVision() { vision = true; break }
+    if ev.Status == "ready" { break }
+}
+if !vision { /* daemon has no vision backend; fall back to text */ }
+
+// Decode your image (JPEG/PNG/…) to RGB yourself, then:
+rgb := decodeToRGB(imgBytes)         // your codec; daemon links none
+c, _ := inferd.DialUDS(ctx, inferd.DefaultInferV2Addr())
+defer c.Close()
+stream, _ := c.GenerateV2(ctx, inferd.RequestV2{
+    ID: "vq-1",
+    Messages: []inferd.MessageV2{{
+        Role: inferd.RoleUser,
+        Content: []inferd.ContentBlock{
+            inferd.TextBlock("What's in this image?"),
+            inferd.ImageBlock("img"),
+        },
+    }},
+    Attachments: []inferd.AttachmentV2{
+        inferd.ImageAttachment("img", w, h, rgb),
+    },
+})
+for f := range stream {
+    if f.Type == inferd.ResponseV2Frame && f.Block != nil && f.Block.Type == inferd.BlockText {
+        fmt.Print(f.Block.Delta)
+    }
+}
+```
+
+Streaming text arrives as `frame` responses carrying a `text` block
+delta; `thinking` blocks carry the reasoning trace separately; a
+complete `tool_use` block arrives whole when the model calls a tool
+declared in `RequestV2.Tools`. The stream terminates with one `done`
+(carrying `UsageV2` + `StopReasonV2`) or one `error`.
 
 ## Transports
 
@@ -125,12 +185,12 @@ you recognise; default to logging-and-ignoring otherwise.
 
 ## Compatibility
 
-The wire format is frozen per ADR 0008 in the upstream repo.
-This module implements protocol v1; the request/response
-shapes in `protocol.go` and the admin event shapes in
-`admin.go` are byte-compatible with `docs/protocol-v1.md` and
-verified by tests that launch the Rust daemon binary and
-round-trip frames through it.
+Each wire surface is frozen in the upstream repo: v1 per ADR 0008,
+v2 per ADR 0015, embeddings per ADR 0017. This module implements v1
+(`protocol.go`), v2 (`protocol_v2.go`), and the admin stream
+(`admin.go`); the shapes are byte-compatible with the Rust
+`inferd-proto` crate and verified by tests that round-trip frames
+(and, when the binary is present, launch the Rust daemon).
 
 Any Go consumer that wants local inference imports this
 module instead of embedding its own engine. Call sites
