@@ -1,0 +1,33 @@
+clients/go/admin.go
+  s_126aec4081f728::t_bc757a6f469899 53-65,73-84
+clients/go/addr.go
+  s_126aec4081f728::t_f3ab58d2b90c84 1-57
+clients/go/client_v2_test.go
+  s_126aec4081f728::t_cd11b40de473a7 57-58
+  s_126aec4081f728::t_e9762d192bb569 1-56,59-182
+clients/go/client_v2.go
+  s_126aec4081f728::t_458847ee8a932c 1-110
+clients/go/README.md
+  s_126aec4081f728::t_88ed5007022e20 188-193
+  s_126aec4081f728::t_8cfe7d7b23bd6f 11-17
+  s_126aec4081f728::t_6227a940f9a03f 55-108
+clients/go/protocol_v2.go
+  s_126aec4081f728::t_f4937dde900b3b 1-19,31-249
+  s_126aec4081f728::t_293b23d1897bae 20-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5b8a634b1a0ce23e248ab539a4193c76446cfe45",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
