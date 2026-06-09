@@ -1,0 +1,41 @@
+docs/adr/0015-v2-wire-protocol-typed-content-blocks.md
+  s_126aec4081f728::t_32fed3d97e19bb 3
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_c0da9663e5423b 47-48
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_c0da9663e5423b 56
+docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md
+  s_126aec4081f728::t_3a90f01cee04ee 1-189
+crates/inferd-client/Cargo.toml
+  s_126aec4081f728::t_c0da9663e5423b 24
+docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md
+  s_126aec4081f728::t_cd36233c25cf9f 3
+CHANGELOG.md
+  s_126aec4081f728::t_baeda7964b656d 10-23
+docs/adr/0009-pre-m1-open-questions-resolved.md
+  s_126aec4081f728::t_976529dc80fdb8 3
+Cargo.toml
+  s_126aec4081f728::t_c0da9663e5423b 16
+docs/adr/README.md
+  s_126aec4081f728::t_919f2a12d8d634 28
+  s_126aec4081f728::t_a4e2e7537a2c68 15-16
+  s_126aec4081f728::t_6905a305be0dcf 22
+crates/inferd/Cargo.toml
+  s_126aec4081f728::t_c0da9663e5423b 21-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ce73119bc68baf20f0656e0545e60973076d127c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
