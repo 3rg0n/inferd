@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **v0.4 (breaking): unifying the IPC wire format** per [ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)
+  (issue #34). One generation API (v1 folded into v2, v1 socket
+  removed); length-prefixed, type-tagged framing (uvarint len + 1 type
+  byte: `0x01` JSON / `0x02` BLOB) replacing newline-delimited JSON;
+  media rides as raw BLOB frames instead of base64-in-JSON
+  (`AttachmentV2.bytes` removed); in-band `wire_version` on the request
+  + capabilities frame so mismatches fail loudly. Pre-launch break
+  (only first-party consumers exist): the v0.3.0 crates/clients keep
+  working against a v0.3 daemon but do **not** interoperate with v0.4.
+  ADR 0021 supersedes parts of ADRs 0008/0009/0015; the post-launch
+  freeze posture returns after v0.4.
+
 ## [0.3.0] - 2026-06-03
 
 First stable v0.3 release. Headline: **runtime accelerator detection**

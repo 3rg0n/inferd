@@ -1,6 +1,6 @@
 # 0015. v2 wire protocol — typed content blocks, attachments, tools
 
-- Status: accepted
+- Status: accepted; framing (newline-delimited, base64-in-JSON media) superseded by [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) (length-prefixed type-tagged frames + raw BLOB media in v0.4). Typed-content-block *shapes* remain.
 - Date: 2026-05-20
 
 ## Context

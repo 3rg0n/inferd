@@ -53,7 +53,7 @@ openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-ut
 bedrock              = ["dep:reqwest", "dep:futures-util", "dep:hmac", "dep:hex", "dep:url"]
 
 [dependencies]
-inferd-proto = { path = "../inferd-proto", version = "=0.3.0" }
+inferd-proto = { path = "../inferd-proto", version = "=0.4.0-dev" }
 async-trait  = { workspace = true }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
