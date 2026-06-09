@@ -1,0 +1,24 @@
+crates/inferd-proto/src/error.rs
+  s_126aec4081f728::t_fd990bc3347196 58-60
+  s_126aec4081f728::t_54579b098b14fd 42-49
+crates/inferd-proto/src/lib.rs
+  s_126aec4081f728::t_0337e3a47791ee 25-28
+crates/inferd-proto/src/frame.rs
+  s_126aec4081f728::t_647a510bc67778 77-177,179-258,261-305,308-346,349-403
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "dae7e2eeac7fb787c10843ba924c59adad709d66",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
