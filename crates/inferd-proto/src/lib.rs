@@ -22,6 +22,9 @@ mod response;
 pub mod v2;
 
 pub use error::{ErrorCode, ProtoError};
-pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
+pub use frame::{
+    FrameType, MAX_FRAME_BYTES, RawFrame, decode_json_payload, read_frame, read_lp_frame,
+    write_frame, write_lp_blob, write_lp_json,
+};
 pub use request::{ImageTokenBudget, Message, Request, Resolved, Role, VALID_IMAGE_TOKEN_BUDGETS};
 pub use response::{Response, StopReason, Usage};
