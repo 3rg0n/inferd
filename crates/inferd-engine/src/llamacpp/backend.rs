@@ -29,7 +29,6 @@ use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
 use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
 use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
 use async_trait::async_trait;
-use base64::Engine as _;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
 use inferd_proto::{Resolved, StopReason, Usage};
@@ -72,9 +71,6 @@ pub enum LlamaCppError {
     /// Chat-template renderer failed (e.g. unknown content-block).
     #[error("chat template: {0}")]
     Render(String),
-    /// base64-decoding an attachment's `bytes` field failed.
-    #[error("attachment base64 decode failed for {0:?}")]
-    Base64(String),
 }
 
 impl From<LlamaCppError> for GenerateError {
@@ -1005,38 +1001,32 @@ fn token_to_piece(
     &buf[..n]
 }
 
-/// Decode an `Attachment` from the wire shape (raw RGB or f32 PCM,
-/// base64-wrapped) into an mtmd `Bitmap`. Per ADR 0016 the daemon
-/// does not link image/audio codecs; these payloads are pre-decoded
-/// by the consumer.
+/// Turn an `Attachment` into an mtmd `Bitmap`. As of ADR 0021 the
+/// attachment's `bytes` are the **raw** decoded payload (interleaved RGB
+/// for images, little-endian f32 PCM for audio) delivered out-of-band in
+/// a BLOB frame — no base64. Per ADR 0016 the daemon links no
+/// image/audio codec; the consumer pre-decodes.
 fn build_bitmap(att: &Attachment) -> Result<Bitmap, LlamaCppError> {
-    use base64::engine::general_purpose::STANDARD;
     match att {
         Attachment::Image {
-            id,
             width,
             height,
             bytes,
+            ..
         } => {
-            let raw = STANDARD
-                .decode(bytes)
-                .map_err(|_| LlamaCppError::Base64(id.clone()))?;
-            let bm = Bitmap::from_image_rgb(*width, *height, &raw)?;
+            let bm = Bitmap::from_image_rgb(*width, *height, bytes)?;
             Ok(bm)
         }
         Attachment::Audio { id, bytes, .. } => {
-            let raw = STANDARD
-                .decode(bytes)
-                .map_err(|_| LlamaCppError::Base64(id.clone()))?;
-            // Reinterpret as f32 LE samples.
-            if raw.len() % 4 != 0 {
+            // Reinterpret raw bytes as f32 LE samples.
+            if bytes.len() % 4 != 0 {
                 return Err(LlamaCppError::Render(format!(
                     "audio attachment {id:?}: byte length not a multiple of 4"
                 )));
             }
-            let n_samples = raw.len() / 4;
+            let n_samples = bytes.len() / 4;
             let mut samples = Vec::with_capacity(n_samples);
-            for chunk in raw.chunks_exact(4) {
+            for chunk in bytes.chunks_exact(4) {
                 let arr: [u8; 4] = chunk.try_into().expect("chunks_exact 4 yields 4");
                 samples.push(f32::from_le_bytes(arr));
             }

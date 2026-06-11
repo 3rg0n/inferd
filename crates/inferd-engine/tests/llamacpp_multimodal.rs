@@ -33,7 +33,6 @@
 
 #![cfg(feature = "llamacpp-integration")]
 
-use base64::Engine as _;
 use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
 use inferd_engine::{Backend, TokenEventV2};
 use inferd_proto::v2::{
@@ -172,7 +171,11 @@ async fn v2_image_attachment_round_trips() {
             id: "img".into(),
             width: 256,
             height: 256,
-            bytes: base64::engine::general_purpose::STANDARD.encode(&rgb),
+            // Raw RGB bytes (ADR 0021) — the engine consumes them
+            // directly; no base64. In the daemon these arrive in a BLOB
+            // frame and are installed via Attachment::set_bytes; here we
+            // construct the ResolvedV2 in-process so we set them inline.
+            bytes: rgb,
         }],
         max_tokens: Some(32),
         ..Default::default()
