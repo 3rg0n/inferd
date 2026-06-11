@@ -109,6 +109,14 @@ pub struct MessageV2 {
 /// sending.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RequestV2 {
+    /// Wire-format version the client speaks (ADR 0021). Defaults to 0
+    /// on deserialise so a frame that omits it is treated as the
+    /// pre-v0.4 framing and rejected by a v0.4 daemon with a clear
+    /// `wire_version_unsupported` error. Clients set this to
+    /// [`crate::v2::WIRE_VERSION`].
+    #[serde(default)]
+    pub wire_version: u32,
+
     /// Caller-assigned correlation id; echoed on every response frame.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
@@ -158,6 +166,9 @@ pub struct RequestV2 {
 /// defaults could be hard-coded).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedV2 {
+    /// Wire-format version the request declared (already validated as
+    /// supported by `resolve`).
+    pub wire_version: u32,
     /// Caller-assigned correlation id.
     pub id: String,
     /// Validated conversation history.
@@ -232,7 +243,15 @@ impl RequestV2 {
             validate_content_blocks(&msg.content, mi, &attachments_by_id, &tool_names)?;
         }
 
+        // Note: `wire_version` is carried through unchecked here.
+        // Enforcing "which versions this daemon accepts" is a daemon
+        // policy (it advertises its supported version in the
+        // capabilities frame), so the daemon checks `wire_version`
+        // against `crate::v2::WIRE_VERSION` and emits
+        // `ErrorCodeV2::WireVersionUnsupported` before dispatch —
+        // proto stays policy-free.
         Ok(ResolvedV2 {
+            wire_version: self.wire_version,
             id: self.id,
             messages: self.messages,
             attachments: self.attachments,
