@@ -36,7 +36,7 @@ use inferd_daemon::endpoint::bind_admin_uds;
 #[cfg(unix)]
 use inferd_daemon::endpoint::bind_uds;
 use inferd_daemon::endpoint::{bind_tcp, default_admin_addr};
-use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
+use inferd_daemon::lifecycle::{AcceptContext, wait_for_ready};
 use inferd_daemon::lock::Lock;
 use inferd_daemon::logx::{DEFAULT_ROTATE_BYTES, LogxLayer, LogxWriter, default_log_dir};
 use inferd_daemon::router::Router;
@@ -105,16 +105,10 @@ async fn main() -> anyhow::Result<()> {
     // permitted: the daemon runs CLI-only against the mock backend.
     let config = load_config_file(cli.config.as_deref());
 
-    // Resolve the v1 transport. CLI flags always win; when none is
-    // set, fall back to `listen.tcp` from the config file. Phase
-    // 6B-4: TCP is opt-in by default, declared via config not CLI.
-    let resolved_v1 = resolve_v1_transport(&cli, config.as_ref())?;
-    let resolved_v2_tcp: Option<String> = cli.v2_tcp.clone().or_else(|| {
-        config
-            .as_ref()
-            .and_then(|c| c.listen.as_ref())
-            .and_then(|l| l.tcp_v2.clone())
-    });
+    // Resolve the generation transport (ADR 0021: one generation
+    // socket). CLI flags win; then config `listen.tcp`; else the
+    // platform-default socket/pipe so a stock install needs no flag.
+    let resolved_gen = resolve_transport(&cli, config.as_ref())?;
     let resolved_embed_tcp: Option<String> = cli.embed_tcp.clone().or_else(|| {
         config
             .as_ref()
@@ -161,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
             // across entries — that collision made the caps map drop all
             // but the last backend (doctor's vision=false bug).
             backend: label.clone(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             v2: caps.v2,
             vision: caps.vision,
             audio: caps.audio,
@@ -201,16 +196,11 @@ async fn main() -> anyhow::Result<()> {
     // connect — guaranteed ordering on the wire.
     broadcaster.publish(StatusEvent::Ready);
 
-    // Inference shutdown channels — one per listener (v1 always, v2
-    // when enabled, embed when enabled + capability matches).
-    let fanout = 1 + usize::from(cli.v2) + usize::from(embed_enabled);
+    // Inference shutdown channels — one for the generation listener,
+    // plus the embed listener when enabled + capability matches.
+    let fanout = 1 + usize::from(embed_enabled);
     let mut shutdown_rxs = install_shutdown_signal(fanout)?;
     let inference_shutdown_tx = shutdown_rxs.remove(0);
-    let v2_shutdown_tx = if cli.v2 {
-        Some(shutdown_rxs.remove(0))
-    } else {
-        None
-    };
     let embed_shutdown_tx = if embed_enabled {
         Some(shutdown_rxs.remove(0))
     } else {
@@ -229,8 +219,7 @@ async fn main() -> anyhow::Result<()> {
         expected_api_key: effective_api_key.clone(),
         admission: Some(admission),
     };
-    let any_tcp = matches!(resolved_v1, ResolvedTransport::Tcp(_))
-        || resolved_v2_tcp.is_some()
+    let any_tcp = matches!(resolved_gen, ResolvedTransport::Tcp(_))
         || (embed_enabled && resolved_embed_tcp.is_some());
     if any_tcp && accept_ctx.expected_api_key.is_some() {
         info!("tcp api-key auth enabled (F-8)");
@@ -242,24 +231,10 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Spawn the v2 listener if enabled. It runs in parallel with the
-    // v1 main accept loop and shuts down on the same signal. v1 and
-    // v2 share the same Router instance — a single warm model serves
-    // both wire versions.
-    let v2_handle = if let Some(rx) = v2_shutdown_tx {
-        Some(
-            spawn_v2_listener(
-                &cli,
-                resolved_v2_tcp.as_deref(),
-                Arc::clone(&router),
-                accept_ctx.clone(),
-                rx,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
+    // (v0.4 / ADR 0021) There is no separate v2 listener anymore — the
+    // single generation listener below serves the v2 framing. The embed
+    // listener still runs in parallel on its own socket.
+    let v2_handle: Option<tokio::task::JoinHandle<std::io::Result<()>>> = { None };
 
     // Spawn the embed listener if enabled and the active backend
     // advertises embed capability (ADR 0017). Embed shares the same
@@ -279,18 +254,30 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let serve_result = match resolved_v1 {
+    // The single generation listener serves the v2 framing (ADR 0021).
+    let serve_result = match resolved_gen {
         ResolvedTransport::Tcp(addr) => {
             let listener = bind_tcp(&addr).await?;
-            info!(addr = %listener.local_addr()?, "tcp listener bound");
-            serve_tcp(listener, router, accept_ctx, inference_shutdown_tx).await
+            info!(addr = %listener.local_addr()?, "generation tcp listener bound");
+            inferd_daemon::lifecycle_v2::serve_tcp_v2(
+                listener,
+                router,
+                accept_ctx,
+                inference_shutdown_tx,
+            )
+            .await
         }
         #[cfg(unix)]
         ResolvedTransport::Uds(path) => {
             let listener = bind_uds(&path, cli.group.as_deref()).await?;
-            info!(path = %path.display(), "uds listener bound");
-            inferd_daemon::lifecycle::serve_uds(listener, router, accept_ctx, inference_shutdown_tx)
-                .await
+            info!(path = %path.display(), "generation uds listener bound");
+            inferd_daemon::lifecycle_v2::serve_uds_v2(
+                listener,
+                router,
+                accept_ctx,
+                inference_shutdown_tx,
+            )
+            .await
         }
         #[cfg(not(unix))]
         ResolvedTransport::Uds(path) => {
@@ -302,8 +289,8 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(windows)]
         ResolvedTransport::Pipe(path) => {
             let first = inferd_daemon::endpoint::bind_named_pipe(&path, true)?;
-            info!(path = %path, "named pipe listener bound");
-            inferd_daemon::lifecycle::serve_named_pipe(
+            info!(path = %path, "generation named pipe listener bound");
+            inferd_daemon::lifecycle_v2::serve_named_pipe_v2(
                 &path,
                 first,
                 router,
@@ -341,78 +328,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bind the v2 inference listener and spawn its accept loop. Returns
-/// the JoinHandle so main can await graceful drain. v2 is per ADR
-/// 0015: separate socket from v1; reuses the same admission gate +
-/// API key + Router. Backends that don't advertise
-/// `BackendCapabilities::v2 == true` see their dispatched v2
-/// requests respond with `Error{Internal, "backend ... does not
-/// advertise v2 capability"}`.
-async fn spawn_v2_listener(
-    cli: &Cli,
-    resolved_v2_tcp: Option<&str>,
-    router: Arc<Router>,
-    accept_ctx: AcceptContext,
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    use inferd_daemon::endpoint::default_v2_addr;
-    use inferd_daemon::lifecycle_v2;
-
-    if let Some(addr) = resolved_v2_tcp {
-        let listener = bind_tcp(addr).await?;
-        info!(addr = %listener.local_addr()?, "v2 tcp listener bound");
-        Ok(tokio::spawn(async move {
-            if let Err(e) =
-                lifecycle_v2::serve_tcp_v2(listener, router, accept_ctx, shutdown_rx).await
-            {
-                error!(error = ?e, "v2 tcp listener error");
-            }
-        }))
-    } else {
-        let path = cli.v2_addr.clone().unwrap_or_else(default_v2_addr);
-        #[cfg(unix)]
-        {
-            let listener = bind_uds(&path, cli.group.as_deref()).await?;
-            info!(path = %path.display(), "v2 uds listener bound");
-            Ok(tokio::spawn(async move {
-                if let Err(e) =
-                    lifecycle_v2::serve_uds_v2(listener, router, accept_ctx, shutdown_rx).await
-                {
-                    error!(error = ?e, "v2 uds listener error");
-                }
-            }))
-        }
-        #[cfg(windows)]
-        {
-            let path_str = path
-                .to_str()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("v2 pipe path is not valid utf-8: {}", path.display())
-                })?
-                .to_string();
-            let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
-            info!(path = %path_str, "v2 named pipe listener bound");
-            Ok(tokio::spawn(async move {
-                if let Err(e) = lifecycle_v2::serve_named_pipe_v2(
-                    &path_str,
-                    first,
-                    router,
-                    accept_ctx,
-                    shutdown_rx,
-                )
-                .await
-                {
-                    error!(error = ?e, "v2 named pipe listener error");
-                }
-            }))
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            drop((path, router, accept_ctx, shutdown_rx));
-            anyhow::bail!("v2 endpoint requires unix or windows; use --v2-tcp instead")
-        }
-    }
-}
+// (v0.4 / ADR 0021) `spawn_v2_listener` was removed: v2 is no longer a
+// separate opt-in listener — the single generation listener in `main`
+// serves the v2 framing on the default/configured transport.
 
 /// Bind the embed inference listener and spawn its accept loop.
 /// Returns the JoinHandle so main can await graceful drain. Embed is
@@ -601,22 +519,22 @@ fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
     }
 }
 
-/// Resolved v1 inference transport. CLI flags win; config-file
-/// `listen.tcp` is the fallback (Phase 6B-4 — TCP is opt-in).
+/// Resolved generation transport. CLI flags win; config-file
+/// `listen.tcp` is the next fallback; absent both, the daemon binds the
+/// platform-default generation socket (`endpoint::default_addr`) so a
+/// stock install works with no transport flag (ADR 0021 — one
+/// generation socket, default-bound).
 enum ResolvedTransport {
     Tcp(String),
     Uds(PathBuf),
     Pipe(String),
 }
 
-/// Pick the v1 transport from CLI > config > error. clap already
-/// enforces that no two CLI flags are set; this layer adds the
-/// config-file fallback for `listen.tcp` and produces a clear error
-/// when neither source supplies a transport.
-fn resolve_v1_transport(
-    cli: &Cli,
-    config: Option<&ConfigFile>,
-) -> anyhow::Result<ResolvedTransport> {
+/// Pick the generation transport from CLI > config > platform default.
+/// clap already enforces that no two CLI flags are set; this layer adds
+/// the config-file fallback for `listen.tcp` and, failing all of those,
+/// the platform-default socket/pipe.
+fn resolve_transport(cli: &Cli, config: Option<&ConfigFile>) -> anyhow::Result<ResolvedTransport> {
     if let Some(addr) = cli.tcp.as_deref() {
         return Ok(ResolvedTransport::Tcp(addr.to_string()));
     }
@@ -633,10 +551,19 @@ fn resolve_v1_transport(
         info!(addr = %addr, "tcp listener from config (listen.tcp)");
         return Ok(ResolvedTransport::Tcp(addr.to_string()));
     }
-    anyhow::bail!(
-        "no transport configured: pass --tcp / --uds / --pipe on the CLI, \
-         or set `listen.tcp` in ~/.inferd/config.json"
-    )
+    // Default: bind the platform's standard generation socket / pipe.
+    let default = inferd_daemon::endpoint::default_addr();
+    #[cfg(windows)]
+    {
+        let p = default.to_string_lossy().to_string();
+        info!(pipe = %p, "binding default generation named pipe");
+        Ok(ResolvedTransport::Pipe(p))
+    }
+    #[cfg(not(windows))]
+    {
+        info!(path = %default.display(), "binding default generation socket");
+        Ok(ResolvedTransport::Uds(default))
+    }
 }
 
 /// Construct backends per CLI + config. Publishes `loading_model`

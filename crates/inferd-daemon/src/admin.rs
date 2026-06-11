@@ -335,6 +335,7 @@ mod tests {
         let b = StatusBroadcaster::new(StatusEvent::Starting);
         b.publish(StatusEvent::Capabilities {
             backend: "llamacpp".into(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             v2: true,
             vision: true,
             audio: false,
@@ -376,6 +377,7 @@ mod tests {
         let b = StatusBroadcaster::new(StatusEvent::Starting);
         b.publish(StatusEvent::Capabilities {
             backend: "llamacpp".into(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             v2: true,
             vision: false,
             audio: false,
@@ -429,6 +431,7 @@ mod tests {
         let b = StatusBroadcaster::new(StatusEvent::Starting);
         b.publish(StatusEvent::Capabilities {
             backend: "gemma-4-e4b".into(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             v2: true,
             vision: true,
             audio: true,
@@ -442,6 +445,7 @@ mod tests {
         });
         b.publish(StatusEvent::Capabilities {
             backend: "embeddinggemma-300m".into(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             v2: false,
             vision: false,
             audio: false,

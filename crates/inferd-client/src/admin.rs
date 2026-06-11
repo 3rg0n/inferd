@@ -64,6 +64,11 @@ pub struct AdminEvent {
     /// Backend identifier (capabilities phase).
     #[serde(default)]
     pub backend: Option<String>,
+    /// Wire-format version the daemon speaks (capabilities phase,
+    /// ADR 0021). Compare against the client's own to fail loudly on a
+    /// mismatch.
+    #[serde(default)]
+    pub wire_version: Option<u32>,
     /// `true` if the backend implements v2 (capabilities phase).
     #[serde(default)]
     pub v2: Option<bool>,

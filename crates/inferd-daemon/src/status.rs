@@ -46,6 +46,10 @@ pub enum StatusEvent {
     Capabilities {
         /// Backend identifier (`"llamacpp"`, `"mock"`, …).
         backend: String,
+        /// Wire-format version this daemon speaks (ADR 0021). Consumers
+        /// compare against their own to fail loudly on a mismatch
+        /// rather than mis-frame. Backwards-additive on the admin wire.
+        wire_version: u32,
         /// `true` if the backend implements `generate_v2`.
         v2: bool,
         /// `true` if the backend can ingest image attachments.
