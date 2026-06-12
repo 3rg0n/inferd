@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **v0.4 framing proven end-to-end** (ADR 0021 / #34). Automated:
+  `clients/go` `TestEndToEndAgainstDaemon` round-trips `GenerateV2`
+  against a freshly-built v0.4 mock daemon over the length-prefixed
+  wire. Real model (this box, llamacpp): the migrated Go client sent a
+  text request → *"Hello there friend."* (in=17/out=4) and a 256×256
+  image as a raw BLOB frame → *"A solid red circle is centered on a
+  white background."* (in=276 — the image expanded into ~250 vision
+  tokens through mtmd, no base64). Confirms the full pipeline: LP
+  request + BlobDescriptor + BLOB frames → wire_version check → BLOB
+  reassembly by id → raw RGB to mtmd → LP response frames.
+
 ### Changed
 
 - **v0.4 (breaking): unifying the IPC wire format** per [ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)
