@@ -177,19 +177,26 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	}
 	defer client.Close()
 
-	stream, err := client.Generate(ctx, inferd.Request{
+	// v0.4 (ADR 0021): the daemon serves the v2 length-prefixed framing
+	// on its single generation socket, so the e2e round-trip uses
+	// GenerateV2. This exercises the real client<->daemon wire (frame
+	// codec + wire_version) against the mock backend, no GPU needed.
+	stream, err := client.GenerateV2(ctx, inferd.RequestV2{
 		ID: "go-e2e-1",
-		Messages: []inferd.Message{
-			{Role: inferd.RoleUser, Content: "ping"},
+		Messages: []inferd.MessageV2{
+			{Role: inferd.RoleUser, Content: []inferd.ContentBlock{inferd.TextBlock("ping")}},
 		},
 	})
 	if err != nil {
-		t.Fatalf("generate: %v", err)
+		t.Fatalf("generate_v2: %v", err)
 	}
 
-	var done *inferd.Response
+	var done *inferd.ResponseV2
 	for f := range stream {
-		if f.Type == inferd.ResponseDone {
+		if f.Type == inferd.ResponseV2Error {
+			t.Fatalf("error frame: code=%s msg=%s", f.Code, f.Message)
+		}
+		if f.Type == inferd.ResponseV2Done {
 			d := f
 			done = &d
 		}
@@ -203,8 +210,8 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	if done.Backend != "mock" {
 		t.Errorf("done backend: got %q want mock", done.Backend)
 	}
-	if done.StopReason != inferd.StopEnd {
-		t.Errorf("done stop_reason: got %q want end", done.StopReason)
+	if done.StopReason != inferd.StopEndTurn {
+		t.Errorf("done stop_reason: got %q want end_turn", done.StopReason)
 	}
 }
 

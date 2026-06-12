@@ -26,6 +26,11 @@ pub enum ClientError {
     /// retry policy.
     #[error("daemon closed connection before terminal frame")]
     UnexpectedEof,
+    /// Length-prefixed framing was malformed (unknown frame-type byte,
+    /// a length varint that didn't terminate, or an oversize frame).
+    /// The byte stream is no longer trustworthy (ADR 0021).
+    #[error("malformed frame: {0}")]
+    MalformedFrame(String),
 }
 
 /// Stream of `Response` frames yielded by `Client::generate`.
