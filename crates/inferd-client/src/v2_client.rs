@@ -246,9 +246,7 @@ async fn read_lp_raw_async<R: AsyncRead + Unpin>(
         }
         shift += 7;
         if i == MAX_VARINT_BYTES - 1 {
-            return Err(ClientError::MalformedFrame(
-                "length varint too long".into(),
-            ));
+            return Err(ClientError::MalformedFrame("length varint too long".into()));
         }
     }
     if value > MAX_FRAME_BYTES as u64 {
@@ -281,9 +279,9 @@ async fn read_exact_async<R: AsyncRead + Unpin>(
 ) -> Result<(), ClientError> {
     match r.read_exact(buf).await {
         Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Err(
-            ClientError::MalformedFrame("stream ended mid-frame".into()),
-        ),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(ClientError::MalformedFrame("stream ended mid-frame".into()))
+        }
         Err(e) => Err(ClientError::Io(e)),
     }
 }

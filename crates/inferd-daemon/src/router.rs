@@ -374,11 +374,11 @@ mod tests {
             fn ready(&self) -> bool {
                 self.inner.ready()
             }
-            async fn generate(
+            async fn generate_v2(
                 &self,
-                req: inferd_proto::Resolved,
-            ) -> Result<inferd_engine::TokenStream, inferd_engine::GenerateError> {
-                self.inner.generate(req).await
+                req: inferd_proto::v2::ResolvedV2,
+            ) -> Result<inferd_engine::TokenStreamV2, inferd_engine::GenerateError> {
+                self.inner.generate_v2(req).await
             }
         }
 
@@ -484,11 +484,11 @@ mod tests {
                     ..self.inner.capabilities()
                 }
             }
-            async fn generate(
+            async fn generate_v2(
                 &self,
-                req: inferd_proto::Resolved,
-            ) -> Result<inferd_engine::TokenStream, inferd_engine::GenerateError> {
-                self.inner.generate(req).await
+                req: inferd_proto::v2::ResolvedV2,
+            ) -> Result<inferd_engine::TokenStreamV2, inferd_engine::GenerateError> {
+                self.inner.generate_v2(req).await
             }
         }
 
@@ -529,11 +529,11 @@ mod tests {
                     ..self.inner.capabilities()
                 }
             }
-            async fn generate(
+            async fn generate_v2(
                 &self,
-                req: inferd_proto::Resolved,
-            ) -> Result<inferd_engine::TokenStream, inferd_engine::GenerateError> {
-                self.inner.generate(req).await
+                req: inferd_proto::v2::ResolvedV2,
+            ) -> Result<inferd_engine::TokenStreamV2, inferd_engine::GenerateError> {
+                self.inner.generate_v2(req).await
             }
         }
 

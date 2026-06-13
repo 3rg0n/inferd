@@ -1,9 +1,9 @@
 //! Connect-and-retry helpers per `docs/protocol-v1.md` §"Client
 //! connection lifecycle".
 
-#[cfg(test)]
-use crate::client::Client;
 use crate::client::ClientError;
+#[cfg(test)]
+use crate::v2_client::ClientV2;
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -36,13 +36,13 @@ pub enum WaitError {
 /// us duplicating the retry loop:
 ///
 /// ```no_run
-/// use inferd_client::{dial_and_wait_ready, Client};
+/// use inferd_client::{dial_and_wait_ready, ClientV2};
 /// use std::time::Duration;
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = dial_and_wait_ready(
 ///     Duration::from_secs(30),
-///     || Client::dial_tcp("127.0.0.1:47321"),
+///     || ClientV2::dial_tcp("127.0.0.1:47322"),
 /// )
 /// .await?;
 /// # Ok(()) }
@@ -209,7 +209,7 @@ mod tests {
             // Build a minimal Client wrapping an in-memory pipe pair.
             let (a, _b) = tokio::io::duplex(64);
             let (read, write) = tokio::io::split(a);
-            async move { Ok(Client::wrap_for_test(Box::new(read), Box::new(write))) }
+            async move { Ok(ClientV2::wrap_for_test(Box::new(read), Box::new(write))) }
         };
         let _ = dial_and_wait_ready(Duration::from_secs(1), dial)
             .await
@@ -229,7 +229,7 @@ mod tests {
                 } else {
                     let (a, _b) = tokio::io::duplex(64);
                     let (read, write) = tokio::io::split(a);
-                    Ok(Client::wrap_for_test(Box::new(read), Box::new(write)))
+                    Ok(ClientV2::wrap_for_test(Box::new(read), Box::new(write)))
                 }
             }
         };
@@ -245,7 +245,7 @@ mod tests {
         let calls_clone = Arc::clone(&calls);
         let dial = move || {
             calls_clone.fetch_add(1, Ordering::SeqCst);
-            async move { Err::<Client, _>(io_err(io::ErrorKind::PermissionDenied, "denied")) }
+            async move { Err::<ClientV2, _>(io_err(io::ErrorKind::PermissionDenied, "denied")) }
         };
         let err = dial_and_wait_ready(Duration::from_secs(5), dial)
             .await
@@ -260,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn dial_and_wait_ready_times_out() {
         let dial = move || async move {
-            Err::<Client, _>(io_err(io::ErrorKind::ConnectionRefused, "refused"))
+            Err::<ClientV2, _>(io_err(io::ErrorKind::ConnectionRefused, "refused"))
         };
         let err = dial_and_wait_ready(Duration::from_millis(250), dial)
             .await

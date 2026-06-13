@@ -21,7 +21,7 @@
 
 use crate::backend::{
     AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, EmbedError, EmbedResult,
-    GenerateError, TokenEvent, TokenEventV2, TokenStream, TokenStreamV2,
+    GenerateError, TokenEventV2, TokenStreamV2,
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::Gemma4Renderer;
@@ -31,7 +31,6 @@ use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
-use inferd_proto::{Resolved, StopReason, Usage};
 use std::ffi::CString;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -590,37 +589,6 @@ impl Backend for LlamaCpp {
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
-    async fn generate(&self, req: Resolved) -> Result<TokenStream, GenerateError> {
-        if !self.ready() {
-            return Err(GenerateError::NotReady);
-        }
-
-        // Build prompt up-front (chat template + tokenize) on the calling
-        // task; this is fast and lets us return InvalidRequest synchronously
-        // rather than as a stream-terminal error.
-        let prompt = render_chat_template(&self.state, &req.messages)
-            .ok_or_else(|| GenerateError::InvalidRequest("chat template render failed".into()))?;
-
-        let (tx, rx) = mpsc::channel(8);
-        let state = Arc::clone(&self.state);
-        let seed = self.seed;
-        let resolved = req;
-        let prompt_bytes = prompt;
-
-        tokio::task::spawn_blocking(move || {
-            let outcome = run_generation(&state, &prompt_bytes, &resolved, seed, &tx);
-            if let Err(e) = outcome {
-                // Mid-stream failure surfaces as silent termination — the
-                // daemon translates that to Response::Error{code:
-                // backend_unavailable}. Logging gives operators something
-                // to grep for.
-                warn!(error = %e, "generation aborted mid-stream");
-            }
-        });
-
-        Ok(Box::pin(ReceiverStream::new(rx)))
-    }
-
     async fn embed(&self, req: EmbedResolved) -> Result<EmbedResult, EmbedError> {
         if !self.ready() {
             return Err(EmbedError::NotReady);
@@ -655,182 +623,6 @@ impl Backend for LlamaCpp {
     }
 }
 
-/// Render messages into Gemma 4's chat-template format, by hand.
-///
-/// We don't use `llama_chat_apply_template`: it explicitly does not
-/// parse Jinja, and Gemma 4's canonical template is shipped as Jinja
-/// inside the GGUF metadata. llama.cpp does have a fallback table of
-/// hand-coded templates keyed by architecture name, but relying on
-/// that table to recognise a Gemma quant we vendored is brittle —
-/// especially with unsloth's repacks where the architecture string
-/// occasionally drifts.
-///
-/// Gemma 4's format is small and well-known, documented in
-/// `docs/protocol-v1.md` and in upstream's `tokenizer_config.json`:
-///
-/// ```text
-/// <start_of_turn>user
-/// <user message><end_of_turn>
-/// <start_of_turn>model
-/// <assistant message — for replay><end_of_turn>
-/// <start_of_turn>model
-/// ```
-///
-/// System messages are folded into the first user turn (Gemma 4 has
-/// no dedicated system role). The trailing `<start_of_turn>model\n`
-/// primes the model to emit the next assistant reply.
-fn render_chat_template(
-    _state: &Arc<Mutex<State>>,
-    messages: &[inferd_proto::Message],
-) -> Option<Vec<u8>> {
-    use inferd_proto::Role;
-
-    if messages.is_empty() {
-        return None;
-    }
-
-    // Pre-allocate generously: each turn adds ~30 bytes of boilerplate.
-    let mut out = String::with_capacity(
-        messages.iter().map(|m| m.content.len()).sum::<usize>() + 64 * messages.len() + 32,
-    );
-
-    // Gemma has no system role. If the first message is a system
-    // prompt, prepend it to the first user turn we encounter.
-    let mut pending_system: Option<&str> = None;
-    for m in messages {
-        match m.role {
-            Role::System => {
-                pending_system = Some(m.content.as_str());
-            }
-            Role::User => {
-                out.push_str("<start_of_turn>user\n");
-                if let Some(sys) = pending_system.take() {
-                    out.push_str(sys);
-                    out.push_str("\n\n");
-                }
-                out.push_str(&m.content);
-                out.push_str("<end_of_turn>\n");
-            }
-            Role::Assistant => {
-                out.push_str("<start_of_turn>model\n");
-                out.push_str(&m.content);
-                out.push_str("<end_of_turn>\n");
-            }
-        }
-    }
-    // Prime the next assistant turn.
-    out.push_str("<start_of_turn>model\n");
-
-    Some(out.into_bytes())
-}
-
-/// Synchronous decode + sample loop. Runs on `spawn_blocking`.
-///
-/// Errors thrown from here are logged; the receiver sees the channel
-/// close with no terminal `Done`, which the daemon translates to an
-/// `error` frame per ADR 0007.
-fn run_generation(
-    state: &Arc<Mutex<State>>,
-    prompt: &[u8],
-    req: &Resolved,
-    seed: u32,
-    tx: &mpsc::Sender<TokenEvent>,
-) -> Result<(), LlamaCppError> {
-    let guard = state.lock().expect("poisoned llamacpp state mutex");
-    let model = guard.model.as_ptr();
-    let ctx = guard.ctx.ptr.as_ptr();
-
-    // SAFETY: FFI ops on valid pointers held in scope.
-    let vocab = unsafe { ffi::llama_model_get_vocab(model) };
-
-    // Tokenize the prompt.
-    let prompt_tokens = tokenize(vocab, prompt, true, true)?;
-
-    // Build sampler chain: penalties → grammar (if any) → top-k → top-p →
-    // temp → final dist. Order matters; grammar must come before sampling
-    // to mask invalid tokens.
-    let sampler = build_sampler_chain(vocab, req, seed)?;
-    let _sampler_guard = SamplerGuard { ptr: sampler };
-
-    // Reset KV cache so each generation starts clean. v0.1 has no KV
-    // sharing across requests — that's a v0.2+ feature.
-    // SAFETY: FFI; `ctx` is valid for the lifetime of the lock guard.
-    unsafe {
-        let mem = ffi::llama_get_memory(ctx);
-        if !mem.is_null() {
-            ffi::llama_memory_clear(mem, true);
-        }
-    }
-
-    // Prefill: feed the prompt tokens.
-    let mut tokens = prompt_tokens;
-    // SAFETY: FFI. `tokens.as_mut_ptr()` valid for `tokens.len()`.
-    let mut batch = unsafe { ffi::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32) };
-    let rc = unsafe { ffi::llama_decode(ctx, batch) };
-    if rc != 0 {
-        return Err(LlamaCppError::Decode(rc));
-    }
-
-    let prompt_len = tokens.len() as u32;
-    let mut completion_tokens: u32 = 0;
-    let max_new = req.max_tokens;
-
-    let mut buf = [0u8; 256];
-
-    for _ in 0..max_new {
-        // Sample next token.
-        // SAFETY: FFI; `sampler` and `ctx` valid in scope.
-        let next: ffi::llama_token = unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) };
-
-        // EOS / EOG detection — clean stop.
-        // SAFETY: FFI; `vocab` valid.
-        let is_eog = unsafe { ffi::llama_vocab_is_eog(vocab, next) };
-        if is_eog {
-            let _ = tx.blocking_send(TokenEvent::Done {
-                stop_reason: StopReason::End,
-                usage: Usage {
-                    prompt_tokens: prompt_len,
-                    completion_tokens,
-                },
-            });
-            return Ok(());
-        }
-
-        // Accept into sampler state (grammar, repetition penalties).
-        // SAFETY: FFI; `sampler` valid.
-        unsafe { ffi::llama_sampler_accept(sampler, next) };
-
-        // Detokenize → emit Token event.
-        let piece = token_to_piece(vocab, next, &mut buf);
-        let text = String::from_utf8_lossy(piece).into_owned();
-        if tx.blocking_send(TokenEvent::Token(text)).is_err() {
-            // Receiver dropped — caller cancelled.
-            debug!("generation cancelled (receiver dropped)");
-            return Ok(());
-        }
-        completion_tokens = completion_tokens.saturating_add(1);
-
-        // Feed the new token back for the next forward pass.
-        let mut next_arr = [next];
-        // SAFETY: FFI; `next_arr` lives for the call.
-        batch = unsafe { ffi::llama_batch_get_one(next_arr.as_mut_ptr(), 1) };
-        let rc = unsafe { ffi::llama_decode(ctx, batch) };
-        if rc != 0 {
-            return Err(LlamaCppError::Decode(rc));
-        }
-    }
-
-    // max_tokens reached cleanly.
-    let _ = tx.blocking_send(TokenEvent::Done {
-        stop_reason: StopReason::Length,
-        usage: Usage {
-            prompt_tokens: prompt_len,
-            completion_tokens,
-        },
-    });
-    Ok(())
-}
-
 /// RAII for the sampler-chain pointer.
 struct SamplerGuard {
     ptr: *mut ffi::llama_sampler,
@@ -846,91 +638,6 @@ impl Drop for SamplerGuard {
             unsafe { ffi::llama_sampler_free(self.ptr) };
         }
     }
-}
-
-fn build_sampler_chain(
-    vocab: *const ffi::llama_vocab,
-    req: &Resolved,
-    seed: u32,
-) -> Result<*mut ffi::llama_sampler, LlamaCppError> {
-    // SAFETY: FFI sequence.
-    let chain = unsafe {
-        let params = ffi::llama_sampler_chain_default_params();
-        ffi::llama_sampler_chain_init(params)
-    };
-    if chain.is_null() {
-        return Err(LlamaCppError::Sampler);
-    }
-
-    // Grammar first so it can mask tokens before sampling.
-    if !req.grammar.is_empty() {
-        // F-11: parse-time complexity bound. Reject grammars that are
-        // suspiciously large or contain pathologically many
-        // alternation operators before we hand them to libllama.
-        if let Err(e) = validate_grammar(&req.grammar) {
-            unsafe { ffi::llama_sampler_free(chain) };
-            return Err(e);
-        }
-
-        // SAFETY: `grammar_c` outlives the call; libllama copies the
-        // grammar text internally on parse.
-        let grammar_c = CString::new(req.grammar.as_bytes()).map_err(|_| LlamaCppError::Sampler)?;
-        let root_c = CString::new("root").unwrap();
-        let g =
-            unsafe { ffi::llama_sampler_init_grammar(vocab, grammar_c.as_ptr(), root_c.as_ptr()) };
-        if g.is_null() {
-            // Free the chain and bail — bad grammar is a request-level
-            // error, surfaces as Internal up the stack but operators see
-            // the warning log.
-            unsafe { ffi::llama_sampler_free(chain) };
-            return Err(LlamaCppError::Sampler);
-        }
-        unsafe { ffi::llama_sampler_chain_add(chain, g) };
-    }
-
-    // Standard chain: top-k → top-p → temp → dist.
-    unsafe {
-        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_top_k(req.top_k as i32));
-        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_top_p(req.top_p as f32, 1));
-        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_temp(req.temperature as f32));
-        ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_dist(seed));
-    }
-    Ok(chain)
-}
-
-/// Maximum GBNF grammar source length we'll forward to libllama.
-/// Real grammars are usually under 4 KB; 64 KB is a generous ceiling
-/// that catches obviously-abusive payloads. Codified for F-11.
-pub const MAX_GRAMMAR_BYTES: usize = 64 * 1024;
-
-/// Maximum number of alternation operators (`|`) we'll tolerate in a
-/// grammar. Each `|` multiplies the search space libllama walks per
-/// token; thousands of them in a single grammar is the
-/// "exponential alternation" case the threat model calls out.
-pub const MAX_GRAMMAR_ALTERNATIONS: usize = 4096;
-
-/// Cheap parse-time complexity check on a GBNF grammar.
-///
-/// Bounds:
-/// - Total length ≤ `MAX_GRAMMAR_BYTES`.
-/// - Top-level `|` alternation count ≤ `MAX_GRAMMAR_ALTERNATIONS`
-///   (counts every `|` in the source; conservative — `|` inside
-///   character classes still counts, which is fine because well-
-///   formed grammars don't use thousands of them).
-///
-/// This is **not** a full GBNF parser. It catches the common abuse
-/// shapes (huge grammar, exponential branching) without the cost of
-/// implementing a parser ahead of libllama. Operators who need
-/// stricter validation should sanitize at the caller side.
-fn validate_grammar(grammar: &str) -> Result<(), LlamaCppError> {
-    if grammar.len() > MAX_GRAMMAR_BYTES {
-        return Err(LlamaCppError::Sampler);
-    }
-    let alternations = grammar.bytes().filter(|&b| b == b'|').count();
-    if alternations > MAX_GRAMMAR_ALTERNATIONS {
-        return Err(LlamaCppError::Sampler);
-    }
-    Ok(())
 }
 
 fn tokenize(
@@ -1407,50 +1114,5 @@ fn l2_normalise(v: &mut [f32]) {
         for x in v.iter_mut() {
             *x /= norm;
         }
-    }
-}
-
-#[cfg(test)]
-mod grammar_tests {
-    use super::*;
-
-    #[test]
-    fn small_grammar_is_accepted() {
-        let g = r#"root ::= "yes" | "no""#;
-        validate_grammar(g).unwrap();
-    }
-
-    #[test]
-    fn realistic_json_grammar_is_accepted() {
-        // ~700 bytes; well below MAX_GRAMMAR_BYTES.
-        let g = r#"
-            root   ::= object
-            object ::= "{" ws members? ws "}"
-            members ::= pair ("," ws pair)*
-            pair   ::= string ws ":" ws value
-            value  ::= object | string | number | "true" | "false" | "null"
-            string ::= "\"" [^"]* "\""
-            number ::= [0-9]+ ("." [0-9]+)?
-            ws     ::= [ \t\n]*
-        "#;
-        validate_grammar(g).unwrap();
-    }
-
-    #[test]
-    fn oversized_grammar_is_rejected() {
-        let g = "x".repeat(MAX_GRAMMAR_BYTES + 1);
-        assert!(validate_grammar(&g).is_err());
-    }
-
-    #[test]
-    fn excessive_alternations_rejected() {
-        let g = "|".repeat(MAX_GRAMMAR_ALTERNATIONS + 1);
-        assert!(validate_grammar(&g).is_err());
-    }
-
-    #[test]
-    fn alternation_count_under_threshold_accepted() {
-        let g = "|".repeat(MAX_GRAMMAR_ALTERNATIONS);
-        validate_grammar(&g).unwrap();
     }
 }

@@ -15,8 +15,8 @@
 #![cfg(feature = "llamacpp-integration")]
 
 use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
-use inferd_engine::{Backend, TokenEvent};
-use inferd_proto::{Message, Resolved, Role, StopReason};
+use inferd_engine::{Backend, TokenEventV2};
+use inferd_proto::v2::{ContentBlock, MessageV2, ResolvedV2, RoleV2, StopReasonV2};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -32,20 +32,25 @@ fn skipping_msg() {
     );
 }
 
-fn req(text: &str) -> Resolved {
-    Resolved {
+// Build a ResolvedV2 directly (fields are pub) so the
+// `rejects_invalid_messages` test can hand the backend an
+// intentionally-empty message list that `RequestV2::resolve` would
+// otherwise reject before it reached the engine.
+fn req(text: &str) -> ResolvedV2 {
+    ResolvedV2 {
+        wire_version: inferd_proto::v2::WIRE_VERSION,
         id: "t1".into(),
-        messages: vec![Message {
-            role: Role::User,
-            content: text.into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: text.into() }],
         }],
-        temperature: 0.7,
-        top_p: 0.95,
-        top_k: 40,
-        max_tokens: 16,
-        stream: true,
-        image_token_budget: None,
-        grammar: String::new(),
+        attachments: Vec::new(),
+        tools: Vec::new(),
+        temperature: Some(0.7),
+        top_p: Some(0.95),
+        top_k: Some(40),
+        max_tokens: Some(16),
+        stream: Some(true),
     }
 }
 
@@ -67,10 +72,10 @@ async fn loads_model_and_streams_tokens() {
     assert!(backend.ready());
 
     let stream = backend
-        .generate(req("Say hi briefly."))
+        .generate_v2(req("Say hi briefly."))
         .await
         .expect("generate");
-    let events: Vec<TokenEvent> = tokio::time::timeout(Duration::from_secs(60), stream.collect())
+    let events: Vec<TokenEventV2> = tokio::time::timeout(Duration::from_secs(60), stream.collect())
         .await
         .expect("generation timed out");
 
@@ -78,12 +83,15 @@ async fn loads_model_and_streams_tokens() {
 
     let last = events.last().unwrap();
     match last {
-        TokenEvent::Done { stop_reason, usage } => {
-            assert!(matches!(*stop_reason, StopReason::End | StopReason::Length));
+        TokenEventV2::Done { stop_reason, usage } => {
+            assert!(matches!(
+                *stop_reason,
+                StopReasonV2::EndTurn | StopReasonV2::MaxTokens
+            ));
             assert!(
-                usage.completion_tokens > 0,
-                "expected completion_tokens > 0, got {}",
-                usage.completion_tokens
+                usage.output_tokens > 0,
+                "expected output_tokens > 0, got {}",
+                usage.output_tokens
             );
         }
         other => panic!("expected terminal Done event, got {other:?}"),
@@ -91,9 +99,9 @@ async fn loads_model_and_streams_tokens() {
 
     let token_count = events
         .iter()
-        .filter(|e| matches!(e, TokenEvent::Token(_)))
+        .filter(|e| matches!(e, TokenEventV2::Text(_)))
         .count();
-    assert!(token_count > 0, "expected at least one Token event");
+    assert!(token_count > 0, "expected at least one Text event");
 }
 
 #[tokio::test]
@@ -111,9 +119,9 @@ async fn cancellation_stops_generation_promptly() {
     .expect("construct LlamaCpp");
 
     let stream = backend
-        .generate({
+        .generate_v2({
             let mut r = req("Tell me a long story about a dragon.");
-            r.max_tokens = 200;
+            r.max_tokens = Some(200);
             r
         })
         .await
@@ -149,13 +157,14 @@ async fn rejects_invalid_messages() {
     })
     .expect("construct LlamaCpp");
 
-    // Empty messages would normally be caught by Resolved-time validation,
-    // but the type allows it. The chat template render returns None, which
-    // surfaces as InvalidRequest from generate().
+    // Empty messages would normally be caught by RequestV2::resolve
+    // validation, but ResolvedV2's fields are pub so a test can build
+    // one directly. The chat template render returns None, which
+    // surfaces as InvalidRequest from generate_v2().
     let mut r = req("hello");
     r.messages.clear();
 
-    let result = backend.generate(r).await;
+    let result = backend.generate_v2(r).await;
     assert!(
         matches!(
             result.as_ref().err(),

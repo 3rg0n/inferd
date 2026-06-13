@@ -10,13 +10,12 @@
 //!   `Done` event) to exercise the mid-stream failure path.
 
 use crate::backend::{
-    Backend, BackendCapabilities, EmbedError, EmbedResult, GenerateError, TokenEvent, TokenEventV2,
-    TokenStream, TokenStreamV2,
+    Backend, BackendCapabilities, EmbedError, EmbedResult, GenerateError, TokenEventV2,
+    TokenStreamV2,
 };
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, UsageV2};
-use inferd_proto::{Resolved, StopReason, Usage};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_stream::wrappers::ReceiverStream;
@@ -124,56 +123,7 @@ impl Backend for Mock {
         }
     }
 
-    async fn generate(&self, _req: Resolved) -> Result<TokenStream, GenerateError> {
-        if let Some(err) = self.config.pre_stream_error {
-            return Err(err.into());
-        }
-        if !self.ready() {
-            return Err(GenerateError::NotReady);
-        }
-
-        let tokens = self.config.tokens.clone();
-        let drop_after = self.config.mid_stream_drop_after;
-        let token_delay = self
-            .config
-            .token_delay_ms
-            .map(std::time::Duration::from_millis);
-        let (tx, rx) = tokio::sync::mpsc::channel(8);
-
-        // Spawned so dropping the stream (which drops `rx`) cancels by
-        // closing the channel — `tx.send` then returns Err and we exit.
-        tokio::spawn(async move {
-            let mut completion_tokens: u32 = 0;
-            for (emitted, tok) in tokens.into_iter().enumerate() {
-                if let Some(n) = drop_after
-                    && emitted >= n
-                {
-                    // Simulate mid-stream failure: stop without Done.
-                    return;
-                }
-                if let Some(d) = token_delay {
-                    tokio::time::sleep(d).await;
-                }
-                if tx.send(TokenEvent::Token(tok)).await.is_err() {
-                    return; // receiver dropped → cancellation
-                }
-                completion_tokens = completion_tokens.saturating_add(1);
-            }
-            let _ = tx
-                .send(TokenEvent::Done {
-                    stop_reason: StopReason::End,
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens,
-                    },
-                })
-                .await;
-        });
-
-        Ok(Box::pin(ReceiverStream::new(rx)))
-    }
-
-    /// v2 generation. Same token tape + delays as `generate` but
+    /// v2 generation. Same token tape + delays as the prior v1 path but
     /// emits `TokenEventV2::Text(...)` and a v2 `Done` frame with
     /// `StopReasonV2::EndTurn` and `UsageV2` field names. Mid-stream
     /// drop and pre-stream error knobs apply identically.

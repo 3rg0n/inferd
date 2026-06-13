@@ -3,37 +3,8 @@
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, ToolCallId, ToolUseInput, UsageV2};
-use inferd_proto::{Resolved, StopReason, Usage};
 use std::pin::Pin;
 use tokio_stream::Stream;
-
-/// One event in a generation stream.
-///
-/// A successful generation produces zero or more `Token` events terminated by
-/// exactly one `Done`. A failed generation produces zero or more `Token`
-/// events followed by no further events; the adapter returns the failure as
-/// a `GenerateError` from `generate()` (pre-stream) or terminates the stream
-/// without a `Done` (mid-stream) — see ADR 0007 for the failure-semantics
-/// contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TokenEvent {
-    /// One incremental generated token.
-    Token(String),
-    /// Final event for a successful generation.
-    Done {
-        /// Reason generation stopped.
-        stop_reason: StopReason,
-        /// Token-count usage.
-        usage: Usage,
-    },
-}
-
-/// Stream of `TokenEvent` values produced by a backend during generation.
-///
-/// Dropping the stream cancels the in-flight generation. Adapters must wire
-/// drop to their underlying cancellation primitive (e.g. a `CancellationToken`
-/// or by aborting the spawned task).
-pub type TokenStream = Pin<Box<dyn Stream<Item = TokenEvent> + Send>>;
 
 /// One event in a v2 generation stream — typed-content-block surface
 /// per ADR 0015.
@@ -295,24 +266,17 @@ pub trait Backend: Send + Sync {
         BackendCapabilities::default()
     }
 
-    /// Begin a generation and return a stream of `TokenEvent` values.
+    /// Begin a generation and return a stream of `TokenEventV2` values.
     ///
-    /// Errors returned here surface as `Response::Error` *before* any tokens
-    /// reach the client. Errors that occur after the first token has streamed
-    /// terminate the stream without a `Done`.
-    async fn generate(&self, req: Resolved) -> Result<TokenStream, GenerateError>;
-
-    /// Begin a v2 generation and return a stream of `TokenEventV2`
-    /// values. Default impl returns `GenerateError::Internal("v2 not
-    /// supported by this backend")` — adapters opt in by overriding.
-    /// The daemon checks `capabilities().v2` before calling this on
-    /// the v2 path; the default `false` capability prevents dispatch
-    /// from reaching here for non-v2 backends.
-    async fn generate_v2(&self, _req: ResolvedV2) -> Result<TokenStreamV2, GenerateError> {
-        Err(GenerateError::Internal(
-            "v2 not supported by this backend".into(),
-        ))
-    }
+    /// As of v0.4 (ADR 0021) this is the single generation entry point —
+    /// the old text-only v1 `generate(Resolved)` was removed when v1 was
+    /// folded into v2. Text-only requests arrive as a v2 request whose
+    /// content is a single `text` block.
+    ///
+    /// Errors returned here surface as `ResponseV2::Error` *before* any
+    /// tokens reach the client. Errors after the first token terminate
+    /// the stream without a `Done`.
+    async fn generate_v2(&self, req: ResolvedV2) -> Result<TokenStreamV2, GenerateError>;
 
     /// Compute embeddings for the request's input strings (per
     /// ADR 0017). Default impl returns `EmbedError::Unsupported` —

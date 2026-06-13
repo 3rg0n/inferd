@@ -641,6 +641,7 @@ mod tests {
     #[test]
     fn image_attachment_block_is_rejected() {
         let r = ResolvedV2 {
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             id: "x".into(),
             messages: vec![MessageV2 {
                 role: RoleV2::User,

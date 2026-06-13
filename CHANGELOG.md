@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR 0021 supersedes parts of ADRs 0008/0009/0015; the post-launch
   freeze posture returns after v0.4.
 
+### Removed
+
+- **Dead v1 wire path excised** (ADR 0021 / #34). With v1 folded into
+  v2 there is no v1 code left to keep alive: deleted the v1 proto types
+  (`Request`/`Response`/`Resolved`/`Role`/`Message`/`StopReason`/
+  `Usage`/`ImageTokenBudget`) and the `request.rs`/`response.rs`
+  modules; removed the `Backend::generate(Resolved)` method,
+  `TokenEvent`/`TokenStream`, and every adapter's v1 generate impl
+  (`generate_v2` is now the single required generation method); dropped
+  the daemon's v1 `serve_tcp`/`serve_uds`/`serve_named_pipe` +
+  `handle_connection` and the GBNF `validate_grammar` guard (v2 has no
+  grammar field); removed the v1 `inferd_client::Client`. The v1
+  `wire.rs` proto test and v1 fuzz targets were replaced with
+  length-prefixed / v2 equivalents (`lp_frame_reader`,
+  `v2_request_resolve`); all daemon integration tests were migrated onto
+  the length-prefixed v2 wire via a shared `tests/common` framing
+  helper. `net −2156/+608` lines across 27 files; full `fmt` + `clippy
+  -D warnings` + `test --all` + `audit` cycle green.
+
 ## [0.3.0] - 2026-06-03
 
 First stable v0.3 release. Headline: **runtime accelerator detection**
