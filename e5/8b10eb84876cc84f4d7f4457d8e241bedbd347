@@ -1,0 +1,22 @@
+docs/v0.4-validation.md
+  s_126aec4081f728::t_b74ce3e25fb9e7 1-116
+  s_126aec4081f728::t_849f534d0fcc07 117-118
+CHANGELOG.md
+  s_126aec4081f728::t_e91007067a8ae4 22-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "e58b10eb84876cc84f4d7f4457d8e241bedbd347",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
