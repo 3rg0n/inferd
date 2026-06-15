@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>inferd — one warm copy, many local consumers</title>
-<meta name="description" content="inferd is a single host-wide local-inference daemon. One warm copy of each model, shared by every tool over NDJSON-over-IPC. Plumbing, not a product.">
+<meta name="description" content="inferd is a single host-wide local-inference daemon. One warm copy of each model, shared by every tool over a small IPC protocol. Plumbing, not a product.">
 <meta name="theme-color" content="#0e0d0b">
 
 <meta property="og:title" content="inferd — one warm copy, many local consumers">
-<meta property="og:description" content="A single host-wide local-inference daemon. NDJSON-over-IPC. MIT.">
+<meta property="og:description" content="A single host-wide local-inference daemon. Length-prefixed IPC. MIT.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://inferd.io/">
 
@@ -59,7 +59,7 @@
     <em>Many</em> local consumers.
   </h1>
   <p class="lede">
-    <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small NDJSON-over-IPC protocol. It is plumbing, not a product.
+    <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small IPC protocol (length-prefixed frames for generation, NDJSON for embeddings). It is plumbing, not a product.
   </p>
   <div class="hero-actions">
     <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.3.0</a>
@@ -118,7 +118,7 @@
       </li>
       <li>
         <h3>The wire protocol is the product.</h3>
-        <p>NDJSON over a Unix socket on Linux/macOS, a named pipe on Windows. 64&nbsp;MiB per-frame cap. Frozen at v1. Anything on the host that can open a socket can drive it.</p>
+        <p>Length-prefixed, type-tagged frames over a Unix socket on Linux/macOS, a named pipe on Windows (embeddings use NDJSON). 64&nbsp;MiB per-frame cap. Frozen, with an in-band <code>wire_version</code>. Anything on the host that can open a socket can drive it.</p>
       </li>
     </ol>
   </div>
@@ -136,8 +136,8 @@
                     │  cli · ide plugin · agent · web app  │
                     └──────────────────────────────────────┘
                          │       │       │       │
-                         │ ndjson over uds / named pipe
-                         │ frame cap 64 MiB · v1 frozen
+                         │ length-prefixed frames over uds / pipe
+                         │ frame cap 64 MiB · wire frozen (v2)
                          ▼       ▼       ▼       ▼
                     ┌──────────────────────────────────────┐
                     │                inferd                │
@@ -183,14 +183,15 @@
 
     <details class="frame-example">
       <summary>One generate request, on the wire</summary>
-<pre><span class="comment">// client → daemon (one NDJSON line)</span>
-{"id":"r1","messages":[{"role":"user","content":"hi"}],"max_tokens":32}
+<pre><span class="comment">// client → daemon — one length-prefixed JSON frame</span>
+<span class="comment">// (each frame: [uvarint len][0x01 = JSON][payload], shown as payload)</span>
+{"wire_version":1,"id":"r1","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":32}
 
-<span class="comment">// daemon → client (streamed)</span>
-{"type":"token","id":"r1","text":"Hello"}
-{"type":"token","id":"r1","text":" there"}
-{"type":"token","id":"r1","text":"!"}
-{"type":"done","id":"r1","content":"Hello there!","usage":{"prompt_tokens":12,"completion_tokens":3},"backend":"llamacpp"}</pre>
+<span class="comment">// daemon → client (streamed, one length-prefixed JSON frame each)</span>
+{"type":"frame","id":"r1","block":{"type":"text","delta":"Hello"}}
+{"type":"frame","id":"r1","block":{"type":"text","delta":" there"}}
+{"type":"frame","id":"r1","block":{"type":"text","delta":"!"}}
+{"type":"done","id":"r1","usage":{"input_tokens":12,"output_tokens":3},"stop_reason":"end_turn","backend":"llamacpp"}</pre>
     </details>
 
     <aside class="callout callout-block">
@@ -203,7 +204,7 @@
     <aside class="callout callout-block">
       <p class="callout-label">Multimodal out of the box</p>
       <p>
-        The default model is Gemma 4, and inferd pulls its vision projector on first boot — no extra config. Send images on the v2 socket as typed content blocks; the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and answers questions about an image without any setup.
+        The default model is Gemma 4, and inferd pulls its vision projector on first boot — no extra config. Send images as typed content blocks with their raw bytes in a BLOB frame; the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and answers questions about an image without any setup.
       </p>
     </aside>
   </div>
@@ -273,7 +274,7 @@ powershell -ExecutionPolicy Bypass `
       <li><span class="never-tag">never</span> Per-request backend override on the wire. Operators choose backends, callers don't.</li>
       <li><span class="never-tag">never</span> In-daemon retry, fallback, or mid-stream failover. The caller owns retry.</li>
       <li><span class="never-tag">never</span> A multi-generate-model warm pool. One generate model per process (an embed model alongside is fine — different role). Need two generate models? Run two daemons.</li>
-      <li><span class="never-tag">never</span> Breaking wire-protocol changes. v1 is frozen. v2 will live on a separate socket.</li>
+      <li><span class="never-tag">never</span> Silent breaking wire-protocol changes. The wire is frozen; a breaking change bumps the in-band <code>wire_version</code> so a mismatch fails loudly.</li>
     </ul>
   </div>
 </section>

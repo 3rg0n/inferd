@@ -34,7 +34,8 @@ config; it is the contract that the CI config implements.
 
 - `cargo test --all` with the daemon binary built. Runs against
   a tokio-driven test harness that opens an actual UDS / named
-  pipe, sends real NDJSON, and asserts response framing.
+  pipe, sends real length-prefixed v2 frames (generation) or NDJSON
+  (embed), and asserts response framing.
 - Required to pass per PR.
 - Exercises: full lifecycle (lock → ready → accept → dispatch
   → shutdown), peer-credential extraction (where feasible to
@@ -66,8 +67,9 @@ config; it is the contract that the CI config implements.
 - Hand-written Go and Rust client suites, pointed at a running
   inferd binary. Run on every supported platform.
 - Required to pass before tagging v0.1.0.
-- Exercises: every wire shape the daemon ships — `Request` and
-  `Response` envelopes, NDJSON framing edge cases, streaming,
+- Exercises: every wire shape the daemon ships — `RequestV2` and
+  `ResponseV2` envelopes, length-prefixed framing edge cases
+  (generation) and NDJSON edge cases (embed), streaming,
   cancellation on disconnect, error frames, admin-socket
   lifecycle events. This is the load-bearing test for the
   cross-language stability claim.
@@ -106,9 +108,9 @@ config; it is the contract that the CI config implements.
   parser, with a corpus seeded from real captured frames.
 - Runs on a schedule, not per PR. Findings open issues, not
   block PRs.
-- Coverage targets: NDJSON reader, request validator, GBNF
-  pass-through (does not fuzz GBNF parsing — that lives
-  inside llama.cpp).
+- Coverage targets: the length-prefixed frame reader
+  (`lp_frame_reader` target) and the v2 request validator
+  (`v2_request_resolve` target).
 
 ## Cargo features
 

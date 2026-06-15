@@ -1,12 +1,19 @@
-# inferd wire protocol v1
+# inferd wire protocol v1 — HISTORICAL
 
-This is the authoritative reference for the bytes on the wire
-between an inferd client and the inferd daemon. v1 is designed
-for inferd on its own merits (see ADR 0008). It is *not*
+> **This document is a historical record.** Protocol v1 — the text-only
+> NDJSON generation wire described below — was folded into v2 and
+> **removed in v0.4** ([ADR 0021](adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)).
+> A v0.4 daemon does not bind a v1 socket and the v1 proto types are
+> gone. The **live** generation surface is the v2 wire (typed content
+> blocks, ADR 0015) on length-prefixed, type-tagged framing with an
+> in-band `wire_version` (ADR 0021); embeddings are on their own socket
+> (ADR 0017). This page is kept for reference on v0.3-and-earlier
+> deployments and for the design rationale that still informs v2.
+
+This was the authoritative reference for the bytes on the wire
+between an inferd client and the inferd daemon through v0.3. v1 was
+designed for inferd on its own merits (see ADR 0008). It is *not*
 derived from any other project's protocol.
-
-v1 is immutable once shipped. Breaking changes go to v2 on a
-**separate socket path** — no in-band version negotiation.
 
 ## Framing
 

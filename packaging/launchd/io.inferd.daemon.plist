@@ -45,14 +45,16 @@
 
     <key>ProgramArguments</key>
     <array>
+        <!--
+          v0.4 (ADR 0021): one generation socket on the neutral path
+          (inferd.sock). The old --v2 / --v2-addr flags are gone — v1
+          was folded into v2. --embed still binds the embeddings socket.
+        -->
         <string>__BIN__</string>
         <string>--lock</string>
         <string>__TMPDIR__inferd/inferd.lock</string>
         <string>--uds</string>
-        <string>__TMPDIR__inferd/infer.sock</string>
-        <string>--v2</string>
-        <string>--v2-addr</string>
-        <string>__TMPDIR__inferd/infer.v2.sock</string>
+        <string>__TMPDIR__inferd/inferd.sock</string>
         <string>--admin-addr</string>
         <string>__TMPDIR__inferd/admin.sock</string>
         <string>--embed</string>

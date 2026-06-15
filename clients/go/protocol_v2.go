@@ -5,17 +5,19 @@ package inferd
 // The v2 surface is documented in ADR 0015 (typed content blocks) as
 // amended by ADR 0016 (consumer decodes media before sending) and
 // ADR 0013 (the daemon is the gateway that shapes semantic intent into
-// engine input). It is frozen on its own socket — `infer.v2.sock` on
-// Unix, `\\.\pipe\inferd-infer-v2` on Windows — independently of the v1
-// generation socket. These types are byte-compatible with the Rust
-// `inferd-proto` v2 module (request.rs / attachment.rs / response.rs /
-// tool.rs).
+// engine input). As of v0.4 (ADR 0021) it is the single generation
+// surface — frozen on the neutral socket (`inferd.sock` on Unix,
+// `\\.\pipe\inferd` on Windows) — using length-prefixed, type-tagged
+// framing with an in-band wire_version. These types are byte-compatible
+// with the Rust `inferd-proto` v2 module (request.rs / attachment.rs /
+// response.rs / tool.rs).
 //
-// Media decode posture (ADR 0016): attachment `Bytes` carries
-// *already-decoded* payloads, base64-encoded — raw interleaved RGB for
-// images (width*height*3 octets, no alpha), little-endian float32 PCM
-// for audio. The daemon links no image/audio codec; the consumer
-// decodes before sending.
+// Media decode posture (ADR 0016 + ADR 0021): attachment `Bytes`
+// carries *already-decoded* raw payloads — interleaved RGB for images
+// (width*height*3 octets, no alpha), little-endian float32 PCM for
+// audio — and travels out-of-band as a raw BLOB frame keyed by
+// attachment id (no base64). The daemon links no image/audio codec;
+// the consumer decodes before sending.
 
 import "encoding/json"
 

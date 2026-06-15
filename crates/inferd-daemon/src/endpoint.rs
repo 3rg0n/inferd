@@ -122,7 +122,7 @@ pub fn default_embed_addr() -> std::path::PathBuf {
 
 /// Resolve a Linux runtime-dir path with the fallback chain
 /// documented on `default_admin_addr`. `leaf` is the basename to
-/// append (e.g. `admin.sock`, `infer.sock`, `inferd.lock`).
+/// append (e.g. `admin.sock`, `inferd.sock`, `inferd.lock`).
 #[cfg(target_os = "linux")]
 pub fn linux_runtime_path(leaf: &str) -> std::path::PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {

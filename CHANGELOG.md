@@ -34,6 +34,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR 0021 supersedes parts of ADRs 0008/0009/0015; the post-launch
   freeze posture returns after v0.4.
 
+### Fixed
+
+- **v0.4 consistency sweep across clients, packaging, CI, and docs**
+  (ADR 0021 / #34). Caught install=work-breaking leftovers the wire
+  change left behind: the Go client's `DefaultInferAddr()` returned the
+  old `infer.sock` / `infer.v2.sock` paths (a consumer using the
+  default would dial a socket the daemon no longer binds) — now
+  `inferd.sock` / `\\.\pipe\inferd`; the systemd unit and launchd plist
+  passed the removed `--v2` / `--v2-addr` flags and the stale
+  `infer.sock` path (daemon would fail to start) — now the neutral
+  socket with `--embed` only; the CI install-smoke checked for
+  `infer.sock` / `infer.v2.sock` and sent raw NDJSON to the generation
+  socket — rewritten to assert `inferd.sock` and drive the
+  length-prefixed v2 wire. Also mirrored the Rust v1 excision in the Go
+  client (removed the v1 `Generate` + types, kept the shared `Role` /
+  `Client` core) and removed the dead `--v2` / `--v2-addr` / `--v2-tcp`
+  CLI flags and `listen.tcp_v2` config knob (nothing read them).
+  Documentation rewritten to match: `CLAUDE.md`, `context.md`,
+  `README.md`, `INTEGRATING.md`, the `inferd-proto` / `inferd-client` /
+  Go-client READMEs, the GitHub Pages site (`site/index.html`), and
+  `docs/{ai.internals.explained,test-strategy}.md`; `docs/protocol-v1.md`
+  gained a "HISTORICAL" banner pointing at ADR 0021.
+
 ### Removed
 
 - **Dead v1 wire path excised** (ADR 0021 / #34). With v1 folded into
