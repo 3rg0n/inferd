@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens through mtmd, no base64). Confirms the full pipeline: LP
   request + BlobDescriptor + BLOB frames → wire_version check → BLOB
   reassembly by id → raw RGB to mtmd → LP response frames.
+- **v0.4 release-gate doc** added at `docs/v0.4-validation.md`: two
+  gates (install=work coverage matrix re-reset for the socket/framing
+  change + a wire-format end-to-end gate covering the LP round-trip, the
+  `wire_version` mismatch failure, and the raw-BLOB multimodal path),
+  plus the pre-tag release checklist. The proof above is recorded as the
+  Windows x86_64 rows; other targets are ☐ pending release-tarball runs.
 
 ### Changed
 
