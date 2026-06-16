@@ -523,31 +523,33 @@ impl Backend for LlamaCpp {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        // Read the cached caps probed at construction. v2 is true
-        // only when an mmproj was configured AND the mtmd context
-        // initialised successfully — without an mmproj we'd reject
-        // image / audio attachments anyway, so v2-without-mmproj is
-        // not a useful state to advertise.
+        // Read the cached caps probed at construction. As of v0.4
+        // (ADR 0021) v2 is the *only* generation surface — a text-only
+        // request is a single text content block — so any llamacpp
+        // generation backend advertises `v2: true`. The mmproj probe
+        // (`caps_v2`) only governs the multimodal sub-capabilities
+        // (`vision` / `audio`): without an mmproj we still generate
+        // text, we just reject image / audio attachments.
+        //
+        // (Before v0.4, text-only generation rode the separate v1
+        // surface, so `v2` could be false here without breaking
+        // generation. Folding v1 into v2 made `v2: true` mandatory for
+        // every generation-capable backend — otherwise the daemon's
+        // v2-capability gate refuses every real request. Regression
+        // caught by tests/echo_llamacpp.rs.)
         let (snap, embed) = {
             let guard = self.state.lock().expect("poisoned llamacpp state mutex");
             (guard.caps_v2, guard.embed.is_some())
         };
-        match snap {
-            Some(caps) => BackendCapabilities {
-                v2: true,
-                vision: caps.vision,
-                audio: caps.audio,
-                video: false,
-                tools: true,
-                thinking: true,
-                embed,
-                accelerator: self.accelerator.clone(),
-            },
-            None => BackendCapabilities {
-                embed,
-                accelerator: self.accelerator.clone(),
-                ..BackendCapabilities::default()
-            },
+        BackendCapabilities {
+            v2: true,
+            vision: snap.map(|c| c.vision).unwrap_or(false),
+            audio: snap.map(|c| c.audio).unwrap_or(false),
+            video: false,
+            tools: true,
+            thinking: true,
+            embed,
+            accelerator: self.accelerator.clone(),
         }
     }
 
@@ -801,7 +803,6 @@ fn run_generation_v2(
     let guard = state.lock().expect("poisoned llamacpp state mutex");
     let model = guard.model.as_ptr();
     let ctx = guard.ctx.ptr.as_ptr();
-    let mtmd = guard.mtmd.as_ref().ok_or(LlamaCppError::NoMmproj)?;
 
     // SAFETY: FFI; pointers valid for the lock's lifetime.
     let vocab = unsafe { ffi::llama_model_get_vocab(model) };
@@ -815,25 +816,50 @@ fn run_generation_v2(
         }
     }
 
-    // Tokenise prompt + bitmaps via mtmd.
-    let bitmap_refs: Vec<&Bitmap> = bitmaps.iter().collect();
-    let chunks = mtmd
-        .tokenize(prompt, &bitmap_refs)
-        .map_err(LlamaCppError::Mtmd)?;
-
-    // Run upstream's helper-driven eval loop (text chunks ->
-    // llama_decode; image/audio chunks -> mtmd_encode then decode
-    // via the precomputed embeddings). Returns the new n_past so we
-    // can resume sampling from the right position.
-    // SAFETY: ctx and chunks are wired together — chunks was just
-    // produced from `mtmd` against this ctx's parent model.
-    let n_past =
-        unsafe { mtmd.eval_chunks(ctx, &chunks, 0, 0, 512, true) }.map_err(LlamaCppError::Mtmd)?;
-
-    // Use mtmd's helper to count prompt-side tokens (including
-    // projected media tokens) for the usage report.
-    let prompt_tokens = unsafe { crate::mtmd_ffi::mtmd_helper_get_n_tokens(chunks.raw()) } as u32;
-    drop(chunks);
+    // Prompt prefill. Two paths (ADR 0021 — v2 is the single generation
+    // surface, so this must handle the text-only case that v1 used to):
+    //   - mtmd present: tokenise prompt + bitmaps through libmtmd and run
+    //     its helper eval loop (text chunks → llama_decode, media chunks
+    //     → mtmd_encode then decode). Required when there are bitmaps.
+    //   - no mtmd (text-only model, no mmproj): plain tokenise +
+    //     llama_decode. A text-only model has no mtmd context, and
+    //     rejecting generation here was the v1→v2 fold regression that
+    //     broke every text-only request (tests/echo_llamacpp.rs).
+    // A request that carries bitmaps but the model has no mtmd is a
+    // caller error — attachments can't be projected without an mmproj.
+    let (n_past, prompt_tokens) = match guard.mtmd.as_ref() {
+        Some(mtmd) => {
+            let bitmap_refs: Vec<&Bitmap> = bitmaps.iter().collect();
+            let chunks = mtmd
+                .tokenize(prompt, &bitmap_refs)
+                .map_err(LlamaCppError::Mtmd)?;
+            // SAFETY: ctx and chunks are wired together — chunks was just
+            // produced from `mtmd` against this ctx's parent model.
+            let n_past = unsafe { mtmd.eval_chunks(ctx, &chunks, 0, 0, 512, true) }
+                .map_err(LlamaCppError::Mtmd)?;
+            // mtmd's token count includes projected media tokens.
+            let prompt_tokens =
+                unsafe { crate::mtmd_ffi::mtmd_helper_get_n_tokens(chunks.raw()) } as u32;
+            drop(chunks);
+            (n_past, prompt_tokens)
+        }
+        None => {
+            if !bitmaps.is_empty() {
+                return Err(LlamaCppError::NoMmproj);
+            }
+            // Text-only prefill: tokenise + single batch decode.
+            let mut tokens = tokenize(vocab, prompt.as_bytes(), true, true)?;
+            let prompt_tokens = tokens.len() as u32;
+            // SAFETY: FFI; tokens.as_mut_ptr() valid for tokens.len().
+            let batch =
+                unsafe { ffi::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32) };
+            let rc = unsafe { ffi::llama_decode(ctx, batch) };
+            if rc != 0 {
+                return Err(LlamaCppError::Decode(rc));
+            }
+            (prompt_tokens as i32, prompt_tokens)
+        }
+    };
 
     // Sampler chain. v2 sampling fields default if absent (see
     // build_sampler_chain_v2).

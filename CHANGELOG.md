@@ -42,6 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Real-model generation was broken in v0.4** — two regressions from the
+  v1→v2 fold, both caught by running `docs/v0.4-validation.md` Gate 2 W3
+  (real-model text e2e) on Windows; neither was covered by the existing
+  mock-backend tests. (1) `LlamaCpp::capabilities()` only set `v2: true`
+  when an mmproj had loaded, so a text-only generation backend advertised
+  `v2: false` and the daemon's v2-capability gate refused *every* request
+  with `"backend does not advertise v2 capability"`. `v2` is now `true`
+  for any llamacpp generation backend (it always allocates a generation
+  context); `vision`/`audio` still track the mmproj probe. (2)
+  `run_generation_v2` unconditionally required an mtmd context
+  (`NoMmproj` error), so text-only generation aborted mid-stream with no
+  terminal frame. It now branches: mtmd path when an mmproj is present
+  (required for attachments), plain tokenise + `llama_decode` prefill for
+  the text-only case (restoring what the removed v1 path did). Added the
+  `unsupported_wire_version_errors_and_closes` integration test (Gate 2
+  W2) — the `wire_version` gate had no through-the-socket coverage.
 - **v0.4 consistency sweep across clients, packaging, CI, and docs**
   (ADR 0021 / #34). Caught install=work-breaking leftovers the wire
   change left behind: the Go client's `DefaultInferAddr()` returned the

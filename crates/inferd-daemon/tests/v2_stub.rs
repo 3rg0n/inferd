@@ -18,7 +18,8 @@
 mod common;
 
 use common::{
-    collect_frames, image_attachment, read_lp_frame, text_request, write_lp_payload, write_request,
+    collect_frames, image_attachment, read_lp_frame, text_request, write_lp_json, write_lp_payload,
+    write_request,
 };
 use inferd_daemon::endpoint::bind_tcp;
 use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
@@ -353,6 +354,53 @@ async fn mid_stream_drop_emits_backend_unavailable_terminal() {
         }
         other => panic!("expected terminal Error, got {other:?}"),
     }
+
+    let _ = shutdown.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+/// W2 (v0.4-validation §"Gate 2"): a request whose `wire_version` the
+/// daemon doesn't speak must get a single
+/// `Error{WireVersionUnsupported}` frame and then the connection must
+/// close — the daemon must NOT parse the body or resync (ADR 0021).
+#[tokio::test]
+async fn unsupported_wire_version_errors_and_closes() {
+    let (addr, shutdown, handle) = boot_v2_daemon().await;
+
+    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    // Build a request with a bogus wire_version. `write_request` would
+    // overwrite it with WIRE_VERSION, so frame it directly.
+    let mut req = text_request("v2-badver", "hi");
+    req.wire_version = 99;
+    write_lp_json(&mut stream, &req).await;
+    stream.flush().await.expect("flush");
+
+    let (read_half, _w) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+
+    let (type_byte, payload) = tokio::time::timeout(Duration::from_secs(5), read_lp_frame(&mut reader))
+        .await
+        .expect("read budget exceeded")
+        .expect("daemon must emit a v2 error frame");
+    assert_eq!(type_byte, FrameType::Json as u8);
+    let resp: ResponseV2 = serde_json::from_slice(&payload).expect("decode v2 error frame");
+    match resp {
+        ResponseV2::Error { id, code, message } => {
+            assert_eq!(id, "v2-badver");
+            assert_eq!(code, ErrorCodeV2::WireVersionUnsupported);
+            assert!(
+                message.contains("wire_version"),
+                "message should explain the mismatch; got: {message}"
+            );
+        }
+        other => panic!("expected Error{{WireVersionUnsupported,..}}, got {other:?}"),
+    }
+
+    // Connection must close after the version error — no resync.
+    let after = tokio::time::timeout(Duration::from_secs(2), read_lp_frame(&mut reader))
+        .await
+        .expect("EOF wait exceeded");
+    assert!(after.is_none(), "expected EOF after wire_version error");
 
     let _ = shutdown.send(());
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
