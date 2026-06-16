@@ -636,12 +636,27 @@ async fn build_backends(
             }
         }
 
-        broadcaster.publish(StatusEvent::LoadingModel {
-            phase: LoadPhase::CheckingLocal {
-                path: PathBuf::from("(mock)"),
-            },
-        });
-        return Ok((vec![Arc::new(Mock::new())], vec!["mock".to_string()]));
+        // No `--backend` flag and no real backend could be built. inferd
+        // will NOT silently fall back to the mock backend — serving fake
+        // tokens on a real install violates install=work. On a normal
+        // install the daemon writes a default config (gemma-4-e4b +
+        // embeddinggemma-300m, auto_pull) on first boot and loads it;
+        // reaching here means that config is missing / unreadable /
+        // declares no backends, or this binary was built without any
+        // inference backend feature (llamacpp / openai / bedrock).
+        // Mock is reachable only via an explicit `--backend mock`.
+        anyhow::bail!(
+            "refusing to start: no usable inference backend. No `--backend` \
+             flag was given and no real backend could be constructed from \
+             the config (`~/.inferd/config.json`). On a normal install the \
+             daemon writes a default config on first boot and loads it — if \
+             you see this, that config is missing, unreadable, or declares \
+             no backends, or this binary was built without a backend feature \
+             (llamacpp / openai / bedrock). Fix the config (or rebuild with \
+             a backend feature), or pass `--backend mock` explicitly to run \
+             a no-engine test daemon. inferd never silently serves a mock \
+             backend."
+        );
     }
 
     match cli.backend.expect("checked is_none above") {

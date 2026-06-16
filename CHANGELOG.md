@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Daemon no longer silently falls back to the mock backend** (GA
+  hardening). Previously, with no `--backend` flag and no usable config
+  (missing / unreadable / declares no backends), `build_backends`
+  returned the in-memory `Mock` — a real install could serve fake
+  `"mock-response"` tokens instead of failing. inferd now **refuses to
+  start** with an actionable error in that case; the mock backend is
+  reachable only via an explicit `--backend mock`. This restores the
+  install=work guarantee (a mock-default install is a release blocker).
+  Verified live: a feature-built daemon with an empty-backends config
+  exits with "refusing to start: no usable inference backend".
 - **Real-model generation was broken in v0.4** — two regressions from the
   v1→v2 fold, both caught by running `docs/v0.4-validation.md` Gate 2 W3
   (real-model text e2e) on Windows; neither was covered by the existing
