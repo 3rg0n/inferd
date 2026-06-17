@@ -1,0 +1,21 @@
+docs/v0.4-validation.md
+  s_126aec4081f728::t_5801eb839574c5 104-108
+clients/go/client_test.go
+  s_126aec4081f728::t_437120bd18d679 163-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "6a870d6280b6867c98548342886be810a16ee38c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
