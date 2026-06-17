@@ -378,10 +378,11 @@ async fn unsupported_wire_version_errors_and_closes() {
     let (read_half, _w) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
-    let (type_byte, payload) = tokio::time::timeout(Duration::from_secs(5), read_lp_frame(&mut reader))
-        .await
-        .expect("read budget exceeded")
-        .expect("daemon must emit a v2 error frame");
+    let (type_byte, payload) =
+        tokio::time::timeout(Duration::from_secs(5), read_lp_frame(&mut reader))
+            .await
+            .expect("read budget exceeded")
+            .expect("daemon must emit a v2 error frame");
     assert_eq!(type_byte, FrameType::Json as u8);
     let resp: ResponseV2 = serde_json::from_slice(&payload).expect("decode v2 error frame");
     match resp {

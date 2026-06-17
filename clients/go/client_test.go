@@ -54,7 +54,13 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 		"--tcp", addr,
 		"--admin-addr", adminSock,
 	)
-	cmd.Env = append(os.Environ(), "INFERD_LOG_DIR="+logDir)
+	cmd.Env = append(os.Environ(),
+		"INFERD_LOG_DIR="+logDir,
+		// Isolate the test daemon from the real ~/.inferd/config.json so it
+		// doesn't attempt to load a real llamacpp model instead of mock.
+		"HOME="+tmp,
+		"USERPROFILE="+tmp,
+	)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("stdout: %v", err)
@@ -153,6 +159,13 @@ func defaultDaemonBin(t *testing.T) string {
 			name := "inferd-daemon"
 			if runtime.GOOS == "windows" {
 				name += ".exe"
+			}
+			// Prefer the release binary (LP framing, v0.4+) over debug (may be
+			// stale from an older build). Only fall back to debug if release is
+			// absent — the test skips cleanly when neither is present.
+			releaseBin := filepath.Join(dir, "target", "release", name)
+			if _, err := os.Stat(releaseBin); err == nil {
+				return releaseBin
 			}
 			return filepath.Join(dir, "target", "debug", name)
 		}
