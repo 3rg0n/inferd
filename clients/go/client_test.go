@@ -160,14 +160,29 @@ func defaultDaemonBin(t *testing.T) string {
 			if runtime.GOOS == "windows" {
 				name += ".exe"
 			}
-			// Prefer the release binary (LP framing, v0.4+) over debug (may be
-			// stale from an older build). Only fall back to debug if release is
-			// absent — the test skips cleanly when neither is present.
-			releaseBin := filepath.Join(dir, "target", "release", name)
-			if _, err := os.Stat(releaseBin); err == nil {
-				return releaseBin
+			// Pick the more recently built of target/release and
+			// target/debug. A hardcoded release-first (or debug-first)
+			// preference breaks whenever the *other* profile holds a
+			// stale binary from an older version (e.g. a v0.3 release
+			// build left over next to a fresh v0.4 debug build, or vice
+			// versa) — that stale daemon speaks the wrong wire and the
+			// LP round-trip fails. Newest-wins is correct on every box.
+			release := filepath.Join(dir, "target", "release", name)
+			debug := filepath.Join(dir, "target", "debug", name)
+			rInfo, rErr := os.Stat(release)
+			dInfo, dErr := os.Stat(debug)
+			switch {
+			case rErr == nil && dErr == nil:
+				if rInfo.ModTime().After(dInfo.ModTime()) {
+					return release
+				}
+				return debug
+			case rErr == nil:
+				return release
+			default:
+				// debug present or neither (caller's os.Stat skips cleanly).
+				return debug
 			}
-			return filepath.Join(dir, "target", "debug", name)
 		}
 	}
 	t.Fatalf("could not locate workspace root from %s", cwd)
