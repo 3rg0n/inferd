@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`defaultDaemonBin` in Go e2e test now prefers `target/release` over
+  `target/debug`** (`clients/go/client_test.go`). On macOS, a stale
+  `target/debug/inferd-daemon` (rc.12, NDJSON) was being used instead of
+  the v0.4 release binary (LP framing), causing `TestEndToEndAgainstDaemon`
+  to return `code=internal` and the rc.12 daemon to collide with the launchd
+  daemon's `${TMPDIR}/inferd/inferd.sock` (crashing its accept loop). Fixed
+  by checking `target/release` first. Test also gains `HOME`/`USERPROFILE`
+  isolation to prevent the test daemon from touching real `~/.inferd/`.
+
 ### Validation
+
+- **v0.4 Gate 1 + W1 + W3 validated on macOS arm64 Metal (Apple M1,
+  2026-06-17).** `inferdctl doctor` reports `wire_version=1`,
+  `accelerator=metal`, `device=MTL0 vram=11.8 GiB`, generation socket
+  `${TMPDIR}/inferd/inferd.sock`. `go test ./...` (15 tests) green.
+  Real-model LP generate: `answer="Four"`, `backend=llamacpp`,
+  `stop=end_turn`. W4 (BLOB multimodal) blocked on mmproj build; wire
+  encoding verified by mock tests.
 
 - **v0.4 framing proven end-to-end** (ADR 0021 / #34). Automated:
   `clients/go` `TestEndToEndAgainstDaemon` round-trips `GenerateV2`
