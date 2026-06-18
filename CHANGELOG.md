@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-rc.1] - 2026-06-18
+
+First v0.4 release candidate — cut to produce signed per-platform
+tarballs for the install=work validation gate (ADR 0021 wire redesign).
+Not GA: the Gate-1 tarball-install loop (download → install → auto-pull
+→ real generate + embed) has not yet been run from these artifacts on
+every target, and CUDA/GPU paths are unvalidated for v0.4. See
+`docs/v0.4-validation.md`.
+
 ### Fixed
 
 - **`defaultDaemonBin` in Go e2e test now prefers `target/release` over
