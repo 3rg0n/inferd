@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-rc.3] - 2026-06-22
+
+Third v0.4 release candidate. rc.2 built green on all 4 platforms, but
+running the real install=work path from its tarballs surfaced three
+Windows installer bugs (the shipped rc.2 Windows installer would fail to
+start a fresh daemon). rc.3 carries the fixes so the *shipped* installer
+is correct, and must re-prove install=work from its own tarballs before
+GA.
+
+### Fixed
+
+- **`packaging/windows/install.ps1`: dropped the removed `--v2` /
+  `--v2-addr` flags and pointed `--pipe` at the neutral `\\.\pipe\inferd`
+  path** (the v0.4 consistency sweep fixed the systemd unit + launchd
+  plist but missed the Windows installer). The rc.2 installer launched a
+  daemon with flags v0.4 no longer accepts, so a fresh Windows install
+  failed to start.
+- **`install.ps1`: stop the running daemon *before* staging the binary**
+  — Windows holds an exclusive lock on a running `.exe`, so an
+  upgrade-over-running install failed at the copy step.
+- **`uninstall.ps1 -Purge`: wait for the killed daemon to release its DLL
+  handles before deleting the install dir** — otherwise the recursive
+  delete hit "Access denied" on `cublas64_12.dll`.
+
+All three were found by running the actual install/upgrade/uninstall
+path from the rc.2 tarballs on Windows + WSL (RTX 5080); the v0.4 wire +
+fresh-from-nothing auto-pull (~6 GB → ready → real generate + embed) were
+validated on both. See `docs/v0.4-validation.md`.
+
 ## [0.4.0-rc.2] - 2026-06-18
 
 Second v0.4 release candidate. rc.1's release run failed: the Windows
