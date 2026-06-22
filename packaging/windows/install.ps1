@@ -49,6 +49,27 @@ $installDir = Split-Path -Parent $BinaryPath
 if (-not (Test-Path $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 }
+
+# Stop any running daemon BEFORE staging the binary. On Windows a
+# running process holds an exclusive lock on its own .exe, so an
+# upgrade-over-running-install would fail at the Copy-Item below with
+# "process cannot access the file ... being used by another process".
+# (The single-instance lock would also reject a second daemon at
+# launch, but that's after staging — too late.) Best-effort: give the
+# process a moment to release the file handle after exit.
+$running = Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue
+if ($running) {
+    foreach ($proc in $running) {
+        Write-Host "Stopping running inferd-daemon (PID $($proc.Id)) before staging"
+        Stop-Process -Id $proc.Id -Force
+    }
+    # Wait for the OS to release the exe lock (handle close is async).
+    for ($i = 0; $i -lt 50; $i++) {
+        Start-Sleep -Milliseconds 100
+        if (-not (Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue)) { break }
+    }
+}
+
 if ($SourceBinary -ne "") {
     if (-not (Test-Path $SourceBinary)) {
         Write-Error "source binary not found at $SourceBinary"
@@ -165,16 +186,8 @@ $lnk.Description      = "inferd local inference daemon. https://github.com/3rg0n
 $lnk.Save()
 
 if (-not $NoStart) {
-    # Stop any prior instance launched from a previous install before we
-    # spawn a fresh one — best-effort. The single-instance lock will
-    # reject a second daemon anyway, but stopping cleanly avoids a
-    # confusing boot-time error in the activity log.
-    Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            Write-Host "Stopping running inferd-daemon (PID $($_.Id))"
-            Stop-Process -Id $_.Id -Force
-        }
-
+    # Any prior instance was already stopped before staging (above), so
+    # the single-instance lock is free for the fresh launch.
     Write-Host "Launching daemon: $BinaryPath $shortcutArgs"
     Start-Process -FilePath $BinaryPath `
                   -ArgumentList $shortcutArgs `
