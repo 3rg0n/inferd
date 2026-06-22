@@ -7,13 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-rc.2] - 2026-06-18
+
+Second v0.4 release candidate. rc.1's release run failed: the Windows
+x86_64 CUDA build broke in CMake `enable_language(CUDA)` with "No CUDA
+toolset found" — `windows-latest` now resolves to `windows-2025`
+(VS 2026 / MSVC 19.51), and CUDA 12.6's `visual_studio_integration`
+only registers MSBuild props for VS 2022. Because `publish` needs all
+four platform builds, no release page or tarballs were produced.
+
+### Fixed
+
+- **Windows CUDA release build pinned to `windows-2022`** (VS 2022 /
+  MSVC 19.4x) instead of `windows-latest`. CUDA 12.6's Visual Studio
+  integration doesn't support the VS 2026 toolchain that
+  `windows-latest` (→ `windows-2025`) now ships, so
+  `enable_language(CUDA)` failed at cmake-configure time. Pinning the
+  older runner image keeps the CUDA→MSVC toolset path working. Revisit
+  when a CUDA release ships VS 2026 integration. The 613 MB Linux
+  x86_64 artifact is benign — it's the bundled cuBLAS/cuBLASLt CUDA
+  redist libs (NVIDIA-EULA-permitted) a CUDA tarball legitimately ships
+  next to `libggml-cuda.so`.
+
 ## [0.4.0-rc.1] - 2026-06-18
 
 First v0.4 release candidate — cut to produce signed per-platform
 tarballs for the install=work validation gate (ADR 0021 wire redesign).
-Not GA: the Gate-1 tarball-install loop (download → install → auto-pull
-→ real generate + embed) has not yet been run from these artifacts on
-every target, and CUDA/GPU paths are unvalidated for v0.4. See
+**Release run failed** (Windows CUDA build, see rc.2); no tarballs
+published. Not GA: the Gate-1 tarball-install loop (download → install →
+auto-pull → real generate + embed) has not yet been run from any
+artifacts, and CUDA/GPU paths are unvalidated for v0.4. See
 `docs/v0.4-validation.md`.
 
 ### Fixed
