@@ -30,11 +30,23 @@ if (Test-Path $shortcutPath) {
     Write-Host "No Startup shortcut at $shortcutPath (already removed?)"
 }
 
-Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue |
-    ForEach-Object {
-        Write-Host "Stopping inferd-daemon (PID $($_.Id))"
-        Stop-Process -Id $_.Id -Force
+$stopped = Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue
+$stopped | ForEach-Object {
+    Write-Host "Stopping inferd-daemon (PID $($_.Id))"
+    Stop-Process -Id $_.Id -Force
+}
+# Wait for the OS to release the process's file handles before the
+# -Purge below tries to delete the install dir. A killed process holds
+# exclusive locks on its loaded DLLs (cublas/cudart/ggml/llama) for a
+# short window after exit; deleting too soon fails with "Access to the
+# path '...dll' is denied". Bounded wait until no daemon remains.
+if ($stopped) {
+    for ($i = 0; $i -lt 50; $i++) {
+        Start-Sleep -Milliseconds 100
+        if (-not (Get-Process -Name "inferd-daemon" -ErrorAction SilentlyContinue)) { break }
     }
+    Start-Sleep -Milliseconds 300  # extra grace for handle release after exit
+}
 
 # Lock file may linger if the daemon was killed hard. Clean it so the
 # next install boots without a stale-lock complaint.
