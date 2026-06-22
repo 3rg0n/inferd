@@ -15,8 +15,8 @@
 #     (i.e. %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\)
 #   - Logs at                      %LOCALAPPDATA%\inferd\logs\
 #   - Lock at                      %LOCALAPPDATA%\inferd\inferd.lock
-#   - Pipes at                     \\.\pipe\inferd-infer
-#                                  \\.\pipe\inferd-infer-embed
+#   - Pipes at                     \\.\pipe\inferd            (generation)
+#                                  \\.\pipe\inferd-infer-embed (embeddings)
 #                                  (admin pipe uses the daemon default)
 #
 # After install the daemon is launched immediately so the operator does
@@ -32,8 +32,7 @@
 param(
     [string]$BinaryPath    = "$env:LOCALAPPDATA\inferd\inferd-daemon.exe",
     [string]$LockPath      = "$env:LOCALAPPDATA\inferd\inferd.lock",
-    [string]$PipePath      = "\\.\pipe\inferd-infer",
-    [string]$V2PipePath    = "\\.\pipe\inferd-infer-v2",
+    [string]$PipePath      = "\\.\pipe\inferd",
     [string]$EmbedPipePath = "\\.\pipe\inferd-infer-embed",
     [string]$LogDir        = "$env:LOCALAPPDATA\inferd\logs",
     [string]$ShortcutName  = "inferd-daemon.lnk",
@@ -136,20 +135,20 @@ if (-not (Test-Path $startupDir)) {
 $shortcutPath = Join-Path $startupDir $ShortcutName
 
 # Shortcut arguments. Mirrors the launchd plist and systemd unit:
-# explicit lock, v1 + v2 inference pipes, embed enabled. The admin pipe
-# falls back to the daemon's platform default. Backend selection comes
-# from %USERPROFILE%\.inferd\config.json (auto-written on first boot).
+# explicit lock, the single generation pipe, embed enabled. The admin
+# pipe falls back to the daemon's platform default. Backend selection
+# comes from %USERPROFILE%\.inferd\config.json (auto-written on first
+# boot).
 #
-# --v2 binds the typed-content-block surface (ADR 0015) so multimodal
-# consumers can send image/audio attachments. The default config ships
-# a vision projector (issue #30), so the v2 socket must be bound for
-# that capability to be reachable; a generation-only backend simply
-# advertises vision:false on the same socket.
+# v0.4 (ADR 0021): one generation surface on the neutral pipe
+# (\\.\pipe\inferd) carrying typed content blocks + attachments — the
+# old --v2 / --v2-addr flags are gone (v1 was folded into v2). The
+# default config ships a vision projector (issue #30); a
+# generation-only backend simply advertises vision:false on the same
+# socket. --embed binds the embeddings pipe when the backend supports it.
 $shortcutArgs = @(
     "--lock",       "`"$LockPath`"",
     "--pipe",       "`"$PipePath`"",
-    "--v2",
-    "--v2-addr",    "`"$V2PipePath`"",
     "--embed",
     "--embed-addr", "`"$EmbedPipePath`""
 ) -join " "
@@ -188,9 +187,8 @@ Write-Host "Done."
 Write-Host "  Binary:     $BinaryPath"
 Write-Host "  Shortcut:   $shortcutPath"
 Write-Host "  Logs:       $LogDir\inferd.ndjson"
-Write-Host "  Infer pipe:    $PipePath"
-Write-Host "  Infer v2 pipe: $V2PipePath"
-Write-Host "  Embed pipe:    $EmbedPipePath"
+Write-Host "  Generation pipe: $PipePath"
+Write-Host "  Embed pipe:      $EmbedPipePath"
 Write-Host ""
 Write-Host "On first boot the daemon writes %USERPROFILE%\.inferd\config.json"
 Write-Host "(if absent) and pulls the configured generate + embed models into"
