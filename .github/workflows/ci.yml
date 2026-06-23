@@ -262,6 +262,17 @@ jobs:
           install -m 644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
           # v0.4 (ADR 0021): the shipped unit binds the single generation
           # socket (inferd.sock) by default — no --v2 flag to flip on.
+          #
+          # This is a MOCK build (`cargo build -p inferd-daemon`, no
+          # llamacpp feature) on a GPU-less runner with no model. The
+          # shipped unit deliberately omits `--backend` (defers to
+          # ~/.inferd/config.json → real llamacpp backends + auto_pull).
+          # As of v0.4 the daemon REFUSES to start with no usable backend
+          # rather than silently serving mock (GA install=work hardening),
+          # so the smoke must ask for mock explicitly. Append it to the
+          # unit's first ExecStart line.
+          sed -i 's|\(ExecStart=%h/.local/bin/inferd-daemon\)|\1 --backend mock|' \
+            ~/.config/systemd/user/inferd.service
 
       - name: Start inferd via systemctl --user
         run: |
