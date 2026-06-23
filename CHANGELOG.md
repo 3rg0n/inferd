@@ -16,8 +16,48 @@ media carried as raw BLOB frames keyed by `attachment_id` instead of
 base64-in-JSON, and an in-band `wire_version` that fails loudly on
 mismatch (`wire_version_unsupported`). The full set of changes,
 removals, and fixes is itemised in the `[0.4.0-rc.1]`…`[0.4.0-rc.3]`
-sections below; this section ratifies that cumulative work — no code
-changes between `0.4.0-rc.3` and `0.4.0` beyond the version bump.
+sections below; this section ratifies that cumulative work. Between
+`0.4.0-rc.3` and `0.4.0`, beyond the version bump, the only changes are
+the documentation sweep, the `inferd-http` / no-network-listener
+decision (ADR 0022, docs + deprecation notes only — no runtime behaviour
+change), and two additive client conveniences; all itemised below.
+
+### Added
+
+- **`docs/protocol-v2.md`** — a normative, self-contained wire-protocol
+  specification (framing byte-layout, message catalogue, closed error
+  set, worked example, client-author invariants) so consumers can
+  implement middleware from the document rather than from sample code.
+  Validated by building a fresh client against the spec alone.
+- **Go client `DialInfer(ctx)`** — a portable, transport-agnostic dialer
+  for the platform-default generation socket (UDS on Unix, named pipe on
+  Windows), replacing TCP as the cross-platform one-liner in the docs.
+- **Go client `ErrV2WireVersionUnsupported`** — the `wire_version_unsupported`
+  error code was missing from the Go `ErrorCodeV2` constants; a Go
+  consumer could not name-match the v0.4 handshake's signature error.
+- **`inferdctl` crate README** — was absent (the crate shipped to
+  crates.io undocumented); now present and wired via `readme`.
+
+### Deprecated
+
+- **Inbound loopback TCP in the daemon** ([ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
+  The daemon binds no inbound network listener; `--tcp` / `INFERD_TCP`,
+  the first-frame `{"type":"auth"}` API-key path, and the client
+  `dial_tcp` / `DialTCP` constructors are **deprecated in v0.4.0 and
+  scheduled for removal in v0.4.1**. They remain in v0.4.x purely so the
+  cross-platform test harness keeps working; they are removed from all
+  user-facing surfaces (spec, READMEs, site, sample clients). Network
+  access is the separate `inferd-http` bridge's job ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md),
+  Surface B). This supersedes ADR 0009's loopback-TCP clause and
+  resolves ADR 0020's open question (option b).
+
+### Documentation
+
+- Refreshed all crate + client READMEs to v0.4 (version strings, the
+  removed v1 `generate` trait method, NDJSON→length-prefixed framing,
+  the canonical Go-client pointer for py/ts stubs).
+- GitHub Pages: added a "no network listener, even loopback" entry to the
+  "what it isn't" list; v0.4.0 version strings.
 
 ### Validation
 

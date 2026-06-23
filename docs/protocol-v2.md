@@ -1,0 +1,463 @@
+# inferd wire protocol — v2 generation + embeddings (normative spec)
+
+> **Status:** normative for inferd **v0.4.0**. This document is the
+> contract an implementer writes middleware against. Where this document
+> and the `inferd-proto` source disagree, the source
+> (`crates/inferd-proto/`) wins and this document is the bug — but CI
+> guards the message-body schemas against drift (see
+> [§9](#9-conformance-vectors)). Framing and sockets are specified by
+> [ADR 0021](adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)
+> (generation), [ADR 0017](adr/0017-embeddings-on-a-third-socket.md)
+> (embeddings), and [ADR 0009](adr/0009-pre-m1-open-questions-resolved.md)
+> (admin). `docs/protocol-v1.md` describes the **removed** v1 surface and
+> is historical only.
+
+This spec is written to be consumed whole — by a human or by a model
+asked to "write a client/middleware for inferd." It is self-contained:
+every type, every byte, and the enumerated error set are inline. The
+key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY**
+are used per [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
+
+---
+
+## 1. Surfaces, sockets, and discovery
+
+inferd exposes three IPC surfaces, each on its own endpoint. A daemon
+binds an inference surface **only when** the active backend advertises
+that capability, and binds the inference socket **only after** the
+backend reports `ready` (so a successful connect to a generation/embed
+socket is itself the readiness signal). The admin socket is bound early,
+during bring-up.
+
+| Surface    | Framing                          | Unix socket name      | Windows pipe                  |
+|------------|----------------------------------|-----------------------|-------------------------------|
+| generation | length-prefixed, type-tagged     | `inferd.sock`         | `\\.\pipe\inferd`             |
+| embeddings | NDJSON (newline-delimited JSON)  | `infer.embed.sock`    | `\\.\pipe\inferd-infer-embed` |
+| admin      | NDJSON                           | `admin.sock`          | `\\.\pipe\inferd-admin`       |
+
+A connection is a **stream** (`SOCK_STREAM` UDS on Unix, a named-pipe
+byte stream on Windows). The same connection MAY carry multiple
+sequential requests; responses for a request arrive before the next
+request's first response. There is no request multiplexing on a single
+connection — one in-flight request at a time per connection.
+
+The daemon binds **no inbound network listener** — it is reachable only
+over the local UDS / named pipe ([ADR 0022](adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
+Anything that needs to reach inferd over a network port goes through the
+separate `inferd-http` bridge ([ADR 0020](adr/0020-inferd-http-bridge-is-a-separate-process.md)),
+not the daemon.
+
+### 1.1 Unix socket path resolution
+
+On Unix the socket directory is resolved in this order, first hit wins:
+
+1. `$XDG_RUNTIME_DIR/inferd/<name>` (Linux, when systemd-logind set it)
+2. `$HOME/.inferd/run/<name>` (sessions without logind)
+3. `/tmp/inferd/<name>` (last resort)
+
+On macOS the directory is `${TMPDIR}/inferd/<name>`. On Windows the
+named pipes above are absolute.
+
+### 1.2 Transport security (informative)
+
+- UDS is mode `0660`, group `inferd-users`; the admin socket is `0600`.
+  Peer credentials (UID on Unix, SID on Windows) are enforced — the OS
+  attests who connected, so there is no in-band auth handshake to send.
+  A client connects and immediately sends its first request frame.
+- The daemon exposes no network transport, so there is no API-key or TLS
+  story at the daemon layer; that lives in the `inferd-http` bridge
+  (ADR 0020) for callers that need network access.
+
+---
+
+## 2. Generation framing (length-prefixed, type-tagged)
+
+Every frame on the **generation** socket is:
+
+```
+┌──────────────────┬──────────────┬────────────────────────┐
+│  payload_len      │  frame_type  │  payload                │
+│  uvarint (LEB128) │  1 byte      │  exactly payload_len B  │
+└──────────────────┴──────────────┴────────────────────────┘
+```
+
+- **`payload_len`** — unsigned LEB128 varint. Counts the bytes of
+  `payload` **only**; it does **NOT** include the `frame_type` byte. A
+  reader MUST cap the varint at **5 bytes** (64 MiB fits in 27 bits =
+  4 groups; 5 is the hard stop). A varint that does not terminate within
+  5 bytes is a malformed frame.
+- **`frame_type`** — exactly one byte:
+  - `0x01` = **JSON** — payload is UTF-8 JSON (a control frame: request,
+    response, or blob descriptor).
+  - `0x02` = **BLOB** — payload is raw bytes (decoded media), correlated
+    to an attachment by a preceding `attachment_blob` descriptor.
+  - Any other byte MUST be treated as a malformed frame; the reader
+    closes the connection.
+- **`payload`** — exactly `payload_len` bytes. No trailing delimiter.
+
+**Frame cap (THREAT_MODEL F-5):** `payload_len` MUST be `≤ 64 MiB`
+(`67108864`). A reader MUST check this against the decoded varint
+**before reading any payload byte** and MUST NOT allocate a payload
+buffer larger than the cap. On overflow the reader closes the connection
+— it MUST NOT attempt to resync, because the byte stream is no longer
+trustworthy.
+
+**Clean close:** EOF *before the first byte of `payload_len`* is a clean
+between-frames close. EOF anywhere after that (mid-varint, mid-type,
+mid-payload) is a malformed/truncated frame.
+
+Writers MUST flush per frame (or use an unbuffered writer) — consumers
+rely on per-frame visibility for streaming.
+
+### 2.1 LEB128 reference (the only non-JSON codec you must implement)
+
+```
+write_uvarint(n):
+    loop:
+        byte = n & 0x7F
+        n  >>= 7
+        if n != 0: byte |= 0x80     # continuation bit
+        emit byte
+        if n == 0: stop
+
+read_uvarint(stream):              # MUST stop after 5 bytes
+    value = 0; shift = 0
+    for i in 0..5:
+        b = read 1 byte            # EOF at i==0 → clean close
+        value |= (b & 0x7F) << shift
+        if (b & 0x80) == 0: return value
+        shift += 7
+    error: varint too long
+```
+
+---
+
+## 3. Generation request
+
+### 3.1 Connection lifecycle
+
+```
+client                              daemon
+  │ connect inferd.sock  ──────────►│   (connect succeeds ⇒ backend ready)
+  │ JSON frame: RequestV2 ─────────►│
+  │ [per attachment, in order:]     │
+  │   JSON frame: BlobDescriptor ──►│
+  │   BLOB frame: raw bytes ───────►│
+  │                                 │
+  │ ◄──── JSON frame: ResponseV2 {type:"frame"}   (0..N, streamed)
+  │ ◄──── JSON frame: ResponseV2 {type:"done" | "error"}  (exactly 1, terminal)
+```
+
+A request is: **one** JSON frame carrying `RequestV2`, then — for each
+attachment that carries bytes, **in the order they appear in
+`attachments[]`** — a JSON `BlobDescriptor` frame immediately followed by
+its `0x02` BLOB frame. Text-only requests send just the one JSON frame.
+
+The daemon streams zero or more `frame` responses, then exactly one
+terminal frame (`done` **or** `error`). After the terminal frame the
+connection MAY be reused for the next request.
+
+**Connection reuse:** after reading a terminal frame, a client MAY send
+another `RequestV2` (its own JSON frame + any BLOBs) on the same
+connection — the daemon loops back to reading the next request frame.
+There is no separator or reset between requests beyond the terminal
+frame of the previous one; the next `payload_len` varint begins
+immediately. Requests are strictly sequential — do not pipeline a second
+request before the first has terminated. A client that does not reuse the
+connection simply closes it after the terminal frame.
+
+**`stream` field:** `stream` controls only whether intermediate `frame`
+responses are emitted. With `stream: false` the daemon withholds the
+incremental `text`/`thinking` deltas and emits the terminal `done`
+(or `error`) frame alone; a `tool_use` block, being a complete unit, is
+still delivered as a `frame`. The terminal frame's `usage` and
+`stop_reason` are identical either way. Default (field omitted) is
+streaming.
+
+**Cancellation:** closing the connection cancels the in-flight job. The
+daemon does not retry or fail over (ADR 0007) — retry is the caller's
+responsibility.
+
+### 3.2 `RequestV2` (JSON)
+
+| Field          | JSON key        | Type                     | Required | Notes |
+|----------------|-----------------|--------------------------|----------|-------|
+| wire_version   | `wire_version`  | uint32                   | **yes**  | MUST be `1` for v0.4. A frame omitting it deserialises as `0` and is rejected. |
+| id             | `id`            | string                   | no\*     | Correlation id, echoed on every response frame. Omitted ⇒ empty string. \*Strongly recommended. |
+| messages       | `messages`      | array of `MessageV2`     | **yes**  | MUST be non-empty. |
+| attachments    | `attachments`   | array of `Attachment`    | no       | Metadata only — bytes ride in BLOB frames. Omit when text-only. |
+| tools          | `tools`         | array of `Tool`          | no       | Tool definitions in scope for this request. |
+| temperature    | `temperature`   | float                    | no       | Daemon applies the backend default if absent. |
+| top_p          | `top_p`         | float                    | no       | "" |
+| top_k          | `top_k`         | uint32                   | no       | "" |
+| max_tokens     | `max_tokens`    | uint32                   | no       | "" |
+| stream         | `stream`        | bool                     | no       | Defaults to streaming. |
+
+A parser **MUST ignore unknown top-level fields** (forward-compat).
+
+### 3.3 `MessageV2`
+
+```
+{ "role": "system" | "user" | "assistant", "content": [ ContentBlock, ... ] }
+```
+
+`content` MUST be non-empty. Roles are exactly `system`, `user`,
+`assistant` (lowercase). There is no `tool` role — a tool call is an
+`assistant` message containing a `tool_use` block, and a tool result is a
+`user` message containing a `tool_result` block (Anthropic shape).
+
+### 3.4 `ContentBlock` (tagged by `type`, snake_case)
+
+| `type`        | Fields                                            | Direction |
+|---------------|---------------------------------------------------|-----------|
+| `text`        | `text`: string                                    | request + response context |
+| `image`       | `attachment_id`: string                           | request |
+| `audio`       | `attachment_id`: string                           | request |
+| `video`       | `attachment_id`: string (reserved; daemons reject with `attachment_unsupported`) | request |
+| `tool_use`    | `tool_call_id`: string, `name`: string, `input`: JSON object | replayed assistant turns |
+| `tool_result` | `tool_call_id`: string, `content`: array of `ContentBlock` | request |
+
+An `attachment_id` on an `image`/`audio`/`video` block MUST match
+exactly one `Attachment.id` of the corresponding kind in the request's
+`attachments[]`. Unknown `type` values: a forward-compatible parser
+decodes them as an "unknown" block and ignores them rather than erroring
+at parse time; the daemon rejects a request only if it *needs* the
+unknown block to proceed.
+
+### 3.5 `Attachment` (tagged by `kind`, lowercase) — metadata only
+
+Raw bytes do **NOT** appear in this JSON. They travel in a BLOB frame
+(see §3.7). The consumer decodes media to raw bytes before sending — the
+daemon links no image/audio codec (ADR 0016).
+
+| `kind`  | Fields                                          | Bytes in the BLOB frame |
+|---------|-------------------------------------------------|-------------------------|
+| `image` | `id`: string, `width`: uint32, `height`: uint32 | `width*height*3` interleaved RGB octets (no alpha) |
+| `audio` | `id`: string, `sample_rate`: uint32 (Hz)        | little-endian float32 PCM samples |
+| `video` | `id`: string                                    | reserved; format TBD |
+
+`id` MUST be unique within a request.
+
+### 3.6 `Tool`
+
+```
+{ "name": string, "description": string, "input_schema": <JSON Schema object> }
+```
+
+`name` MUST be unique within a request. The daemon does **not** enforce
+`input_schema` against the model's emitted arguments — that is the
+consumer's responsibility when the `tool_use` result comes back.
+
+### 3.7 `BlobDescriptor` (JSON frame preceding each BLOB)
+
+```
+{ "type": "attachment_blob", "attachment_id": string, "len": uint64 }
+```
+
+`attachment_id` correlates the following `0x02` BLOB frame to an
+`Attachment.id` in the already-sent `RequestV2`. `len` is the byte length
+of that BLOB and SHOULD equal the BLOB's `payload_len`; a reader uses it
+as a sanity check.
+
+---
+
+## 4. Generation response
+
+Each response is a `0x01` JSON frame holding a `ResponseV2`, tagged by
+`type` (snake_case). The daemon emits 0..N `frame`s then exactly one
+terminal frame. A response frame on the generation socket is **always**
+type `0x01`; a `0x02` frame on the response stream is a protocol error.
+
+### 4.1 `frame` (streaming, non-terminal)
+
+```
+{ "id": string, "type": "frame", "block": ResponseBlock }
+```
+
+`ResponseBlock` is tagged by `type`:
+
+| `type`     | Fields                                                  | Meaning |
+|------------|---------------------------------------------------------|---------|
+| `text`     | `delta`: string                                         | Incremental user-visible text. Concatenate deltas for the full answer. |
+| `thinking` | `delta`: string                                         | Incremental reasoning trace, separated so middleware can show/hide/log it independently. |
+| `tool_use` | `tool_call_id`: string, `name`: string, `input`: JSON   | A **complete** tool-call request (not streamed). Usually followed by a `done` with `stop_reason: "tool_use"`. |
+
+### 4.2 `done` (terminal, success)
+
+```
+{
+  "id": string,
+  "type": "done",
+  "usage": { "input_tokens": uint32, "output_tokens": uint32 },
+  "stop_reason": "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" | "cancelled" | "error",
+  "backend": string
+}
+```
+
+`backend` is the serving adapter's name (e.g. `"llamacpp"`). It is
+**diagnostic only** — consumers MUST NOT branch on it (ADR 0007).
+
+### 4.3 `error` (terminal, failure)
+
+```
+{ "id": string, "type": "error", "code": ErrorCodeV2, "message": string }
+```
+
+`ErrorCodeV2` is one of the following (snake_case). This set is closed
+for v2.0; a consumer SHOULD treat an unrecognised code as a generic
+failure.
+
+| code                       | Meaning |
+|----------------------------|---------|
+| `queue_full`               | Admission queue full at submit time (non-blocking; caller may retry later). |
+| `backend_unavailable`      | Selected backend errored before/during generation. |
+| `invalid_request`          | Failed validation (bad shape, dangling `attachment_id`, empty messages/content, …). |
+| `frame_too_large`          | A frame exceeded the 64 MiB cap. |
+| `internal`                 | Daemon-side bug or unexpected condition. |
+| `attachment_unsupported`   | Backend can't handle the attachment kind/MIME (e.g. video today). |
+| `tool_call_malformed`      | Model emitted a tool-call sequence the daemon couldn't parse. |
+| `wire_version_unsupported` | Request's `wire_version` is not one this daemon speaks (see §6). `message` names both requested and supported versions. |
+
+---
+
+## 5. Worked example — one text request, on the wire
+
+A minimal text request (`max_tokens: 4`). Bytes shown as hex; `··`
+separates the three frame parts for readability only.
+
+**client → daemon** (one JSON frame):
+
+```
+payload (UTF-8 JSON):
+  {"wire_version":1,"id":"r1","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":4}
+
+on the wire:
+  6F ·· 01 ·· 7B 22 77 69 72 65 5F 76 65 72 73 69 6F 6E 22 3A 31 ...
+  └┬┘    └┬┘  └──────────────── payload, 0x6F = 111 bytes ─────────────►
+  len=111 type=JSON
+```
+
+(`0x6F` = 111; the JSON above is 111 bytes. `payload_len` does not count
+the `01` type byte.)
+
+**daemon → client** (streamed JSON frames, payloads shown):
+
+```
+{"id":"r1","type":"frame","block":{"type":"text","delta":"Hello"}}
+{"id":"r1","type":"frame","block":{"type":"text","delta":" there"}}
+{"id":"r1","type":"done","usage":{"input_tokens":12,"output_tokens":2},"stop_reason":"end_turn","backend":"llamacpp"}
+```
+
+For an **image** request the client would, after the `RequestV2` frame,
+send: a JSON frame `{"type":"attachment_blob","attachment_id":"img1","len":196608}`
+then a `0x02` BLOB frame of 196608 raw RGB bytes (256×256×3).
+
+---
+
+## 6. The `wire_version` handshake
+
+There is **no** separate negotiation round-trip. The client stamps
+`wire_version` (currently `1`) on every `RequestV2`. The daemon checks it
+against the version it speaks **before** dispatching:
+
+- Match → normal processing.
+- Mismatch (including `0`, i.e. the field was omitted / a pre-v0.4
+  client) → the daemon emits **exactly one** terminal `error` frame with
+  `code: "wire_version_unsupported"` and **closes the connection**. It
+  MUST NOT parse the request body or hang.
+
+A v0.3 client does **not** interoperate with a v0.4 daemon — the framing
+itself changed. Upgrade both together. Within v2, changes are
+backwards-additive only (new optional fields, ignored by older peers); a
+breaking change bumps `wire_version` so the mismatch fails loudly rather
+than corrupting the stream (ADR 0021).
+
+---
+
+## 7. Embeddings surface (NDJSON)
+
+The embeddings socket uses **newline-delimited JSON**, not the
+length-prefixed framing: each frame is one JSON object terminated by
+`\n`. The 64 MiB cap is enforced on the line length. One request → one
+terminal response (embeddings are not streamed); the connection MAY be
+reused.
+
+**request** (`EmbedRequest`):
+
+```
+{ "id": string, "input": [string, ...], "dimensions"?: uint32, "task"?: EmbedTask }
+```
+
+- `input` MUST be non-empty and each entry MUST be non-empty.
+  `embeddings[i]` corresponds to `input[i]`.
+- `dimensions` — Matryoshka truncation length. EmbeddingGemma supports
+  `768 | 512 | 256 | 128`; the backend validates and rejects with
+  `invalid_request` otherwise. Omit for the model default.
+- `task` — task-prefix hint, one of: `retrieval_query`,
+  `retrieval_document`, `similarity`, `classification`, `clustering`,
+  `question_answering`, `fact_verification`, `code_retrieval_query`. An
+  unknown task value is rejected with `invalid_request`. The daemon
+  applies the engine-specific prefix on the consumer's behalf (ADR 0013).
+
+**response** (`EmbedResponse`, tagged by `type`):
+
+```
+// success
+{ "type": "embeddings", "id": string, "embeddings": [[f32, ...], ...],
+  "dimensions": uint32, "model": string,
+  "usage": { "input_tokens": uint32 }, "backend": string }
+
+// failure
+{ "type": "error", "id": string, "code": EmbedErrorCode, "message": string }
+```
+
+`EmbedErrorCode` ∈ { `queue_full`, `backend_unavailable`,
+`invalid_request`, `frame_too_large`, `internal`, `embed_unsupported` }.
+`embed_unsupported` is a fail-safe — the embed socket should not have
+been bound for a generation-only backend.
+
+---
+
+## 8. Reference implementations
+
+- **Rust:** `inferd-client` (`crates/inferd-client/`) —
+  `ClientV2` + `EmbedClient`. The wire types are `inferd-proto`
+  (`crates/inferd-proto/src/v2/` and `.../embed/`), which this document
+  mirrors.
+- **Go:** `clients/go/` — the canonical non-Rust reference. The frame
+  codec is `clients/go/client_v2.go`; the message types are
+  `clients/go/protocol_v2.go`. ~440 lines total: a complete, idiomatic
+  implementation of everything above.
+
+When in doubt, read the Go codec — it is small and exercised by CI
+against the live daemon.
+
+---
+
+## 9. Conformance vectors
+
+A future revision will ship `docs/protocol-vectors.json`: `input → exact
+wire bytes` pairs an implementer can assert their codec against,
+generated from `inferd-proto` so they never drift. Until then, the Go
+client's round-trip tests (`clients/go/client_v2_test.go`) are the
+executable conformance reference. The message-body schemas in this
+document are kept honest against the Rust types by the
+`inferd-proto` test suite; the framing is covered by the
+`frame.rs` unit tests (`lp_tests`).
+
+---
+
+## 10. Invariants a client author must respect
+
+1. Stamp `wire_version = 1` on every request; expect a loud
+   `wire_version_unsupported` error + close on mismatch.
+2. Enforce the 64 MiB cap on the **length prefix**, before allocating.
+3. One in-flight request per connection; read until a terminal frame
+   (`done`/`error` for generation, `embeddings`/`error` for embed).
+4. Ignore unknown JSON fields and unknown `type`/`kind`/`code` values
+   (forward-compat) — do not hard-error on them.
+5. Send attachment BLOBs in `attachments[]` order, each preceded by its
+   descriptor; send raw decoded bytes, never base64.
+6. Retry/fallback is yours — the daemon never retries, degrades, or
+   fails over (ADR 0007). A dropped connection cancels the job.
+7. `backend` is diagnostic; never branch on it.

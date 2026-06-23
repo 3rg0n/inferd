@@ -216,8 +216,9 @@ const (
 	StopV2Error      StopReasonV2 = "error"
 )
 
-// ErrorCodeV2 classifies v2 error frames (ADR 0015). Superset of the v1
-// ErrorCode taxonomy.
+// ErrorCodeV2 classifies v2 error frames (ADR 0015, extended by
+// ADR 0021). Superset of the v1 ErrorCode taxonomy. Must stay in sync
+// with the Rust `ErrorCodeV2` enum in inferd-proto's v2/response.rs.
 type ErrorCodeV2 string
 
 const (
@@ -228,6 +229,10 @@ const (
 	ErrV2Internal              ErrorCodeV2 = "internal"
 	ErrV2AttachmentUnsupported ErrorCodeV2 = "attachment_unsupported"
 	ErrV2ToolCallMalformed     ErrorCodeV2 = "tool_call_malformed"
+	// ErrV2WireVersionUnsupported is returned when the daemon does not
+	// speak the request's wire_version (ADR 0021). The terminal error
+	// frame's Message names both the requested and supported versions.
+	ErrV2WireVersionUnsupported ErrorCodeV2 = "wire_version_unsupported"
 )
 
 // UsageV2 is the token-count report on a v2 done frame. Field names

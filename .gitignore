@@ -55,3 +55,6 @@ secrets.yaml
 # Coverage / profiling
 *.profraw
 /coverage/
+
+# transient spec-validation harness (not shipped)
+tmp-spec-validation/

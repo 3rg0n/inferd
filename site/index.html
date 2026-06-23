@@ -276,6 +276,7 @@ powershell -ExecutionPolicy Bypass `
       inferd has a deliberately small surface. The list of things it will never do is part of the design. These are not feature gaps; they are scope decisions.
     </p>
     <ul class="never">
+      <li><span class="never-tag">never</span> A network listener of any kind. No inbound TCP, even on loopback — the daemon binds only a Unix socket or named pipe. Reaching inferd over the network is a separate bridge process's job.</li>
       <li><span class="never-tag">never</span> An HTTP server. IPC only.</li>
       <li><span class="never-tag">never</span> An OpenAI-compatible surface in the daemon. Build it as a separate process if you want one.</li>
       <li><span class="never-tag">never</span> Per-request backend override on the wire. Operators choose backends, callers don't.</li>

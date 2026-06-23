@@ -8,6 +8,15 @@ import (
 	"net"
 )
 
+// DialInfer opens a connection to the daemon's generation socket at the
+// platform-default path. On Unix that is the UDS at DefaultInferAddr();
+// on Windows the equivalent dials the named pipe. Use this for
+// portable, transport-agnostic code; reach for DialUDS / DialPipe only
+// when you need a non-default path.
+func DialInfer(ctx context.Context) (*Client, error) {
+	return DialUDS(ctx, DefaultInferAddr())
+}
+
 // DialUDS opens a Unix domain socket connection to the inferd daemon.
 // Unix-only; on Windows use DialPipe.
 func DialUDS(ctx context.Context, path string) (*Client, error) {
