@@ -16,9 +16,10 @@ import (
 )
 
 // TestEndToEndAgainstDaemon launches the Rust daemon binary with the
-// mock backend over TCP, sends one request, and verifies the response
-// matches what the daemon's Mock emits. Skips when the binary isn't
-// built (set INFERD_DAEMON_BIN to override the path).
+// mock backend over the default transport (named pipe on Windows, UDS on Unix),
+// sends one request, and verifies the response matches what the daemon's Mock
+// emits. Skips when the binary isn't built (set INFERD_DAEMON_BIN to override
+// the path).
 func TestEndToEndAgainstDaemon(t *testing.T) {
 	bin := os.Getenv("INFERD_DAEMON_BIN")
 	if bin == "" {
@@ -34,16 +35,7 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	lock := filepath.Join(tmp, "inferd.lock")
 	logDir := filepath.Join(tmp, "logs")
 	adminSock := testAdminAddr(tmp)
-
-	// Pick a free port for the daemon to bind by asking the OS for one
-	// then immediately closing — small TOCTOU window but fine for a
-	// local test.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("probe port: %v", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
+	inferSock := testInferAddr(tmp)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -51,7 +43,8 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	cmd := exec.CommandContext(ctx, bin,
 		"--backend", "mock",
 		"--lock", lock,
-		"--tcp", addr,
+		testInferFlag(),
+		inferSock,
 		"--admin-addr", adminSock,
 	)
 	cmd.Env = append(os.Environ(),
@@ -85,13 +78,13 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	var client *inferd.Client
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		c, dialErr := inferd.DialTCP(ctx, addr)
+		c, dialErr := inferd.DialInfer(ctx)
 		if dialErr == nil {
 			client = c
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("daemon never bound %s: %v", addr, dialErr)
+			t.Fatalf("daemon never bound: %v", dialErr)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -144,6 +137,26 @@ func testAdminAddr(tmp string) string {
 		return fmt.Sprintf(`\\.\pipe\inferd-test-admin-%d`, os.Getpid())
 	}
 	return filepath.Join(tmp, "admin.sock")
+}
+
+// testInferFlag returns the CLI flag for the test daemon's inference socket
+// (--uds on Unix, --pipe on Windows).
+func testInferFlag() string {
+	if runtime.GOOS == "windows" {
+		return "--pipe"
+	}
+	return "--uds"
+}
+
+// testInferAddr returns a per-test inference endpoint path that the daemon can
+// bind without requiring root. On Windows it must be a named-pipe path.
+func testInferAddr(tmp string) string {
+	if runtime.GOOS == "windows" {
+		// Named pipe names are globally unique; embed the pid so parallel
+		// test runs don't collide.
+		return fmt.Sprintf(`\\.\pipe\inferd-test-infer-%d`, os.Getpid())
+	}
+	return filepath.Join(tmp, "inferd.sock")
 }
 
 func defaultDaemonBin(t *testing.T) string {

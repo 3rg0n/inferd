@@ -20,7 +20,6 @@
 //!   6. Emit a single `EmbedResponse::Embeddings` or
 //!      `EmbedResponse::Error` frame, then loop for the next request.
 
-use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
 use crate::queue::SubmitError;
@@ -61,26 +60,6 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
     let (read_half, write_half) = tokio::io::split(&mut conn);
     let mut reader = BufReader::with_capacity(64 * 1024, read_half);
     let writer = Arc::new(Mutex::new(write_half));
-
-    // F-8 first-frame auth on TCP, identical to v1 / v2.
-    if transport == "tcp"
-        && let Some(expected) = ctx.expected_api_key.as_deref()
-    {
-        match read_auth_frame(&mut reader).await {
-            Some(frame) if key_matches(&frame.key, expected) => {
-                debug!(transport, "embed tcp auth ok");
-            }
-            _ => {
-                warn!(
-                    target: "inferd_daemon::activity",
-                    peer = %peer,
-                    wire_version = "embed",
-                    "embed_tcp_auth_rejected"
-                );
-                return Ok(());
-            }
-        }
-    }
 
     loop {
         let request: EmbedRequest = match read_request_embed(&mut reader).await {
@@ -225,35 +204,6 @@ fn error_code_for(e: &ProtoError) -> EmbedErrorCode {
     }
 }
 
-async fn read_auth_frame<R>(reader: &mut R) -> Option<AuthFrame>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-    let mut line = Vec::with_capacity(256);
-    let limit = inferd_proto::MAX_FRAME_BYTES;
-    loop {
-        let buf = reader.fill_buf().await.ok()?;
-        if buf.is_empty() {
-            return None;
-        }
-        if let Some(idx) = buf.iter().position(|&b| b == b'\n') {
-            if line.len() + idx > limit {
-                return None;
-            }
-            line.extend_from_slice(&buf[..idx]);
-            reader.consume(idx + 1);
-            return AuthFrame::from_json(&line);
-        }
-        if line.len() + buf.len() > limit {
-            return None;
-        }
-        line.extend_from_slice(buf);
-        let n = buf.len();
-        reader.consume(n);
-    }
-}
-
 async fn read_request_embed<R>(reader: &mut R) -> Result<Option<EmbedRequest>, ProtoError>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -299,36 +249,6 @@ async fn write_response_embed<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
-/// Serve an embed TCP listener.
-pub async fn serve_tcp_embed(
-    listener: tokio::net::TcpListener,
-    router: Arc<Router>,
-    ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
-) -> io::Result<()> {
-    info!(addr = ?listener.local_addr()?, "embed tcp listener accepting");
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("embed tcp shutdown signalled");
-                return Ok(());
-            }
-            accept = listener.accept() => {
-                let (stream, peer_addr) = accept?;
-                let peer = PeerIdentity::from_tcp(peer_addr);
-                let r = Arc::clone(&router);
-                let ctx = ctx.clone();
-                debug!(?peer_addr, "embed tcp accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_embed_connection(stream, r, peer, ctx).await {
-                        warn!(error = ?e, "embed connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
-}
-
 /// Serve an embed Unix domain socket listener.
 #[cfg(unix)]
 pub async fn serve_uds_embed(
@@ -346,7 +266,6 @@ pub async fn serve_uds_embed(
             }
             accept = listener.accept() => {
                 let (stream, _) = accept?;
-                let r = Arc::clone(&router);
                 let peer = crate::peercred::unix::from_stream(&stream)
                     .unwrap_or_else(|e| {
                         warn!(error = %e, "embed SO_PEERCRED failed; recording empty unix identity");
@@ -356,6 +275,7 @@ pub async fn serve_uds_embed(
                             transport: "unix",
                         }
                     });
+                let r = Arc::clone(&router);
                 let ctx = ctx.clone();
                 debug!(?peer, "embed uds accept");
                 tokio::spawn(async move {
@@ -397,7 +317,7 @@ pub async fn serve_named_pipe_embed(
                         warn!(error = %e, "embed GetNamedPipeClientProcessId failed; empty pipe identity");
                         crate::peercred::PeerIdentity {
                             uid: None, gid: None, pid: None,
-                            sid: None, remote_addr: None,
+                            sid: None,
                             transport: "pipe",
                         }
                     });

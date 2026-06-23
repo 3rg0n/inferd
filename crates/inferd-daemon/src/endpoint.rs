@@ -16,13 +16,8 @@
 //! the daemon is willing to accept work.
 
 use std::io;
-use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
-
-/// Default loopback port for the optional TCP transport.
-pub const DEFAULT_TCP_ADDR: &str = "127.0.0.1:47321";
 
 /// Default admin endpoint per platform, per `docs/protocol-v1.md`
 /// §"Admin endpoint".
@@ -149,17 +144,11 @@ pub fn linux_runtime_path(leaf: &str) -> std::path::PathBuf {
 }
 
 /// Trait abstracting an accepted connection so the lifecycle can speak to
-/// either a Unix-socket stream or a TCP stream uniformly.
+/// either a Unix-socket stream or a named-pipe uniformly.
 pub trait Connection: AsyncRead + AsyncWrite + Unpin + Send {
-    /// Stable string identifying the transport ("unix"/"tcp"). Used for
+    /// Stable string identifying the transport ("unix"/"pipe"). Used for
     /// activity-log attribution; not echoed on the wire.
     fn transport(&self) -> &'static str;
-}
-
-impl Connection for TcpStream {
-    fn transport(&self) -> &'static str {
-        "tcp"
-    }
 }
 
 #[cfg(unix)]
@@ -167,20 +156,6 @@ impl Connection for tokio::net::UnixStream {
     fn transport(&self) -> &'static str {
         "unix"
     }
-}
-
-/// Bind a loopback TCP listener at `addr`.
-///
-/// `addr` must parse as a `SocketAddr`. By convention the daemon binds
-/// `127.0.0.1` only — operators wanting a different bind have to opt in
-/// explicitly via configuration. We do not attempt to enforce loopback-only
-/// here because that's a config-layer decision; the threat model documents
-/// the consequence (F-8) when an operator chooses non-loopback.
-pub async fn bind_tcp(addr: &str) -> io::Result<TcpListener> {
-    let parsed: SocketAddr = addr
-        .parse()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad tcp addr: {e}")))?;
-    TcpListener::bind(parsed).await
 }
 
 /// Bind a Unix domain socket at `path` with mode `0660` and the given group
@@ -370,34 +345,6 @@ fn chown_to_group(path: &Path, group_name: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn bind_tcp_accepts_a_connection() {
-        let listener = bind_tcp("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4];
-            sock.read_exact(&mut buf).await.unwrap();
-            assert_eq!(&buf, b"ping");
-            sock.write_all(b"pong").await.unwrap();
-        });
-
-        let mut client = TcpStream::connect(addr).await.unwrap();
-        client.write_all(b"ping").await.unwrap();
-        let mut buf = [0u8; 4];
-        client.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"pong");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bind_tcp_rejects_garbage_addr() {
-        let err = bind_tcp("not-an-addr").await.unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    }
 
     #[cfg(unix)]
     #[tokio::test]

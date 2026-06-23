@@ -15,7 +15,6 @@
 //!   the API-key auth that gives TCP its real perimeter.
 
 use std::fmt;
-use std::net::SocketAddr;
 
 /// Identity of the process on the other end of an IPC connection.
 ///
@@ -32,25 +31,8 @@ pub struct PeerIdentity {
     pub pid: Option<u32>,
     /// User SID on Windows; `None` elsewhere.
     pub sid: Option<String>,
-    /// Remote socket address for TCP; `None` elsewhere.
-    pub remote_addr: Option<SocketAddr>,
     /// Stable transport name: `"unix"` / `"pipe"` / `"tcp"`.
     pub transport: &'static str,
-}
-
-impl PeerIdentity {
-    /// Synthesise a TCP identity from a peer socket address. There's
-    /// no kernel attestation; this exists for log correlation only.
-    pub fn from_tcp(remote: SocketAddr) -> Self {
-        Self {
-            uid: None,
-            gid: None,
-            pid: None,
-            sid: None,
-            remote_addr: Some(remote),
-            transport: "tcp",
-        }
-    }
 }
 
 impl fmt::Display for PeerIdentity {
@@ -68,10 +50,6 @@ impl fmt::Display for PeerIdentity {
                 self.sid.as_deref().unwrap_or("?"),
                 self.pid.map(|p| p as i64).unwrap_or(-1),
             ),
-            "tcp" => match self.remote_addr {
-                Some(addr) => write!(f, "tcp:{addr}"),
-                None => write!(f, "tcp:?"),
-            },
             other => write!(f, "{other}:?"),
         }
     }
@@ -191,7 +169,6 @@ pub mod windows {
             gid: None,
             pid: Some(pid),
             sid,
-            remote_addr: None,
             transport: "pipe",
         })
     }
@@ -268,15 +245,8 @@ pub mod windows {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
-    use std::net::Ipv4Addr;
-
-    #[test]
-    fn tcp_identity_displays_remote_addr() {
-        let id = PeerIdentity::from_tcp(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 12345));
-        assert_eq!(id.transport, "tcp");
-        assert_eq!(format!("{id}"), "tcp:127.0.0.1:12345");
-    }
 
     #[cfg(unix)]
     #[tokio::test]
