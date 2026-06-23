@@ -4,7 +4,7 @@
 //! `inferdctl` binary is what operators and consumers run from a
 //! shell.
 //!
-//! v0.1 subcommand surface:
+//! Subcommand surface:
 //!
 //! - `inferdctl status`  — one-shot admin snapshot (the current
 //!   lifecycle state) as JSON. Exits 0 on `ready`, non-zero
@@ -20,13 +20,9 @@
 //!   list of "what's there / what's missing" so consumers can
 //!   debug install issues.
 //!
-//! Planned but not in v0.1: `inferdctl -p "hello world"` — connect
-//! to the running daemon, send a one-shot prompt, stream tokens
-//! to stdout. Replaces the previously-scaffolded `inferd-stdio`
-//! crate (one binary, many shapes — gh / kubectl pattern).
-//!
-//! Out of scope for v0.1: `gc`, TCP API-key handling, per-
-//! platform packaging concerns.
+//! Planned for a future release: `inferdctl -p "hello world"` —
+//! connect to the running daemon, send a one-shot prompt, stream
+//! tokens to stdout (one binary, many shapes — gh / kubectl pattern).
 
 use clap::{Parser, Subcommand};
 use inferd_client::AdminClient;
@@ -55,7 +51,7 @@ struct Cli {
     config: Option<PathBuf>,
 
     /// Override admin-socket address. Defaults to the platform-
-    /// specific path per `docs/protocol-v1.md` §"Admin endpoint".
+    /// specific path from `inferd_daemon::endpoint::default_admin_addr()`.
     #[arg(long, env = "INFERD_ADMIN_ADDR", global = true)]
     admin_addr: Option<PathBuf>,
 }

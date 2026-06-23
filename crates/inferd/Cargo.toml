@@ -1,6 +1,7 @@
 [package]
 name = "inferdctl"
 description = "Single CLI binary for inferd: status / watch / pull / doctor today; -p prompt mode in a future release. Same gh / kubectl shape — one tool, many subcommands."
+readme                 = "README.md"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
