@@ -7,21 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-23
+
+The v0.4 line: a **unified IPC wire format** ([ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)).
+One generation API (v1 folded into v2, the v1 socket + types removed),
+length-prefixed type-tagged framing replacing newline-delimited JSON,
+media carried as raw BLOB frames keyed by `attachment_id` instead of
+base64-in-JSON, and an in-band `wire_version` that fails loudly on
+mismatch (`wire_version_unsupported`). The full set of changes,
+removals, and fixes is itemised in the `[0.4.0-rc.1]`…`[0.4.0-rc.3]`
+sections below; this section ratifies that cumulative work — no code
+changes between `0.4.0-rc.3` and `0.4.0` beyond the version bump.
+
 ### Validation
 
-- **macOS arm64 Metal — Gate 1 + W1/W3/W4 green from rc.3 release tarball
-  (2026-06-23):** `install-launchagent.sh` from the
-  `inferd-v0.4.0-rc.3-aarch64-apple-darwin.tar.gz` tarball (SHA256
-  verified) → daemon `0.4.0-rc.3`, socket `${TMPDIR}/inferd/inferd.sock`,
-  no `--v2` flags. `inferdctl doctor` (rc.3): `status=ready`,
-  `wire_version=1`, `accelerator=metal`, `device=MTL0 vram=11.8 GiB` on
-  both backends (gemma-4-e4b + embeddinggemma-300m). Real embed (256-dim
-  vector). W1: `go test ./...` 15 pass / 2 skipped (linux-only). W3:
-  `end_to_end_real_inference_over_tcp` green (5.1s). W4:
-  `v2_image_attachment_round_trips` green (33.3s) — 256×256 raw RGB image
-  through mtmd BLOB path on Metal, no base64, `input_tokens > 50`
-  confirmed. macOS tarball install=work is now fully validated.
-  See `docs/v0.4-validation.md`.
+install=work + wire e2e validated from the **release tarballs** on every
+shipped target (`docs/v0.4-validation.md`), all on real hardware:
+
+- **Windows x86_64 (CUDA, RTX 5080):** `install.ps1` from the tarball →
+  `status=ready`, `wire_version=1`, `accelerator=cuda` → real generate +
+  embed. Both upgrade-over-prior-install and fresh-from-nothing
+  (auto-pull ~6 GB → ready) paths.
+- **Linux x86_64 (CUDA, RTX 5080 via WSL):** same, upgrade + fresh.
+- **Linux x86_64 (CPU, no-GPU container):** ADR 0019 probe falls back to
+  `accelerator=cpu` on a GPU-less host → real generate + embed.
+- **macOS arm64 (Metal, Apple M1):** `install-launchagent.sh` from the
+  tarball → `accelerator=metal` → real generate + embed; W4 multimodal
+  (image through the mtmd BLOB path, no base64) green.
+- **Gate 2 wire** (W1 cross-language Go round-trip, W2 `wire_version`
+  mismatch fails loudly, W3 real-model text, W4 raw-BLOB multimodal)
+  green across the platforms above.
+
+Three Windows-installer install=work bugs were found and fixed by
+running the real install path from rc.2 tarballs (stale `--v2` flags,
+upgrade-over-running-daemon, uninstall-before-handle-release); rc.3
+shipped the fixes and re-proved install from its own tarballs.
 
 ## [0.4.0-rc.3] - 2026-06-22
 
