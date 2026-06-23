@@ -1,0 +1,27 @@
+crates/inferd/README.md
+  s_126aec4081f728::t_8633cc06856e4f 1-53
+crates/inferd-daemon/README.md
+  s_126aec4081f728::t_2f429f9edce62a 4-7
+clients/ts/README.md
+  s_126aec4081f728::t_10e30bb048d2b2 5-7,9-12
+clients/py/README.md
+  s_126aec4081f728::t_35a0e11a3652db 5-7,11-12
+crates/inferd/Cargo.toml
+  s_126aec4081f728::t_2d74a3073447ef 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "fed228dddca7d8cca5faf6189e43e19b9ce21ac3",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
