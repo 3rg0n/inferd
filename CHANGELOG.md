@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — Gate 1 + W1/W3/W4 green from rc.3 release tarball
+  (2026-06-23):** `install-launchagent.sh` from the
+  `inferd-v0.4.0-rc.3-aarch64-apple-darwin.tar.gz` tarball (SHA256
+  verified) → daemon `0.4.0-rc.3`, socket `${TMPDIR}/inferd/inferd.sock`,
+  no `--v2` flags. `inferdctl doctor` (rc.3): `status=ready`,
+  `wire_version=1`, `accelerator=metal`, `device=MTL0 vram=11.8 GiB` on
+  both backends (gemma-4-e4b + embeddinggemma-300m). Real embed (256-dim
+  vector). W1: `go test ./...` 15 pass / 2 skipped (linux-only). W3:
+  `end_to_end_real_inference_over_tcp` green (5.1s). W4:
+  `v2_image_attachment_round_trips` green (33.3s) — 256×256 raw RGB image
+  through mtmd BLOB path on Metal, no base64, `input_tokens > 50`
+  confirmed. macOS tarball install=work is now fully validated.
+  See `docs/v0.4-validation.md`.
+
 ## [0.4.0-rc.3] - 2026-06-22
 
 Third v0.4 release candidate. rc.2 built green on all 4 platforms, but
