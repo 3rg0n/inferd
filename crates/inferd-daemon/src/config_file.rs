@@ -149,8 +149,8 @@ pub struct ConfigFile {
 }
 
 /// Operator-declared listener overrides. Every field is optional.
-/// TCP is **off by default** — set `tcp:` (and `tcp_v2:` if running
-/// with v2) to opt in for cross-VM use cases (WSL ↔ Windows host,
+/// TCP is **off by default** — set `tcp:` (generation) and/or
+/// `tcp_embed:` to opt in for cross-VM use cases (WSL ↔ Windows host,
 /// podman-on-machine, …) where Unix sockets / named pipes don't
 /// cross the boundary cleanly. Mirrors the security shape of
 /// `openai-compat`: the API key is referenced by env-var **name**,
@@ -165,11 +165,6 @@ pub struct ListenConfig {
     /// `tcp:` is ignored with a one-line warning at startup.
     #[serde(default)]
     pub tcp: Option<String>,
-
-    /// Loopback TCP bind address for the v2 inference socket. Has
-    /// no effect unless `--v2` is also set on the CLI.
-    #[serde(default)]
-    pub tcp_v2: Option<String>,
 
     /// Loopback TCP bind address for the embed socket per ADR 0017.
     /// Has no effect unless `--embed` is also set on the CLI and the
@@ -647,13 +642,6 @@ impl ConfigFile {
             {
                 return Err(ConfigError::Invalid(
                     "listen.tcp must not be empty when set".into(),
-                ));
-            }
-            if let Some(addr) = &listen.tcp_v2
-                && addr.trim().is_empty()
-            {
-                return Err(ConfigError::Invalid(
-                    "listen.tcp_v2 must not be empty when set".into(),
                 ));
             }
             if let Some(addr) = &listen.tcp_embed
@@ -1264,7 +1252,6 @@ mod tests {
             },
             "listen": {
                 "tcp": "127.0.0.1:9090",
-                "tcp_v2": "127.0.0.1:9091",
                 "api_key_env": "INFERD_TCP_API_KEY"
             }
         }"#;
@@ -1272,7 +1259,6 @@ mod tests {
         let cfg = ConfigFile::load(f.path()).unwrap();
         let listen = cfg.listen.as_ref().expect("listen present");
         assert_eq!(listen.tcp.as_deref(), Some("127.0.0.1:9090"));
-        assert_eq!(listen.tcp_v2.as_deref(), Some("127.0.0.1:9091"));
         assert_eq!(listen.api_key_env.as_deref(), Some("INFERD_TCP_API_KEY"));
     }
 

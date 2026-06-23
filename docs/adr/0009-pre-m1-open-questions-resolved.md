@@ -1,6 +1,6 @@
 # 0009. Pre-M1 open questions resolved
 
-- Status: accepted
+- Status: accepted; "no in-band version negotiation" superseded by [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) (in-band `wire_version` added in v0.4 when generation folded to one socket)
 - Date: 2026-05-15
 
 ## Context

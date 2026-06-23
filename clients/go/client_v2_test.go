@@ -1,8 +1,11 @@
 package inferd_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -10,11 +13,47 @@ import (
 	inferd "github.com/3rg0n/inferd/clients/go"
 )
 
-// TestV2MultimodalRoundTrip exercises the v2 request/response shapes
-// against a hand-rolled NDJSON peer: a text + image-attachment request
-// in, a streamed text frame + done out. Proves the Go v2 types
-// serialise to the wire format the Rust inferd-proto v2 module expects,
-// without needing the daemon binary (issue #31).
+const (
+	tFrameJSON byte = 0x01
+	tFrameBlob byte = 0x02
+)
+
+// srvReadFrame reads one length-prefixed, type-tagged frame on the test
+// server side, mirroring the client's writer (ADR 0021).
+func srvReadFrame(t *testing.T, r *bufio.Reader) (byte, []byte) {
+	t.Helper()
+	length, err := binary.ReadUvarint(r)
+	if err != nil {
+		t.Errorf("read frame length: %v", err)
+		return 0, nil
+	}
+	ftype, err := r.ReadByte()
+	if err != nil {
+		t.Errorf("read frame type: %v", err)
+		return 0, nil
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		t.Errorf("read frame payload: %v", err)
+		return 0, nil
+	}
+	return ftype, payload
+}
+
+func srvWriteJSONFrame(w net.Conn, v any) {
+	body, _ := json.Marshal(v)
+	var prefix [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(prefix[:], uint64(len(body)))
+	_, _ = w.Write(prefix[:n])
+	_, _ = w.Write([]byte{tFrameJSON})
+	_, _ = w.Write(body)
+}
+
+// TestV2MultimodalRoundTrip exercises the v2 length-prefixed framing
+// (ADR 0021): a text + image-attachment request in (request JSON frame
+// + blob descriptor frame + raw BLOB frame), a streamed text frame +
+// done out. Proves the Go client's wire bytes match what the daemon
+// expects, without needing the daemon binary (issue #31, #34).
 func TestV2MultimodalRoundTrip(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -31,15 +70,22 @@ func TestV2MultimodalRoundTrip(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+		br := bufio.NewReader(conn)
 
-		buf := make([]byte, 1<<16)
-		n, _ := conn.Read(buf)
+		// 1. Request JSON frame.
+		ftype, payload := srvReadFrame(t, br)
+		if ftype != tFrameJSON {
+			t.Errorf("request frame type = 0x%02x, want JSON", ftype)
+			return
+		}
 		var got inferd.RequestV2
-		if err := json.Unmarshal(trimNewline(buf[:n]), &got); err != nil {
+		if err := json.Unmarshal(payload, &got); err != nil {
 			t.Errorf("decode v2 request: %v", err)
 			return
 		}
-		// Validate the wire shape the daemon would see.
+		if got.WireVersion != inferd.WireVersion {
+			t.Errorf("wire_version = %d, want %d", got.WireVersion, inferd.WireVersion)
+		}
 		if got.ID != "v2-1" || len(got.Messages) != 1 {
 			t.Errorf("unexpected request envelope: %+v", got)
 		}
@@ -58,18 +104,43 @@ func TestV2MultimodalRoundTrip(t *testing.T) {
 			return
 		}
 		att := got.Attachments[0]
+		// Bytes are out-of-band (json:"-"), so the request JSON has none.
 		if att.Kind != inferd.AttachmentImage || att.ID != "img" ||
-			att.Width != 2 || att.Height != 2 || att.Bytes == "" {
+			att.Width != 2 || att.Height != 2 || len(att.Bytes) != 0 {
 			t.Errorf("unexpected attachment: %+v", att)
 		}
 
-		// Reply with one text frame and one done (mirrors what the
-		// daemon emits: {"type":"frame","block":{"type":"text",...}}).
-		writeV2(conn, inferd.ResponseV2{
+		// 2. Blob descriptor JSON frame.
+		ftype, payload = srvReadFrame(t, br)
+		if ftype != tFrameJSON {
+			t.Errorf("descriptor frame type = 0x%02x, want JSON", ftype)
+			return
+		}
+		var desc inferd.BlobDescriptor
+		if err := json.Unmarshal(payload, &desc); err != nil {
+			t.Errorf("decode blob descriptor: %v", err)
+			return
+		}
+		if desc.Type != "attachment_blob" || desc.AttachmentID != "img" || desc.Len != 12 {
+			t.Errorf("unexpected descriptor: %+v", desc)
+		}
+
+		// 3. BLOB frame with the raw 2x2x3 RGB bytes.
+		ftype, blob := srvReadFrame(t, br)
+		if ftype != tFrameBlob {
+			t.Errorf("blob frame type = 0x%02x, want BLOB", ftype)
+			return
+		}
+		if uint64(len(blob)) != desc.Len {
+			t.Errorf("blob len %d != descriptor %d", len(blob), desc.Len)
+		}
+
+		// Reply with one text frame and one done.
+		srvWriteJSONFrame(conn, inferd.ResponseV2{
 			ID: "v2-1", Type: inferd.ResponseV2Frame,
 			Block: &inferd.ResponseBlockV2{Type: inferd.BlockText, Delta: "a red"},
 		})
-		writeV2(conn, inferd.ResponseV2{
+		srvWriteJSONFrame(conn, inferd.ResponseV2{
 			ID: "v2-1", Type: inferd.ResponseV2Done,
 			Usage:      &inferd.UsageV2{InputTokens: 276, OutputTokens: 2},
 			StopReason: inferd.StopEndTurn,
@@ -173,10 +244,4 @@ func TestCapabilitiesFrameDecode(t *testing.T) {
 		t.Errorf("ready frame misclassified: caps=%v vision=%v",
 			ready.IsCapabilities(), ready.SupportsVision())
 	}
-}
-
-func writeV2(w net.Conn, r inferd.ResponseV2) {
-	b, _ := json.Marshal(r)
-	b = append(b, '\n')
-	_, _ = w.Write(b)
 }

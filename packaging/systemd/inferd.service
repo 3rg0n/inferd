@@ -33,8 +33,8 @@ StartLimitIntervalSec=60s
 Type=simple
 # %t expands to /run/user/<uid>/, which `RuntimeDirectory=inferd`
 # below auto-creates with mode 0700 before ExecStart. This matches
-# the resolution chain frozen in `docs/protocol-v1.md`
-# §"Default endpoint resolution" — clients compute the same path.
+# the daemon's default endpoint resolution chain (ADR 0021) — clients
+# compute the same path.
 #
 # `--group` is intentionally omitted from the default unit. Single-
 # user systems don't need an `inferd-users` group: `RuntimeDirectory=`
@@ -50,11 +50,13 @@ Type=simple
 # normally creates them on first boot), so create them up front. mkdir -p
 # is idempotent and runs unprivileged under the user instance.
 ExecStartPre=/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
+# v0.4 (ADR 0021): one generation socket on the neutral path
+# (`inferd.sock`). The old `--v2` / `--v2-addr` flags are gone — v1 was
+# folded into v2. `--embed` still binds the embeddings socket when the
+# active backend advertises embed capability.
 ExecStart=%h/.local/bin/inferd-daemon \
     --lock %t/inferd/inferd.lock \
-    --uds %t/inferd/infer.sock \
-    --v2 \
-    --v2-addr %t/inferd/infer.v2.sock \
+    --uds %t/inferd/inferd.sock \
     --admin-addr %t/inferd/admin.sock \
     --embed \
     --embed-addr %t/inferd/infer.embed.sock

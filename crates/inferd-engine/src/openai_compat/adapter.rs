@@ -11,13 +11,11 @@
 use super::client::{ChatChunk, ChatRequest};
 use super::mapper::{ChunkAccumulator, MapperError, request_from_resolved};
 use crate::backend::{
-    AcceleratorInfo, Backend, BackendCapabilities, GenerateError, TokenEventV2, TokenStream,
-    TokenStreamV2,
+    AcceleratorInfo, Backend, BackendCapabilities, GenerateError, TokenEventV2, TokenStreamV2,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use inferd_proto::Resolved;
 use inferd_proto::v2::ResolvedV2;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use std::time::Duration;
@@ -172,16 +170,6 @@ impl Backend for OpenAiCompat {
             // honest answer about what *this process* contributes.
             accelerator: AcceleratorInfo::default(),
         }
-    }
-
-    /// v1 path: not supported. v1's flat-string `Resolved` doesn't
-    /// carry tool definitions, and the OpenAI surface doesn't add
-    /// value over llamacpp for plain text without tools. Consumers
-    /// who want this adapter use the v2 socket.
-    async fn generate(&self, _req: Resolved) -> Result<TokenStream, GenerateError> {
-        Err(GenerateError::Internal(
-            "openai-compat backend supports v2 only; use the v2 socket".into(),
-        ))
     }
 
     async fn generate_v2(&self, req: ResolvedV2) -> Result<TokenStreamV2, GenerateError> {

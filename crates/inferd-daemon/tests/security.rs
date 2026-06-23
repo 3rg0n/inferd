@@ -21,59 +21,81 @@ use inferd_daemon::auth::{AuthFrame, key_matches};
 use inferd_daemon::lock::{Lock, LockError};
 use inferd_daemon::peercred::PeerIdentity;
 use inferd_daemon::redact::redact_in_place;
-use inferd_proto::{MAX_FRAME_BYTES, Message, ProtoError, Request, Role, read_frame, write_frame};
+use inferd_proto::v2::{ContentBlock, MessageV2, RequestV2, RoleV2, WIRE_VERSION};
+use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_lp_frame, write_lp_blob};
 use std::io;
-use std::io::Cursor;
 
 // =====================================================================
-// F-1: NDJSON per-frame size cap
+// F-1 / F-5: length-prefixed per-frame size cap (ADR 0021)
 // =====================================================================
 
 #[test]
 fn f1_frame_cap_rejects_oversized_input() {
     use std::io::BufRead;
 
-    // Reader that returns garbage bytes forever, no newline. The
-    // bounded reader must refuse without exhausting heap.
-    struct Endless;
+    // A length-prefixed frame whose declared payload_len exceeds
+    // MAX_FRAME_BYTES. The bounded reader must refuse on the length
+    // varint alone, before allocating or reading the payload — so a
+    // reader that would yield garbage forever never gets that far.
+    struct Endless {
+        prefix: Vec<u8>,
+        pos: usize,
+    }
     impl io::Read for Endless {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            buf.fill(b'a');
-            Ok(buf.len())
+            // Serve the oversize length prefix first, then garbage —
+            // the reader should bail before it ever reaches the garbage.
+            if self.pos < self.prefix.len() {
+                let n = (self.prefix.len() - self.pos).min(buf.len());
+                buf[..n].copy_from_slice(&self.prefix[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            } else {
+                buf.fill(b'a');
+                Ok(buf.len())
+            }
         }
     }
     impl BufRead for Endless {
         fn fill_buf(&mut self) -> io::Result<&[u8]> {
-            static CHUNK: [u8; 8192] = [b'a'; 8192];
-            Ok(&CHUNK[..])
+            if self.pos < self.prefix.len() {
+                Ok(&self.prefix[self.pos..])
+            } else {
+                static CHUNK: [u8; 8192] = [b'a'; 8192];
+                Ok(&CHUNK[..])
+            }
         }
-        fn consume(&mut self, _n: usize) {}
+        fn consume(&mut self, n: usize) {
+            self.pos += n;
+        }
     }
 
-    let mut endless = Endless;
-    let err: Result<Option<Request>, _> = read_frame(&mut endless);
+    // LEB128-encode MAX_FRAME_BYTES + 1 as the payload length.
+    let mut value = (MAX_FRAME_BYTES as u64) + 1;
+    let mut prefix = Vec::new();
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        prefix.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+
+    let mut endless = Endless { prefix, pos: 0 };
+    let err = read_lp_frame(&mut endless);
     assert!(matches!(err, Err(ProtoError::FrameTooLarge)));
 }
 
 #[test]
 fn f1_frame_cap_rejects_oversized_output() {
-    let huge = "x".repeat(MAX_FRAME_BYTES);
-    let req = Request {
-        id: "id".into(),
-        messages: vec![Message {
-            role: Role::User,
-            content: huge,
-        }],
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        max_tokens: None,
-        stream: None,
-        image_token_budget: None,
-        grammar: String::new(),
-    };
+    // A BLOB payload at the cap must be refused by the writer.
+    let huge = vec![b'x'; MAX_FRAME_BYTES + 1];
     let mut buf = Vec::new();
-    let err = write_frame(&mut buf, &req).unwrap_err();
+    let err = write_lp_blob(&mut buf, &huge).unwrap_err();
     assert!(matches!(err, ProtoError::FrameTooLarge));
 }
 
@@ -191,15 +213,36 @@ fn f8_auth_frame_rejects_non_auth_type() {
 
 // =====================================================================
 // F-1 corollary: unknown fields are tolerated on parse (forward compat
-// per ADR 0008; not strictly a security finding but adjacent — tests
-// here keep the additive-evolution guarantee from rotting).
+// per ADR 0015/0021; not strictly a security finding but adjacent —
+// tests here keep the additive-evolution guarantee from rotting).
 // =====================================================================
 
 #[test]
 fn additive_evolution_unknown_fields_are_ignored_on_parse() {
-    let json = br#"{"id":"x","messages":[{"role":"user","content":"hi"}],"future_field":42}
-"#;
-    let mut cursor = Cursor::new(&json[..]);
-    let req: Request = read_frame(&mut cursor).unwrap().unwrap();
+    // A v2 request JSON carrying a field this build doesn't know about
+    // must still parse — the door for backwards-additive evolution
+    // (ADR 0021) stays open only if unknown fields are ignored.
+    let json = br#"{"wire_version":1,"id":"x","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"future_field":42}"#;
+    let req: RequestV2 = serde_json::from_slice(json).unwrap();
     assert_eq!(req.id, "x");
+    assert_eq!(req.wire_version, WIRE_VERSION);
+}
+
+/// A round-tripped v2 request keeps its shape through serialise/parse.
+/// Keeps `RequestV2` construction exercised in the security suite so the
+/// wire-shape regression surface stays meaningful post-v1-excision.
+#[test]
+fn v2_request_round_trips_through_json() {
+    let req = RequestV2 {
+        wire_version: WIRE_VERSION,
+        id: "rt".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
+        }],
+        ..Default::default()
+    };
+    let bytes = serde_json::to_vec(&req).unwrap();
+    let back: RequestV2 = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(back, req);
 }

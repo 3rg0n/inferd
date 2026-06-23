@@ -485,6 +485,7 @@ mod tests {
         // unresolved attachment_id; we want to test the mapper guard,
         // not the proto guard, so we construct ResolvedV2 directly.
         let r = ResolvedV2 {
+            wire_version: inferd_proto::v2::WIRE_VERSION,
             id: "x".into(),
             messages: vec![MessageV2 {
                 role: RoleV2::User,

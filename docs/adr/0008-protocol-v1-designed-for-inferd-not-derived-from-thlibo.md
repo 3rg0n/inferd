@@ -1,6 +1,6 @@
 # 0008. Protocol v1 designed for inferd, not derived from thlibo
 
-- Status: accepted
+- Status: accepted; v1-as-separate-frozen-surface superseded by [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) (v1 folded into v2 in v0.4)
 - Date: 2026-05-15
 - Supersedes: [0001](0001-wire-protocol-inherited-from-thlibo.md)
 

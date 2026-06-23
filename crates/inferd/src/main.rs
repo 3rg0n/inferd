@@ -408,6 +408,7 @@ async fn cmd_doctor(
                     let backend = c.backend.as_deref().unwrap_or("?");
                     let accel = c.accelerator.as_deref().unwrap_or("?");
                     let gpu_layers = c.gpu_layers.unwrap_or(0);
+                    let wire = c.wire_version.unwrap_or(0);
                     let v2 = c.v2.unwrap_or(false);
                     let vision = c.vision.unwrap_or(false);
                     let audio = c.audio.unwrap_or(false);
@@ -419,8 +420,8 @@ async fn cmd_doctor(
                         true,
                         &format!(
                             "{backend} accelerator={accel} gpu_layers={gpu_layers} \
-                             v2={v2} vision={vision} audio={audio} tools={tools} \
-                             thinking={thinking} embed={embed}"
+                             wire_version={wire} v2={v2} vision={vision} audio={audio} \
+                             tools={tools} thinking={thinking} embed={embed}"
                         ),
                     );
                     if let Some(name) = c.device_name.as_deref() {

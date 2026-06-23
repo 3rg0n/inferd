@@ -76,7 +76,16 @@ jobs:
           # CUDA redist DLLs are bundled next to the exe by the Windows
           # bundling step. Hosts without an NVIDIA driver fall through to
           # CPU at the runtime probe (ADR 0019).
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022 / MSVC 19.4x), NOT
+          # windows-latest. As of mid-2026 windows-latest → windows-2025
+          # ships VS 2026 / MSVC 19.51, and CUDA 12.6's
+          # `visual_studio_integration` only registers its MSBuild props
+          # for VS 2022 — so on windows-2025 cmake's `enable_language(CUDA)`
+          # fails with "No CUDA toolset found" (rc.1 Windows build break).
+          # Pinning the older image keeps the CUDA→MSVC toolset path
+          # working. Revisit when CUDA ships VS 2026 integration (then we
+          # can move to windows-2025 / a newer CUDA).
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             archive: zip
             features: inferd-daemon/dl-backends,inferd-daemon/cuda
@@ -563,7 +572,7 @@ jobs:
 
           # Verify ggml-cuda.dll's imports resolve under backends\ + the
           # driver skiplist + system DLLs. dumpbin ships with MSVC (on
-          # PATH inside the windows-latest image's VS dev environment;
+          # PATH inside the windows-2022 image's VS dev environment;
           # fall back to a known location if not).
           $dumpbin = (Get-Command dumpbin -ErrorAction SilentlyContinue).Source
           if (-not $dumpbin) {

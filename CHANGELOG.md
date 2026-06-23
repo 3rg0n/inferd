@@ -7,6 +7,223 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-23
+
+The v0.4 line: a **unified IPC wire format** ([ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)).
+One generation API (v1 folded into v2, the v1 socket + types removed),
+length-prefixed type-tagged framing replacing newline-delimited JSON,
+media carried as raw BLOB frames keyed by `attachment_id` instead of
+base64-in-JSON, and an in-band `wire_version` that fails loudly on
+mismatch (`wire_version_unsupported`). The full set of changes,
+removals, and fixes is itemised in the `[0.4.0-rc.1]`…`[0.4.0-rc.3]`
+sections below; this section ratifies that cumulative work — no code
+changes between `0.4.0-rc.3` and `0.4.0` beyond the version bump.
+
+### Validation
+
+install=work + wire e2e validated from the **release tarballs** on every
+shipped target (`docs/v0.4-validation.md`), all on real hardware:
+
+- **Windows x86_64 (CUDA, RTX 5080):** `install.ps1` from the tarball →
+  `status=ready`, `wire_version=1`, `accelerator=cuda` → real generate +
+  embed. Both upgrade-over-prior-install and fresh-from-nothing
+  (auto-pull ~6 GB → ready) paths.
+- **Linux x86_64 (CUDA, RTX 5080 via WSL):** same, upgrade + fresh.
+- **Linux x86_64 (CPU, no-GPU container):** ADR 0019 probe falls back to
+  `accelerator=cpu` on a GPU-less host → real generate + embed.
+- **macOS arm64 (Metal, Apple M1):** `install-launchagent.sh` from the
+  tarball → `accelerator=metal` → real generate + embed; W4 multimodal
+  (image through the mtmd BLOB path, no base64) green.
+- **Gate 2 wire** (W1 cross-language Go round-trip, W2 `wire_version`
+  mismatch fails loudly, W3 real-model text, W4 raw-BLOB multimodal)
+  green across the platforms above.
+
+Three Windows-installer install=work bugs were found and fixed by
+running the real install path from rc.2 tarballs (stale `--v2` flags,
+upgrade-over-running-daemon, uninstall-before-handle-release); rc.3
+shipped the fixes and re-proved install from its own tarballs.
+
+## [0.4.0-rc.3] - 2026-06-22
+
+Third v0.4 release candidate. rc.2 built green on all 4 platforms, but
+running the real install=work path from its tarballs surfaced three
+Windows installer bugs (the shipped rc.2 Windows installer would fail to
+start a fresh daemon). rc.3 carries the fixes so the *shipped* installer
+is correct, and must re-prove install=work from its own tarballs before
+GA.
+
+### Fixed
+
+- **`packaging/windows/install.ps1`: dropped the removed `--v2` /
+  `--v2-addr` flags and pointed `--pipe` at the neutral `\\.\pipe\inferd`
+  path** (the v0.4 consistency sweep fixed the systemd unit + launchd
+  plist but missed the Windows installer). The rc.2 installer launched a
+  daemon with flags v0.4 no longer accepts, so a fresh Windows install
+  failed to start.
+- **`install.ps1`: stop the running daemon *before* staging the binary**
+  — Windows holds an exclusive lock on a running `.exe`, so an
+  upgrade-over-running install failed at the copy step.
+- **`uninstall.ps1 -Purge`: wait for the killed daemon to release its DLL
+  handles before deleting the install dir** — otherwise the recursive
+  delete hit "Access denied" on `cublas64_12.dll`.
+
+All three were found by running the actual install/upgrade/uninstall
+path from the rc.2 tarballs on Windows + WSL (RTX 5080); the v0.4 wire +
+fresh-from-nothing auto-pull (~6 GB → ready → real generate + embed) were
+validated on both. See `docs/v0.4-validation.md`.
+
+## [0.4.0-rc.2] - 2026-06-18
+
+Second v0.4 release candidate. rc.1's release run failed: the Windows
+x86_64 CUDA build broke in CMake `enable_language(CUDA)` with "No CUDA
+toolset found" — `windows-latest` now resolves to `windows-2025`
+(VS 2026 / MSVC 19.51), and CUDA 12.6's `visual_studio_integration`
+only registers MSBuild props for VS 2022. Because `publish` needs all
+four platform builds, no release page or tarballs were produced.
+
+### Fixed
+
+- **Windows CUDA release build pinned to `windows-2022`** (VS 2022 /
+  MSVC 19.4x) instead of `windows-latest`. CUDA 12.6's Visual Studio
+  integration doesn't support the VS 2026 toolchain that
+  `windows-latest` (→ `windows-2025`) now ships, so
+  `enable_language(CUDA)` failed at cmake-configure time. Pinning the
+  older runner image keeps the CUDA→MSVC toolset path working. Revisit
+  when a CUDA release ships VS 2026 integration. The 613 MB Linux
+  x86_64 artifact is benign — it's the bundled cuBLAS/cuBLASLt CUDA
+  redist libs (NVIDIA-EULA-permitted) a CUDA tarball legitimately ships
+  next to `libggml-cuda.so`.
+
+## [0.4.0-rc.1] - 2026-06-18
+
+First v0.4 release candidate — cut to produce signed per-platform
+tarballs for the install=work validation gate (ADR 0021 wire redesign).
+**Release run failed** (Windows CUDA build, see rc.2); no tarballs
+published. Not GA: the Gate-1 tarball-install loop (download → install →
+auto-pull → real generate + embed) has not yet been run from any
+artifacts, and CUDA/GPU paths are unvalidated for v0.4. See
+`docs/v0.4-validation.md`.
+
+### Fixed
+
+- **`defaultDaemonBin` in Go e2e test now prefers `target/release` over
+  `target/debug`** (`clients/go/client_test.go`). On macOS, a stale
+  `target/debug/inferd-daemon` (rc.12, NDJSON) was being used instead of
+  the v0.4 release binary (LP framing), causing `TestEndToEndAgainstDaemon`
+  to return `code=internal` and the rc.12 daemon to collide with the launchd
+  daemon's `${TMPDIR}/inferd/inferd.sock` (crashing its accept loop). Fixed
+  by checking `target/release` first. Test also gains `HOME`/`USERPROFILE`
+  isolation to prevent the test daemon from touching real `~/.inferd/`.
+
+### Validation
+
+- **v0.4 Gate 1 + W1 + W3 validated on macOS arm64 Metal (Apple M1,
+  2026-06-17).** `inferdctl doctor` reports `wire_version=1`,
+  `accelerator=metal`, `device=MTL0 vram=11.8 GiB`, generation socket
+  `${TMPDIR}/inferd/inferd.sock`. `go test ./...` (15 tests) green.
+  Real-model LP generate: `answer="Four"`, `backend=llamacpp`,
+  `stop=end_turn`. W4 (BLOB multimodal) blocked on mmproj build; wire
+  encoding verified by mock tests.
+
+- **v0.4 framing proven end-to-end** (ADR 0021 / #34). Automated:
+  `clients/go` `TestEndToEndAgainstDaemon` round-trips `GenerateV2`
+  against a freshly-built v0.4 mock daemon over the length-prefixed
+  wire. Real model (this box, llamacpp): the migrated Go client sent a
+  text request → *"Hello there friend."* (in=17/out=4) and a 256×256
+  image as a raw BLOB frame → *"A solid red circle is centered on a
+  white background."* (in=276 — the image expanded into ~250 vision
+  tokens through mtmd, no base64). Confirms the full pipeline: LP
+  request + BlobDescriptor + BLOB frames → wire_version check → BLOB
+  reassembly by id → raw RGB to mtmd → LP response frames.
+- **v0.4 release-gate doc** added at `docs/v0.4-validation.md`: two
+  gates (install=work coverage matrix re-reset for the socket/framing
+  change + a wire-format end-to-end gate covering the LP round-trip, the
+  `wire_version` mismatch failure, and the raw-BLOB multimodal path),
+  plus the pre-tag release checklist. The proof above is recorded as the
+  Windows x86_64 rows; other targets are ☐ pending release-tarball runs.
+
+### Changed
+
+- **v0.4 (breaking): unifying the IPC wire format** per [ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)
+  (issue #34). One generation API (v1 folded into v2, v1 socket
+  removed); length-prefixed, type-tagged framing (uvarint len + 1 type
+  byte: `0x01` JSON / `0x02` BLOB) replacing newline-delimited JSON;
+  media rides as raw BLOB frames instead of base64-in-JSON
+  (`AttachmentV2.bytes` removed); in-band `wire_version` on the request
+  + capabilities frame so mismatches fail loudly. Pre-launch break
+  (only first-party consumers exist): the v0.3.0 crates/clients keep
+  working against a v0.3 daemon but do **not** interoperate with v0.4.
+  ADR 0021 supersedes parts of ADRs 0008/0009/0015; the post-launch
+  freeze posture returns after v0.4.
+
+### Fixed
+
+- **Daemon no longer silently falls back to the mock backend** (GA
+  hardening). Previously, with no `--backend` flag and no usable config
+  (missing / unreadable / declares no backends), `build_backends`
+  returned the in-memory `Mock` — a real install could serve fake
+  `"mock-response"` tokens instead of failing. inferd now **refuses to
+  start** with an actionable error in that case; the mock backend is
+  reachable only via an explicit `--backend mock`. This restores the
+  install=work guarantee (a mock-default install is a release blocker).
+  Verified live: a feature-built daemon with an empty-backends config
+  exits with "refusing to start: no usable inference backend".
+- **Real-model generation was broken in v0.4** — two regressions from the
+  v1→v2 fold, both caught by running `docs/v0.4-validation.md` Gate 2 W3
+  (real-model text e2e) on Windows; neither was covered by the existing
+  mock-backend tests. (1) `LlamaCpp::capabilities()` only set `v2: true`
+  when an mmproj had loaded, so a text-only generation backend advertised
+  `v2: false` and the daemon's v2-capability gate refused *every* request
+  with `"backend does not advertise v2 capability"`. `v2` is now `true`
+  for any llamacpp generation backend (it always allocates a generation
+  context); `vision`/`audio` still track the mmproj probe. (2)
+  `run_generation_v2` unconditionally required an mtmd context
+  (`NoMmproj` error), so text-only generation aborted mid-stream with no
+  terminal frame. It now branches: mtmd path when an mmproj is present
+  (required for attachments), plain tokenise + `llama_decode` prefill for
+  the text-only case (restoring what the removed v1 path did). Added the
+  `unsupported_wire_version_errors_and_closes` integration test (Gate 2
+  W2) — the `wire_version` gate had no through-the-socket coverage.
+- **v0.4 consistency sweep across clients, packaging, CI, and docs**
+  (ADR 0021 / #34). Caught install=work-breaking leftovers the wire
+  change left behind: the Go client's `DefaultInferAddr()` returned the
+  old `infer.sock` / `infer.v2.sock` paths (a consumer using the
+  default would dial a socket the daemon no longer binds) — now
+  `inferd.sock` / `\\.\pipe\inferd`; the systemd unit and launchd plist
+  passed the removed `--v2` / `--v2-addr` flags and the stale
+  `infer.sock` path (daemon would fail to start) — now the neutral
+  socket with `--embed` only; the CI install-smoke checked for
+  `infer.sock` / `infer.v2.sock` and sent raw NDJSON to the generation
+  socket — rewritten to assert `inferd.sock` and drive the
+  length-prefixed v2 wire. Also mirrored the Rust v1 excision in the Go
+  client (removed the v1 `Generate` + types, kept the shared `Role` /
+  `Client` core) and removed the dead `--v2` / `--v2-addr` / `--v2-tcp`
+  CLI flags and `listen.tcp_v2` config knob (nothing read them).
+  Documentation rewritten to match: `CLAUDE.md`, `context.md`,
+  `README.md`, `INTEGRATING.md`, the `inferd-proto` / `inferd-client` /
+  Go-client READMEs, the GitHub Pages site (`site/index.html`), and
+  `docs/{ai.internals.explained,test-strategy}.md`; `docs/protocol-v1.md`
+  gained a "HISTORICAL" banner pointing at ADR 0021.
+
+### Removed
+
+- **Dead v1 wire path excised** (ADR 0021 / #34). With v1 folded into
+  v2 there is no v1 code left to keep alive: deleted the v1 proto types
+  (`Request`/`Response`/`Resolved`/`Role`/`Message`/`StopReason`/
+  `Usage`/`ImageTokenBudget`) and the `request.rs`/`response.rs`
+  modules; removed the `Backend::generate(Resolved)` method,
+  `TokenEvent`/`TokenStream`, and every adapter's v1 generate impl
+  (`generate_v2` is now the single required generation method); dropped
+  the daemon's v1 `serve_tcp`/`serve_uds`/`serve_named_pipe` +
+  `handle_connection` and the GBNF `validate_grammar` guard (v2 has no
+  grammar field); removed the v1 `inferd_client::Client`. The v1
+  `wire.rs` proto test and v1 fuzz targets were replaced with
+  length-prefixed / v2 equivalents (`lp_frame_reader`,
+  `v2_request_resolve`); all daemon integration tests were migrated onto
+  the length-prefixed v2 wire via a shared `tests/common` framing
+  helper. `net −2156/+608` lines across 27 files; full `fmt` + `clippy
+  -D warnings` + `test --all` + `audit` cycle green.
+
 ## [0.3.0] - 2026-06-03
 
 First stable v0.3 release. Headline: **runtime accelerator detection**

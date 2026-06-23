@@ -6,13 +6,12 @@ import (
 )
 
 // Default socket/pipe paths for the inference surfaces, mirroring the
-// daemon's resolution chain (docs/protocol-v1.md §"Default endpoint
-// resolution" for v1; ADR 0015 / 0017 for the v2 / embed paths). Each
-// wire surface binds on its own socket:
+// daemon's resolution chain. As of v0.4 (ADR 0021) generation is a
+// single socket on a neutral path; embeddings keep their own socket
+// (ADR 0017):
 //
-//	v1 generation  infer.sock        \\.\pipe\inferd-infer
-//	v2 generation  infer.v2.sock     \\.\pipe\inferd-infer-v2
-//	embeddings     infer.embed.sock  \\.\pipe\inferd-infer-embed
+//	generation   inferd.sock        \\.\pipe\inferd
+//	embeddings   infer.embed.sock   \\.\pipe\inferd-infer-embed
 //
 // On Unix the resolution chain is:
 //  1. $XDG_RUNTIME_DIR/inferd/<name> (set by systemd-logind)
@@ -37,17 +36,20 @@ func runtimeSocketPath(unixName, windowsPipe string) string {
 	}
 }
 
-// DefaultInferAddr returns the platform default path for the v1
-// generation socket.
+// DefaultInferAddr returns the platform default path for the generation
+// socket (v0.4 / ADR 0021 — one generation socket on a neutral path).
+// Dial it with DialUDS / DialPipe / DialTCP and call Client.GenerateV2.
 func DefaultInferAddr() string {
-	return runtimeSocketPath("infer.sock", `\\.\pipe\inferd-infer`)
+	return runtimeSocketPath("inferd.sock", `\\.\pipe\inferd`)
 }
 
-// DefaultInferV2Addr returns the platform default path for the v2
-// generation socket (ADR 0015). Dial it with DialUDS / DialPipe and
-// call Client.GenerateV2.
+// DefaultInferV2Addr is a deprecated alias for [DefaultInferAddr]. v0.4
+// folded v1 into v2, so the "v2" generation socket is now simply the
+// generation socket. Kept so existing callers keep compiling.
+//
+// Deprecated: use DefaultInferAddr.
 func DefaultInferV2Addr() string {
-	return runtimeSocketPath("infer.v2.sock", `\\.\pipe\inferd-infer-v2`)
+	return DefaultInferAddr()
 }
 
 // DefaultInferEmbedAddr returns the platform default path for the

@@ -39,6 +39,14 @@ pub enum ProtoError {
     /// Frame parsed but failed semantic validation.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+
+    /// Length-prefixed framing was malformed: an unknown frame-type byte,
+    /// a length varint that didn't terminate within its budget, or a
+    /// stream that ended mid-frame (after the length prefix, before the
+    /// full payload). The byte stream is no longer trustworthy; the
+    /// caller closes the connection. (ADR 0021.)
+    #[error("malformed frame: {0}")]
+    MalformedFrame(String),
 }
 
 impl ProtoError {
@@ -47,7 +55,9 @@ impl ProtoError {
     pub fn to_error_code(&self) -> ErrorCode {
         match self {
             ProtoError::FrameTooLarge => ErrorCode::FrameTooLarge,
-            ProtoError::Decode(_) | ProtoError::InvalidRequest(_) => ErrorCode::InvalidRequest,
+            ProtoError::Decode(_)
+            | ProtoError::InvalidRequest(_)
+            | ProtoError::MalformedFrame(_) => ErrorCode::InvalidRequest,
             ProtoError::Io(_) => ErrorCode::Internal,
         }
     }

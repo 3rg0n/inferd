@@ -2,27 +2,24 @@
 //! `docs/test-strategy.md`.
 
 use inferd_engine::mock::{Mock, MockConfig, MockError};
-use inferd_engine::{Backend, EmbedError, GenerateError, TokenEvent};
+use inferd_engine::{Backend, EmbedError, GenerateError, TokenEventV2};
 use inferd_proto::embed::EmbedRequest;
-use inferd_proto::{Message, Resolved, Role, StopReason};
+use inferd_proto::v2::{ContentBlock, MessageV2, RequestV2, ResolvedV2, RoleV2, StopReasonV2};
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
-fn req() -> Resolved {
-    Resolved {
+fn req() -> ResolvedV2 {
+    RequestV2 {
+        wire_version: inferd_proto::v2::WIRE_VERSION,
         id: "test".into(),
-        messages: vec![Message {
-            role: Role::User,
-            content: "hi".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
         }],
-        temperature: 1.0,
-        top_p: 0.95,
-        top_k: 64,
-        max_tokens: 1000,
-        stream: true,
-        image_token_budget: None,
-        grammar: String::new(),
+        ..Default::default()
     }
+    .resolve()
+    .expect("resolve ok")
 }
 
 #[tokio::test]
@@ -31,17 +28,17 @@ async fn mock_streams_tokens_and_terminates_with_done() {
         tokens: vec!["alpha".into(), "beta".into(), "gamma".into()],
         ..Default::default()
     });
-    let stream = mock.generate(req()).await.expect("generate ok");
-    let events: Vec<TokenEvent> = stream.collect().await;
+    let stream = mock.generate_v2(req()).await.expect("generate ok");
+    let events: Vec<TokenEventV2> = stream.collect().await;
 
     assert_eq!(events.len(), 4, "3 tokens + 1 done");
-    assert_eq!(events[0], TokenEvent::Token("alpha".into()));
-    assert_eq!(events[1], TokenEvent::Token("beta".into()));
-    assert_eq!(events[2], TokenEvent::Token("gamma".into()));
+    assert_eq!(events[0], TokenEventV2::Text("alpha".into()));
+    assert_eq!(events[1], TokenEventV2::Text("beta".into()));
+    assert_eq!(events[2], TokenEventV2::Text("gamma".into()));
     match &events[3] {
-        TokenEvent::Done { stop_reason, usage } => {
-            assert_eq!(*stop_reason, StopReason::End);
-            assert_eq!(usage.completion_tokens, 3);
+        TokenEventV2::Done { stop_reason, usage } => {
+            assert_eq!(*stop_reason, StopReasonV2::EndTurn);
+            assert_eq!(usage.output_tokens, 3);
         }
         other => panic!("expected Done, got {other:?}"),
     }
@@ -53,7 +50,7 @@ async fn mock_pre_stream_error_returned_directly() {
         pre_stream_error: Some(MockError::Unavailable),
         ..Default::default()
     });
-    match mock.generate(req()).await {
+    match mock.generate_v2(req()).await {
         Err(GenerateError::Unavailable(_)) => {}
         other => panic!(
             "expected Unavailable error, got {other:?}",
@@ -67,7 +64,7 @@ async fn mock_not_ready_when_toggled() {
     let mock = Mock::new();
     mock.set_ready(false);
     assert!(!mock.ready());
-    match mock.generate(req()).await {
+    match mock.generate_v2(req()).await {
         Err(GenerateError::NotReady) => {}
         other => panic!("expected NotReady, got {other:?}", other = other.err()),
     }
@@ -80,10 +77,10 @@ async fn mock_mid_stream_drop_yields_no_done() {
         mid_stream_drop_after: Some(2),
         ..Default::default()
     });
-    let stream = mock.generate(req()).await.unwrap();
-    let events: Vec<TokenEvent> = stream.collect().await;
+    let stream = mock.generate_v2(req()).await.unwrap();
+    let events: Vec<TokenEventV2> = stream.collect().await;
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|e| matches!(e, TokenEvent::Token(_))));
+    assert!(events.iter().all(|e| matches!(e, TokenEventV2::Text(_))));
 }
 
 // Cancellation: drop the stream and verify the spawned task exits cleanly.
@@ -95,10 +92,10 @@ async fn mock_drop_cancels_generation() {
         tokens: (0..1000).map(|i| format!("t{i}")).collect(),
         ..Default::default()
     });
-    let mut stream = mock.generate(req()).await.unwrap();
+    let mut stream = mock.generate_v2(req()).await.unwrap();
     // Take just one token then drop.
     let first = stream.next().await.unwrap();
-    assert!(matches!(first, TokenEvent::Token(_)));
+    assert!(matches!(first, TokenEventV2::Text(_)));
     drop(stream);
     // No assertion needed beyond "no panic / no hang."
     // Tokio test runtime will fail this test if the spawned task leaks.

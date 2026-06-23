@@ -1,32 +1,33 @@
-//! Integration test: protocol-promised `queue_full` frame.
+//! Integration test: protocol-promised `queue_full` frame (v0.4 / ADR 0021).
 //!
-//! Until the admission gate landed (see `lifecycle::handle_connection`
-//! and `queue::Admission`), the daemon's wire spec promised a
-//! `Response::Error{code: queue_full}` frame on overflow but never
-//! emitted one. This test pins the contract so the next regression
-//! is caught at PR time.
+//! The daemon's wire spec promises a `ResponseV2::Error{code: queue_full}`
+//! frame on admission overflow. This test pins the contract so the next
+//! regression is caught at PR time.
 //!
 //! Setup:
-//! - Mock backend with a long per-token delay so each in-flight
-//!   request occupies its admission slot for measurable time.
-//! - Admission gate sized at `active_permits=1, queue_depth=1` —
-//!   total capacity 2 outstanding requests across the daemon.
-//! - Three concurrent requests fired. Two get admitted; the third
-//!   must come back with `code: queue_full`.
+//! - Mock backend with a long per-token delay so each in-flight request
+//!   occupies its admission slot for measurable time.
+//! - Admission gate sized at `active_permits=1, queue_depth=1` — total
+//!   capacity 2 outstanding requests across the daemon.
+//! - Three concurrent requests fired. Two get admitted; the third must
+//!   come back with `code: queue_full`.
 
+mod common;
+
+use common::{collect_frames, text_request};
 use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle::{AcceptContext, serve_tcp, wait_for_ready};
+use inferd_daemon::lifecycle::wait_for_ready;
+use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
 use inferd_daemon::queue::Admission;
 use inferd_daemon::router::Router;
 use inferd_engine::mock::{Mock, MockConfig};
-use inferd_proto::{ErrorCode, Message, Request, Response, Role, write_frame};
+use inferd_proto::v2::{ErrorCodeV2, ResponseV2};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-/// 100ms per token + 8 tokens = ~800ms per request. Plenty of
-/// overlap for three in-flight requests to race.
+/// 100ms per token + 8 tokens = ~800ms per request. Plenty of overlap
+/// for three in-flight requests to race.
 const TOKEN_DELAY_MS: u64 = 100;
 const TOKENS_PER_REQUEST: usize = 8;
 
@@ -59,58 +60,27 @@ async fn boot_admission_capped_daemon() -> (
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp(listener, router, ctx, shutdown_rx).await;
+        let _ = serve_tcp_v2(listener, router, ctx, shutdown_rx).await;
     });
 
     (addr, shutdown_tx, handle)
 }
 
 /// Send one request and collect every response frame until terminal.
-async fn one_request(addr: String, id: String) -> Vec<Response> {
+async fn one_request(addr: String, id: String) -> Vec<ResponseV2> {
     let mut stream = TcpStream::connect(&addr).await.expect("connect");
-
-    let req = Request {
-        id,
-        messages: vec![Message {
-            role: Role::User,
-            content: "hi".into(),
-        }],
-        ..Default::default()
-    };
-    let mut buf = Vec::with_capacity(256);
-    write_frame(&mut buf, &req).expect("encode request");
-    stream.write_all(&buf).await.expect("write request");
-    stream.flush().await.expect("flush");
-
-    let (read_half, _write_half) = stream.into_split();
-    let mut reader = BufReader::with_capacity(8 * 1024, read_half);
-    let mut frames = Vec::new();
-    let mut line = Vec::with_capacity(512);
-    loop {
-        line.clear();
-        let n = reader
-            .read_until(b'\n', &mut line)
-            .await
-            .expect("read frame");
-        if n == 0 {
-            break;
-        }
-        let resp: Response = serde_json::from_slice(&line).expect("decode response frame");
-        let terminal = matches!(&resp, Response::Done { .. } | Response::Error { .. });
-        frames.push(resp);
-        if terminal {
-            break;
-        }
-    }
-    frames
+    common::write_request(&mut stream, &text_request(&id, "hi")).await;
+    let (read_half, _w) = stream.into_split();
+    let mut reader = tokio::io::BufReader::new(read_half);
+    collect_frames(&mut reader).await
 }
 
 #[tokio::test]
 async fn third_concurrent_request_gets_queue_full_when_capacity_is_two() {
     let (addr, shutdown, handle) = boot_admission_capped_daemon().await;
 
-    // Fire three concurrent requests. With capacity=2 the third
-    // should be rejected at admission with code: queue_full.
+    // Fire three concurrent requests. With capacity=2 the third should be
+    // rejected at admission with code: queue_full.
     let tasks: Vec<_> = (0..3)
         .map(|i| {
             let addr = addr.clone();
@@ -134,19 +104,20 @@ async fn third_concurrent_request_gets_queue_full_when_capacity_is_two() {
             .last()
             .unwrap_or_else(|| panic!("client {i}: zero frames"));
         match last {
-            Response::Done { .. } => done_count += 1,
-            Response::Error {
-                code: ErrorCode::QueueFull,
+            ResponseV2::Done { .. } => done_count += 1,
+            ResponseV2::Error {
+                code: ErrorCodeV2::QueueFull,
                 ..
             } => queue_full_count += 1,
             other => panic!("client {i}: unexpected terminal {other:?}"),
         }
     }
 
-    // Exactly one queue_full, exactly two completed normally.
-    // (Or all three could complete if scheduling lined up so the
-    // first finished before the third's admission attempt — unlikely
-    // with 800ms per request but worth not asserting it harshly.)
+    // At least one queue_full; every client terminates with done or
+    // queue_full. (Not asserting exactly one — if scheduling lined up so
+    // the first finished before the third's admission attempt, all three
+    // could complete; unlikely at 800ms/request but not worth a flaky
+    // hard assert.)
     assert!(
         queue_full_count >= 1,
         "expected at least one queue_full; got done={done_count} queue_full={queue_full_count}"
@@ -163,9 +134,9 @@ async fn third_concurrent_request_gets_queue_full_when_capacity_is_two() {
 
 #[tokio::test]
 async fn queue_full_frame_includes_request_id() {
-    // Capacity 1: every concurrent request beyond the first
-    // gets queue_full. Fire two sequentially-overlapping requests
-    // and assert the queue_full frame echoes the right id.
+    // Capacity 1: every concurrent request beyond the first gets
+    // queue_full. Fire two overlapping requests and assert the queue_full
+    // frame echoes the right id.
     let mock = Arc::new(Mock::with_config(MockConfig {
         tokens: (0..TOKENS_PER_REQUEST).map(|i| format!("t{i}")).collect(),
         token_delay_ms: Some(TOKEN_DELAY_MS),
@@ -184,7 +155,7 @@ async fn queue_full_frame_includes_request_id() {
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp(listener, router, ctx, shutdown_rx).await;
+        let _ = serve_tcp_v2(listener, router, ctx, shutdown_rx).await;
     });
 
     // Start the slow first request and let it claim the only slot.
@@ -202,9 +173,9 @@ async fn queue_full_frame_includes_request_id() {
 
     let last = frames.last().expect("zero frames for second request");
     match last {
-        Response::Error { id, code, .. } => {
+        ResponseV2::Error { id, code, .. } => {
             assert_eq!(id, "second", "queue_full frame must echo request id");
-            assert_eq!(*code, ErrorCode::QueueFull);
+            assert_eq!(*code, ErrorCodeV2::QueueFull);
         }
         other => panic!("expected queue_full error frame, got {other:?}"),
     }

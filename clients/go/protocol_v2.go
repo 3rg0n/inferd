@@ -5,29 +5,21 @@ package inferd
 // The v2 surface is documented in ADR 0015 (typed content blocks) as
 // amended by ADR 0016 (consumer decodes media before sending) and
 // ADR 0013 (the daemon is the gateway that shapes semantic intent into
-// engine input). It is frozen on its own socket — `infer.v2.sock` on
-// Unix, `\\.\pipe\inferd-infer-v2` on Windows — independently of the v1
-// generation socket. These types are byte-compatible with the Rust
-// `inferd-proto` v2 module (request.rs / attachment.rs / response.rs /
-// tool.rs).
+// engine input). As of v0.4 (ADR 0021) it is the single generation
+// surface — frozen on the neutral socket (`inferd.sock` on Unix,
+// `\\.\pipe\inferd` on Windows) — using length-prefixed, type-tagged
+// framing with an in-band wire_version. These types are byte-compatible
+// with the Rust `inferd-proto` v2 module (request.rs / attachment.rs /
+// response.rs / tool.rs).
 //
-// Media decode posture (ADR 0016): attachment `Bytes` carries
-// *already-decoded* payloads, base64-encoded — raw interleaved RGB for
-// images (width*height*3 octets, no alpha), little-endian float32 PCM
-// for audio. The daemon links no image/audio codec; the consumer
-// decodes before sending.
+// Media decode posture (ADR 0016 + ADR 0021): attachment `Bytes`
+// carries *already-decoded* raw payloads — interleaved RGB for images
+// (width*height*3 octets, no alpha), little-endian float32 PCM for
+// audio — and travels out-of-band as a raw BLOB frame keyed by
+// attachment id (no base64). The daemon links no image/audio codec;
+// the consumer decodes before sending.
 
-import (
-	"encoding/base64"
-	"encoding/json"
-)
-
-// base64Encode is the standard RFC-4648 base64 (with padding) the v2
-// wire uses for attachment bytes, matching the Rust side's
-// base64::engine::general_purpose::STANDARD.
-func base64Encode(b []byte) string {
-	return base64.StdEncoding.EncodeToString(b)
-}
+import "encoding/json"
 
 // ContentType discriminates ContentBlock variants on the wire (the
 // JSON `type` tag).
@@ -104,10 +96,15 @@ const (
 
 // AttachmentV2 is one binary payload in the request's top-level
 // Attachments table, referenced by ID from image/audio/video content
-// blocks. Bytes is base64 of the already-decoded payload (ADR 0016).
+// blocks.
 //
-// The populated metadata depends on Kind: image carries Width+Height,
-// audio carries SampleRate, video carries neither (reserved).
+// As of v0.4 (ADR 0021) the raw bytes do NOT travel inside the request
+// JSON — Bytes is `json:"-"` and rides out-of-band in a length-prefixed
+// BLOB frame, preceded by a BlobDescriptor naming this ID. Bytes are
+// the *raw* decoded payload (interleaved RGB for images, little-endian
+// f32 PCM for audio); no base64. The JSON carries only metadata
+// (kind/id/width/height/sample_rate). Decode posture is unchanged
+// (ADR 0016): the consumer still decodes media to raw bytes.
 type AttachmentV2 struct {
 	Kind AttachmentKind `json:"kind"`
 	ID   string         `json:"id"`
@@ -116,22 +113,34 @@ type AttachmentV2 struct {
 	Height uint32 `json:"height,omitempty"`
 	// audio
 	SampleRate uint32 `json:"sample_rate,omitempty"`
-	// base64 of the decoded bytes (all kinds)
-	Bytes string `json:"bytes"`
+	// Raw decoded bytes, sent in a BLOB frame (not this JSON object).
+	Bytes []byte `json:"-"`
 }
 
 // ImageAttachment builds an image attachment from raw interleaved RGB
 // bytes (width*height*3 octets). The caller decodes the source image
 // (JPEG/PNG/…) to RGB before calling this — the daemon links no codec
-// (ADR 0016). Bytes are base64-encoded here.
+// (ADR 0016). The bytes are sent verbatim in a BLOB frame.
 func ImageAttachment(id string, width, height uint32, rgb []byte) AttachmentV2 {
 	return AttachmentV2{
 		Kind:   AttachmentImage,
 		ID:     id,
 		Width:  width,
 		Height: height,
-		Bytes:  base64Encode(rgb),
+		Bytes:  rgb,
 	}
+}
+
+// BlobDescriptor is the JSON control frame that precedes each
+// attachment BLOB frame (ADR 0021), correlating the raw bytes to an
+// attachment by ID.
+type BlobDescriptor struct {
+	// Type is always "attachment_blob".
+	Type string `json:"type"`
+	// AttachmentID is the AttachmentV2.ID the following BLOB belongs to.
+	AttachmentID string `json:"attachment_id"`
+	// Len is the byte length of the following BLOB frame.
+	Len uint64 `json:"len"`
 }
 
 // ToolV2 is a tool definition the model may call. InputSchema is a JSON
@@ -149,6 +158,9 @@ type ToolV2 struct {
 // the backend's default) from "explicitly zero", matching the v1
 // Request convention.
 type RequestV2 struct {
+	// WireVersion is set automatically by Client.GenerateV2 to
+	// WireVersion (ADR 0021); a daemon rejects a mismatch loudly.
+	WireVersion uint32         `json:"wire_version"`
 	ID          string         `json:"id,omitempty"`
 	Messages    []MessageV2    `json:"messages"`
 	Attachments []AttachmentV2 `json:"attachments,omitempty"`

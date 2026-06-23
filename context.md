@@ -21,7 +21,7 @@ inferd is small, hardened, and standalone. It does not know which apps are conne
 ```
                                    ┌─→ local model     (llama.cpp FFI today,
                                    │                    GGML/MLX/etc. in scope later)
-[any consumer] ←—NDJSON-IPC v1—→ inferd
+[any consumer] ←——IPC (v2 gen / embed)——→ inferd
                                    └─→ remote model    (OpenAI-compat, Anthropic,
                                                         Bedrock, etc. — v0.2)
 ```
@@ -64,18 +64,23 @@ For v0.1, **only the local llama.cpp backend is required** (linked via FFI from 
 
 ## Wire protocol
 
-Protocol v1 is frozen. Authoritative spec: `docs/protocol-v1.md`. Highlights:
+> **v0.4 update (ADR 0021).** This section was written for the v0.1 text-only NDJSON wire (v1). As of v0.4 there is **one generation surface** (v2) on a length-prefixed, type-tagged wire plus an embeddings surface — the v1 socket and types were removed. The current spec lives in ADRs 0021 (generation framing) / 0015 (v2 content shape) / 0017 (embed); `docs/protocol-v1.md` is now a historical record. The shape below is retained for context on the architecture's *intent*; the live framing differs as noted.
 
-- Request framing: one JSON object per line, `\n`-terminated.
-- Request fields: `id`, `messages[].{role,content}`, `temperature`, `top_p`, `top_k`, `max_tokens`, `stream`, `grammar` (optional; GBNF constraint passed through to the engine).
-- Response framing: NDJSON frames with a `type` discriminator: `token`, `done`, `error`, `status`.
-- `done` frames carry `stop_reason` and `backend`; `error` frames carry `code`. See ADR 0008.
-- Image-token-budget validation: if a message has image content, the image budget must be in {70, 140, 280, 560, 1120} before the image content.
-- 64 MiB per-line frame cap. Bounded reader.
+The generation surface (ADR 0021):
 
-Two endpoints:
+- Request framing: length-prefixed, type-tagged frames — `[uvarint payload_len][1 byte type: 0x01 JSON / 0x02 BLOB][payload]`. A text-only request is a single `text` content block; multimodal attachments ride as raw BLOB frames keyed by `attachment_id` (no base64).
+- Request carries an in-band `wire_version`; the daemon rejects a mismatch with `wire_version_unsupported` rather than guessing.
+- Request fields: `wire_version`, `id`, `messages[].{role,content[]}` (typed content blocks), `temperature`, `top_p`, `top_k`, `max_tokens`, `stream`, `tools[]`, `attachments[]`.
+- Response framing: length-prefixed JSON frames discriminated by `type`: `frame` (incremental `text` / `thinking` / `tool_use` block), `done`, `error`.
+- `done` frames carry `stop_reason` and `backend`; `error` frames carry `code`. See ADR 0021/0015.
+- 64 MiB per-frame cap, enforced on the length prefix before the payload. Bounded reader.
 
-- **Inference socket** (`/run/inferd/inference.sock` / `\\.\pipe\inferd-infer` / `127.0.0.1:47321`). Bound only after the backend reports `ready`.
+The embeddings surface (ADR 0017) stays NDJSON: single-frame request, single-frame `embeddings` response.
+
+Endpoints:
+
+- **Generation socket** (`/run/inferd/inferd.sock` / `\\.\pipe\inferd` / loopback TCP when configured). Bound only after the backend reports `ready`.
+- **Embed socket** (`/run/inferd/infer.embed.sock` / `\\.\pipe\inferd-infer-embed`). Bound only when the active backend advertises `capabilities().embed`.
 - **Admin socket** (`/run/inferd/admin.sock` / `\\.\pipe\inferd-admin`, mode `0600`). Bound first, on daemon start; pushes lifecycle events for installer GUIs and progress UIs to subscribe to during model fetch and load.
 
 ## Invariants you must preserve
@@ -88,7 +93,7 @@ These are already-paid-for lessons — do not re-open them:
 4. **Single-instance lock** via `std::fs::File::try_lock` on a daemon-owned lock file. Reject pre-existing symlinks at the lock path (THREAT_MODEL F-2).
 5. **Inference socket invisible until backend `ready` fires** (THREAT_MODEL F-13). Admin socket is bound earlier so progress events are visible during bring-up.
 6. **No elevation.** Per-user daemon. Unix inference socket `0660` group `inferd-users`. Admin socket `0600`.
-7. **NDJSON frame cap.** Per-frame 64 MiB cap (THREAT_MODEL F-5). Bounded reader, not auto-growing buffer.
+7. **Frame cap.** Per-frame 64 MiB cap (THREAT_MODEL F-5), enforced on the length prefix before the payload on the generation wire and on line length for embed NDJSON. Bounded reader, not auto-growing buffer.
 8. **SHA-256 verification of downloaded models is constant-time** (`subtle::ConstantTimeEq`).
 9. **Observability is NDJSON** to `~/.inferd/logs/*.ndjson`, verbosity controlled by `INFERD_LOG=0|1|debug`, 3-generation rotation, secret-pattern redactor at write time.
 10. **Every `std::process::Command` is reviewed.** v0.1 has zero subprocess engines (ADR 0005, llama.cpp linked via FFI). Any future `Command` invocation needs justification.
@@ -99,8 +104,8 @@ These are already-paid-for lessons — do not re-open them:
 Read, in order:
 
 1. This file (done).
-2. `docs/plan-v0.1.md` — crate structure, milestone breakdown, and exact responsibilities of each crate.
-3. `docs/protocol-v1.md` — the wire contract.
+2. `docs/plan-v0.1.md` — crate structure, milestone breakdown, and exact responsibilities of each crate (v0.1-era; still the clearest map of the crates).
+3. ADRs 0021 / 0015 / 0017 — the live wire contract (generation framing / v2 content shape / embeddings). `docs/protocol-v1.md` is a historical record of the removed v1 surface.
 4. `THREAT_MODEL.md` — every finding L2/L4/L5/L6 applies; the remediations are in code, the *why* is in this doc.
 5. `docs/adr/` — every accepted ADR is binding. ADRs 0005, 0006, 0007, 0008, 0009, 0010, 0011 are the load-bearing ones for v0.1.
 

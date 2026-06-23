@@ -10,11 +10,12 @@ import inferd "github.com/3rg0n/inferd/clients/go"
 Single flat package — same shape as `lib/pq` / `pgx`. No
 `proto/v1` + `client` subdivision.
 
-Covers all three frozen wire surfaces: v1 text generation
-(`Client.Generate`), v2 typed content blocks / attachments / tools
-(`Client.GenerateV2`, ADR 0015), and the admin lifecycle stream
-(`AdminClient`). v2 is what you use for **multimodal** — sending images
-to a vision-capable daemon.
+Covers both frozen wire surfaces: generation (`Client.GenerateV2` —
+typed content blocks / attachments / tools, ADR 0015) and the admin
+lifecycle stream (`AdminClient`). Generation is what you use for
+**multimodal** — sending images to a vision-capable daemon. The
+original text-only v1 surface was folded into `GenerateV2` and removed
+in v0.4; a text-only turn is a single `TextBlock`.
 
 ## Quickstart
 
@@ -22,9 +23,9 @@ to a vision-capable daemon.
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-// Pattern A: connect-and-retry against the inference socket.
+// Pattern A: connect-and-retry against the generation socket.
 // The successful connect IS the readiness signal — F-13 in the
-// upstream threat model guarantees the inference socket only
+// upstream threat model guarantees the generation socket only
 // exists when the daemon is `ready`.
 client, err := inferd.DialAndWaitReady(ctx, func(ctx context.Context) (*inferd.Client, error) {
     return inferd.DialTCP(ctx, "127.0.0.1:47321")
@@ -32,35 +33,39 @@ client, err := inferd.DialAndWaitReady(ctx, func(ctx context.Context) (*inferd.C
 if err != nil { /* handle */ }
 defer client.Close()
 
-stream, err := client.Generate(ctx, inferd.Request{
+// Text-only is a single TextBlock; GenerateV2 stamps wire_version.
+stream, err := client.GenerateV2(ctx, inferd.RequestV2{
     ID: "demo-1",
-    Messages: []inferd.Message{
-        {Role: inferd.RoleUser, Content: "hello"},
+    Messages: []inferd.MessageV2{
+        {Role: inferd.RoleUser, Content: []inferd.ContentBlock{inferd.TextBlock("hello")}},
     },
 })
 if err != nil { /* handle */ }
 
 for frame := range stream {
     switch frame.Type {
-    case inferd.ResponseToken:
-        fmt.Print(frame.Content)
-    case inferd.ResponseDone:
+    case inferd.ResponseV2Frame:
+        if frame.Block != nil && frame.Block.Type == inferd.BlockText {
+            fmt.Print(frame.Block.Delta)
+        }
+    case inferd.ResponseV2Done:
         fmt.Printf("\n[done; backend=%s, stop=%s]\n", frame.Backend, frame.StopReason)
-    case inferd.ResponseError:
+    case inferd.ResponseV2Error:
         fmt.Printf("\n[error %s: %s]\n", frame.Code, frame.Message)
     }
 }
 ```
 
-## Multimodal (v2)
+## Multimodal
 
-The v2 surface binds on a **separate socket** from v1 — dial it with
-the same `DialUDS` / `DialPipe` / `DialTCP` pointed at the v2 path
-(`DefaultInferV2Addr()` returns the platform default), then call
-`GenerateV2`. Send images as typed content blocks plus a top-level
-attachment table; per ADR 0016 the consumer decodes the image to raw
-interleaved RGB (`width*height*3` bytes, no alpha) before sending — the
-daemon links no image codec.
+Generation is a single socket (v0.4 / ADR 0021) — dial it with
+`DialUDS` / `DialPipe` / `DialTCP` pointed at `DefaultInferAddr()`,
+then call `GenerateV2`. Send images as typed content blocks plus a
+top-level attachment table; per ADR 0016 the consumer decodes the
+image to raw interleaved RGB (`width*height*3` bytes, no alpha) before
+sending — the daemon links no image codec. The raw bytes ride as a
+BLOB frame keyed by attachment id (ADR 0021); the client emits the
+frames for you.
 
 ```go
 // Gate on the daemon advertising vision before dispatching. The admin
@@ -78,7 +83,7 @@ if !vision { /* daemon has no vision backend; fall back to text */ }
 
 // Decode your image (JPEG/PNG/…) to RGB yourself, then:
 rgb := decodeToRGB(imgBytes)         // your codec; daemon links none
-c, _ := inferd.DialUDS(ctx, inferd.DefaultInferV2Addr())
+c, _ := inferd.DialUDS(ctx, inferd.DefaultInferAddr())
 defer c.Close()
 stream, _ := c.GenerateV2(ctx, inferd.RequestV2{
     ID: "vq-1",
@@ -108,11 +113,11 @@ declared in `RequestV2.Tools`. The stream terminates with one `done`
 
 ## Transports
 
-| Function | Platform | Default |
+| Function | Platform | Default (`DefaultInferAddr()`) |
 |---|---|---|
 | `DialTCP(ctx, "127.0.0.1:47321")` | All | Loopback only by convention; daemon refuses to bind public addresses unless explicitly configured. |
-| `DialUDS(ctx, path)` | Unix (`//go:build unix`) | `/run/inferd/infer.sock` |
-| `DialPipe(ctx, path)` | Windows | `\\.\pipe\inferd-infer` |
+| `DialUDS(ctx, path)` | Unix (`//go:build unix`) | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` |
+| `DialPipe(ctx, path)` | Windows | `\\.\pipe\inferd` |
 
 `DialAndWaitReady(ctx, dial)` wraps any of the three with an
 exponential-backoff retry loop (start 100ms, cap 5s) for
@@ -120,8 +125,7 @@ transient connect errors that surface during daemon bring-up
 (`ECONNREFUSED`, `ENOENT`, `ERROR_PIPE_BUSY`,
 `ERROR_FILE_NOT_FOUND`). Permanent errors (`EACCES`, malformed
 addr) bubble up immediately. Use this for inference-only
-consumers — see Pattern A in the upstream
-`docs/protocol-v1.md` §"Client connection lifecycle".
+consumers (Pattern A).
 
 ## Wait-for-ready patterns
 
@@ -178,19 +182,21 @@ need the progress frames in between.
 ### Forward compatibility
 
 Per the spec, clients **MUST ignore** unknown `Status` and
-`Phase` values; the daemon may add new ones in any v1 release.
+`Phase` values; the daemon may add new ones in any release.
 This client surfaces unknown values verbatim in
 `AdminEvent.Status`/`AdminEvent.Phase` — branch only on values
 you recognise; default to logging-and-ignoring otherwise.
 
 ## Compatibility
 
-Each wire surface is frozen in the upstream repo: v1 per ADR 0008,
-v2 per ADR 0015, embeddings per ADR 0017. This module implements v1
-(`protocol.go`), v2 (`protocol_v2.go`), and the admin stream
-(`admin.go`); the shapes are byte-compatible with the Rust
-`inferd-proto` crate and verified by tests that round-trip frames
-(and, when the binary is present, launch the Rust daemon).
+Each wire surface is frozen in the upstream repo: generation (v2) per
+ADR 0015 with the length-prefixed framing of ADR 0021, embeddings per
+ADR 0017. This module implements the generation wire
+(`protocol_v2.go` / `client_v2.go`) and the admin stream (`admin.go`);
+the shapes are byte-compatible with the Rust `inferd-proto` crate and
+verified by tests that round-trip frames (and, when the binary is
+present, launch the Rust daemon). The text-only v1 surface was removed
+in v0.4.
 
 Any Go consumer that wants local inference imports this
 module instead of embedding its own engine. Call sites

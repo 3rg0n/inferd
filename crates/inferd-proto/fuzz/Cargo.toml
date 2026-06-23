@@ -6,19 +6,19 @@
 #   rustup install nightly
 #   cargo install cargo-fuzz
 #   cd crates/inferd-proto/fuzz
-#   cargo +nightly fuzz run frame_reader
+#   cargo +nightly fuzz run lp_frame_reader
 #
-# Targets currently exposed:
-#   - frame_reader: feed arbitrary bytes to inferd_proto::read_frame
-#                   and assert the bounded reader either returns
-#                   FrameTooLarge, returns a parsed Request, returns
-#                   Ok(None) on EOF, or returns a clean Decode/Io
-#                   error. Should never panic. Should never allocate
-#                   beyond MAX_FRAME_BYTES.
-#   - request_resolve: feed arbitrary bytes interpreted as a JSON
-#                      Request to Request::resolve(). Validation logic
-#                      should never panic; should always either return
-#                      a Resolved or an InvalidRequest error.
+# Targets currently exposed (v0.4 / ADR 0021):
+#   - lp_frame_reader: feed arbitrary bytes to inferd_proto::read_lp_frame
+#                      and assert the bounded length-prefixed reader either
+#                      returns FrameTooLarge / MalformedFrame, returns a
+#                      parsed RawFrame, returns Ok(None) on EOF, or returns a
+#                      clean Decode/Io error. Should never panic. Should
+#                      never allocate beyond MAX_FRAME_BYTES.
+#   - v2_request_resolve: feed arbitrary bytes interpreted as a JSON v2
+#                         Request to RequestV2::resolve(). Validation logic
+#                         should never panic; should always either return a
+#                         ResolvedV2 or an InvalidRequest error.
 #
 # Findings open issues, not block PRs. CI does not run fuzzing — see
 # docs/test-strategy.md §"Tier 6".
@@ -38,15 +38,15 @@ inferd-proto  = { path = ".." }
 serde_json    = "1"
 
 [[bin]]
-name = "frame_reader"
-path = "fuzz_targets/frame_reader.rs"
+name = "lp_frame_reader"
+path = "fuzz_targets/lp_frame_reader.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "request_resolve"
-path = "fuzz_targets/request_resolve.rs"
+name = "v2_request_resolve"
+path = "fuzz_targets/v2_request_resolve.rs"
 test = false
 doc = false
 bench = false

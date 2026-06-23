@@ -64,7 +64,7 @@ func TestIsTransientDialErrorRecognisesECONNREFUSED(t *testing.T) {
 		"dial tcp 127.0.0.1:47321: connect: connection refused",
 		"dial tcp 127.0.0.1:47321: connectex: No connection could be made because the target machine actively refused it",
 		"open \\\\.\\pipe\\inferd-infer: The system cannot find the file specified.",
-		"open /run/inferd/infer.sock: no such file or directory",
+		"open /run/inferd/inferd.sock: no such file or directory",
 		"open \\\\.\\pipe\\inferd-infer: All pipe instances are busy.",
 	}
 	for _, msg := range cases {
@@ -76,7 +76,7 @@ func TestIsTransientDialErrorRecognisesECONNREFUSED(t *testing.T) {
 
 func TestIsTransientDialErrorRejectsPermanent(t *testing.T) {
 	cases := []string{
-		"open /run/inferd/infer.sock: permission denied",
+		"open /run/inferd/inferd.sock: permission denied",
 		"dial tcp: malformed address",
 		"unknown nonsense error",
 	}

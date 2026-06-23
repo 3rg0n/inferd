@@ -260,12 +260,18 @@ jobs:
           mkdir -p ~/.local/bin ~/.config/systemd/user
           install -m 755 target/release/inferd-daemon ~/.local/bin/inferd-daemon
           install -m 644 packaging/systemd/inferd.service ~/.config/systemd/user/inferd.service
-          # Enable v2 alongside v1 for this CI run. The shipped unit
-          # is v1-only by design (gateway posture, ADR 0015 — operators
-          # opt in); the smoke flips it on so we exercise both sockets
-          # with the same warm model + admission gate.
-          sed -i \
-            's|--admin-addr %t/inferd/admin.sock|--admin-addr %t/inferd/admin.sock --v2|' \
+          # v0.4 (ADR 0021): the shipped unit binds the single generation
+          # socket (inferd.sock) by default — no --v2 flag to flip on.
+          #
+          # This is a MOCK build (`cargo build -p inferd-daemon`, no
+          # llamacpp feature) on a GPU-less runner with no model. The
+          # shipped unit deliberately omits `--backend` (defers to
+          # ~/.inferd/config.json → real llamacpp backends + auto_pull).
+          # As of v0.4 the daemon REFUSES to start with no usable backend
+          # rather than silently serving mock (GA install=work hardening),
+          # so the smoke must ask for mock explicitly. Append it to the
+          # unit's first ExecStart line.
+          sed -i 's|\(ExecStart=%h/.local/bin/inferd-daemon\)|\1 --backend mock|' \
             ~/.config/systemd/user/inferd.service
 
       - name: Start inferd via systemctl --user
@@ -283,59 +289,75 @@ jobs:
       - name: Verify runtime artefacts and modes
         run: |
           ls -la "${XDG_RUNTIME_DIR}/inferd/"
-          # Sockets must exist and have the spec-mandated modes:
-          #   admin.sock      srw------- (0600)
-          #   infer.sock      srw-rw---- (0660)
-          #   infer.v2.sock   srw-rw---- (0660)  (with --v2)
+          # Sockets must exist and have the spec-mandated modes (v0.4 /
+          # ADR 0021 — one generation socket on the neutral path):
+          #   admin.sock   srw------- (0600)
+          #   inferd.sock  srw-rw---- (0660)
           test -S "${XDG_RUNTIME_DIR}/inferd/admin.sock"
-          test -S "${XDG_RUNTIME_DIR}/inferd/infer.sock"
-          test -S "${XDG_RUNTIME_DIR}/inferd/infer.v2.sock"
+          test -S "${XDG_RUNTIME_DIR}/inferd/inferd.sock"
           test -f "${XDG_RUNTIME_DIR}/inferd/inferd.lock"
           # `stat -c %a` prints octal mode; check exact bytes.
           [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/admin.sock")" = "600" ]
-          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/infer.sock")" = "660" ]
-          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/infer.v2.sock")" = "660" ]
+          [ "$(stat -c %a "${XDG_RUNTIME_DIR}/inferd/inferd.sock")" = "660" ]
 
-      - name: Smoke an NDJSON request through the inference UDS
+      - name: Smoke a length-prefixed v2 request through the generation UDS
+        # v0.4 (ADR 0021): the single generation socket speaks the
+        # length-prefixed, type-tagged wire — [uvarint payload_len]
+        # [1 byte type: 0x01 JSON / 0x02 BLOB][payload] — with an in-band
+        # wire_version. Mock backend advertises v2 + thinking; dispatch
+        # must route via the router and stream a Done frame back. Catches
+        # regressions in: generation socket binding, RequestV2 resolve,
+        # the router's V2-capable check, the LP frame codec, and the
+        # wire_version gate.
         run: |
           python3 - <<PY
           import socket, json, os, sys
-          sock_path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "inferd", "infer.sock")
-          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-          s.connect(sock_path)
-          req = {"id":"ci-systemd","messages":[{"role":"user","content":"hello"}],"max_tokens":4}
-          s.sendall((json.dumps(req)+"\n").encode())
-          buf = b""
-          done = False
-          while not done:
-              chunk = s.recv(4096)
-              if not chunk:
-                  print("EOF", file=sys.stderr); sys.exit(1)
-              buf += chunk
-              while b"\n" in buf:
-                  line, buf = buf.split(b"\n", 1)
-                  if not line: continue
-                  print("<-", line.decode())
-                  if b'"type":"done"' in line:
-                      done = True
-                      break
-                  if b'"type":"error"' in line:
-                      print("daemon returned error frame", file=sys.stderr); sys.exit(1)
-          PY
 
-      - name: Smoke a v2 NDJSON request through the v2 UDS
-        # Mock backend advertises v2 + thinking; v2 dispatch must
-        # route to it via the router and stream a Done frame back.
-        # This catches regressions in: v2 socket binding, AcceptContext
-        # sharing between v1+v2 listeners, RequestV2 resolve, the
-        # router's V2-capable check, and the v2 wire shape itself.
-        run: |
-          python3 - <<PY
-          import socket, json, os, sys
-          sock_path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "inferd", "infer.v2.sock")
+          def write_uvarint(n):
+              out = bytearray()
+              while True:
+                  b = n & 0x7f
+                  n >>= 7
+                  if n:
+                      out.append(b | 0x80)
+                  else:
+                      out.append(b)
+                      return bytes(out)
+
+          def write_lp_json(s, obj):
+              payload = json.dumps(obj).encode()
+              s.sendall(write_uvarint(len(payload)) + b"\x01" + payload)
+
+          def read_uvarint(s):
+              shift = 0; val = 0
+              while True:
+                  b = s.recv(1)
+                  if not b:
+                      print("EOF reading varint", file=sys.stderr); sys.exit(1)
+                  val |= (b[0] & 0x7f) << shift
+                  if not (b[0] & 0x80):
+                      return val
+                  shift += 7
+
+          def read_exact(s, n):
+              buf = b""
+              while len(buf) < n:
+                  chunk = s.recv(n - len(buf))
+                  if not chunk:
+                      print("EOF reading payload", file=sys.stderr); sys.exit(1)
+                  buf += chunk
+              return buf
+
+          def read_lp_frame(s):
+              n = read_uvarint(s)
+              ftype = read_exact(s, 1)
+              return ftype[0], read_exact(s, n)
+
+          sock_path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "inferd", "inferd.sock")
           s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           s.connect(sock_path)
           req = {
+              "wire_version": 1,
               "id": "ci-systemd-v2",
               "messages": [{
                   "role": "user",
@@ -343,23 +365,18 @@ jobs:
               }],
               "max_tokens": 4,
           }
-          s.sendall((json.dumps(req)+"\n").encode())
-          buf = b""
+          write_lp_json(s, req)
           done = False
           while not done:
-              chunk = s.recv(4096)
-              if not chunk:
-                  print("EOF", file=sys.stderr); sys.exit(1)
-              buf += chunk
-              while b"\n" in buf:
-                  line, buf = buf.split(b"\n", 1)
-                  if not line: continue
-                  print("<-", line.decode())
-                  if b'"type":"done"' in line:
-                      done = True
-                      break
-                  if b'"type":"error"' in line:
-                      print("daemon returned v2 error frame", file=sys.stderr); sys.exit(1)
+              ftype, payload = read_lp_frame(s)
+              if ftype != 0x01:
+                  print(f"unexpected frame type {ftype:#x}", file=sys.stderr); sys.exit(1)
+              print("<-", payload.decode())
+              frame = json.loads(payload)
+              if frame.get("type") == "done":
+                  done = True
+              elif frame.get("type") == "error":
+                  print("daemon returned v2 error frame", file=sys.stderr); sys.exit(1)
           PY
 
       - name: Verify journal does not show start-loop containment trips

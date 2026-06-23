@@ -2,12 +2,58 @@
 //! and forward-compatibility of unknown content-block types.
 
 use inferd_proto::v2::{
-    Attachment, ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
-    StopReasonV2, Tool, ToolCallId, UsageV2,
+    Attachment, BlobDescriptor, BlobDescriptorTag, ContentBlock, ErrorCodeV2, MessageV2, RequestV2,
+    ResponseBlock, ResponseV2, RoleV2, StopReasonV2, Tool, ToolCallId, UsageV2, WIRE_VERSION,
 };
 use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_frame, write_frame};
 use serde_json::json;
 use std::io::Cursor;
+
+#[test]
+fn wire_version_round_trips_on_request() {
+    let req = RequestV2 {
+        wire_version: WIRE_VERSION,
+        id: "wv".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
+        }],
+        ..Default::default()
+    };
+    let mut buf = Vec::new();
+    write_frame(&mut buf, &req).unwrap();
+    let json = String::from_utf8(buf.clone()).unwrap();
+    assert!(json.contains("\"wire_version\""), "got: {json}");
+    let mut cur = Cursor::new(buf);
+    let parsed: RequestV2 = read_frame(&mut cur).unwrap().unwrap();
+    assert_eq!(parsed.wire_version, WIRE_VERSION);
+    // resolve carries it through unchecked (daemon enforces policy).
+    assert_eq!(parsed.resolve().unwrap().wire_version, WIRE_VERSION);
+}
+
+#[test]
+fn request_missing_wire_version_defaults_to_zero() {
+    // A frame from a pre-v0.4 (or buggy) client omits wire_version; it
+    // must deserialise to 0 so the daemon can reject it loudly rather
+    // than mis-handle it.
+    let line =
+        br#"{"id":"old","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}"#;
+    let mut cur = Cursor::new(&line[..]);
+    let parsed: RequestV2 = read_frame(&mut cur).unwrap().unwrap();
+    assert_eq!(parsed.wire_version, 0);
+}
+
+#[test]
+fn blob_descriptor_round_trips() {
+    let d = BlobDescriptor::new("img-1", 196608);
+    let s = serde_json::to_string(&d).unwrap();
+    assert!(s.contains("\"attachment_blob\""), "got: {s}");
+    assert!(s.contains("\"attachment_id\":\"img-1\""), "got: {s}");
+    let back: BlobDescriptor = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, d);
+    assert_eq!(back.frame_kind, BlobDescriptorTag::AttachmentBlob);
+    assert_eq!(back.len, 196608);
+}
 
 fn text_request() -> RequestV2 {
     RequestV2 {
@@ -48,7 +94,10 @@ fn multimodal_request() -> RequestV2 {
             id: "img-1".into(),
             width: 256,
             height: 256,
-            bytes: "<base64>".into(),
+            // Raw RGB bytes (ADR 0021). On the JSON wire these are
+            // skipped — they ride in a separate BLOB frame — so the
+            // round-trip test below asserts metadata equality, not bytes.
+            bytes: vec![1, 2, 3, 4, 5, 6],
         }],
         tools: vec![Tool {
             name: "get_weather".into(),
@@ -83,7 +132,37 @@ fn request_roundtrip_multimodal() {
     write_frame(&mut buf, &req).unwrap();
     let mut cursor = Cursor::new(buf);
     let parsed: RequestV2 = read_frame(&mut cursor).unwrap().expect("frame present");
-    assert_eq!(req, parsed);
+
+    // Attachment *bytes* are `#[serde(skip)]` (ADR 0021 — they ride in a
+    // BLOB frame, not the JSON), so the parsed copy has empty bytes.
+    // Everything else must round-trip identically.
+    let mut expected = req.clone();
+    for att in &mut expected.attachments {
+        att.set_bytes(Vec::new());
+    }
+    assert_eq!(expected, parsed);
+
+    // The JSON envelope must not contain the raw bytes.
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(
+        !json.contains("\"bytes\""),
+        "attachment bytes must not appear in the JSON frame; got: {json}"
+    );
+
+    // Metadata survives.
+    match &parsed.attachments[0] {
+        Attachment::Image {
+            id,
+            width,
+            height,
+            bytes,
+        } => {
+            assert_eq!(id, "img-1");
+            assert_eq!((*width, *height), (256, 256));
+            assert!(bytes.is_empty(), "bytes should be out-of-band");
+        }
+        other => panic!("expected image attachment, got {other:?}"),
+    }
 }
 
 #[test]
@@ -147,7 +226,7 @@ fn resolve_accepts_attachment_referenced_in_tool_result() {
             id: "img-1".into(),
             width: 64,
             height: 64,
-            bytes: "<base64>".into(),
+            bytes: vec![0u8; 12],
         }],
         ..Default::default()
     };
@@ -167,12 +246,12 @@ fn resolve_rejects_duplicate_attachment_ids() {
                 id: "dup".into(),
                 width: 8,
                 height: 8,
-                bytes: "a".into(),
+                bytes: vec![1],
             },
             Attachment::Audio {
                 id: "dup".into(),
                 sample_rate: 16000,
-                bytes: "b".into(),
+                bytes: vec![2],
             },
         ],
         ..Default::default()

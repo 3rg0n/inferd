@@ -218,7 +218,9 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
 fn error_code_for(e: &ProtoError) -> EmbedErrorCode {
     match e {
         ProtoError::FrameTooLarge => EmbedErrorCode::FrameTooLarge,
-        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) => EmbedErrorCode::InvalidRequest,
+        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) | ProtoError::MalformedFrame(_) => {
+            EmbedErrorCode::InvalidRequest
+        }
         ProtoError::Io(_) => EmbedErrorCode::Internal,
     }
 }

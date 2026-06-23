@@ -112,6 +112,10 @@ pub enum ErrorCodeV2 {
     AttachmentUnsupported,
     /// Model emitted a tool-call sequence the daemon couldn't parse.
     ToolCallMalformed,
+    /// Request's `wire_version` is not one this daemon supports
+    /// (ADR 0021). The error `message` names both the requested and
+    /// supported versions so the mismatch is debuggable.
+    WireVersionUnsupported,
 }
 
 /// One frame on the v2 response NDJSON stream.

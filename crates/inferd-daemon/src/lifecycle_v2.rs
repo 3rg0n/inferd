@@ -1,22 +1,25 @@
-//! v2 connection lifecycle — Phase 2A wired.
+//! v2 connection lifecycle — the single generation surface (ADR 0021).
 //!
-//! Per ADR 0015, v2 lives on a *separate* socket from v1. This module
-//! mirrors `lifecycle.rs` but for the v2 wire types
-//! (`inferd_proto::v2::RequestV2` / `ResponseV2`).
+//! As of v0.4 v2 is the *only* generation socket (v1 was folded in and
+//! removed) and rides the length-prefixed, type-tagged framing
+//! (`[uvarint len][1 byte type][payload]`, type `0x01` JSON / `0x02`
+//! BLOB) rather than newline-delimited JSON. Attachment bytes travel
+//! out-of-band in BLOB frames.
 //!
 //! Per request:
-//!   1. Read one NDJSON frame, parse as `RequestV2`.
-//!   2. `RequestV2::resolve()` — structural validation.
-//!   3. Admission gate (same Admission shared with v1; one slot
-//!      is one slot regardless of wire version).
-//!   4. Dispatch through the router; check the chosen backend's
-//!      `capabilities().v2` flag — backends that don't support v2
-//!      yield `Error{Internal, "v2 not supported by this backend"}`.
-//!   5. `backend.generate_v2(resolved)` — pre-stream errors map to
-//!      v2 error codes; mid-stream backend failure (no Done) maps to
-//!      `BackendUnavailable`.
-//!   6. Stream `TokenEventV2`s, translating each to the
-//!      corresponding `ResponseV2::Frame` / `Done`.
+//!   1. Read the JSON request frame, parse as `RequestV2`.
+//!   2. Reject if `wire_version != WIRE_VERSION` (loud mismatch).
+//!   3. For each attachment, read a `BlobDescriptor` JSON frame + its
+//!      BLOB frame; install the raw bytes into the matching attachment
+//!      by id (`Attachment::set_bytes`). No base64.
+//!   4. `RequestV2::resolve()` — structural validation.
+//!   5. Admission gate (one active generation, bounded queue).
+//!   6. Dispatch through the router; require the chosen backend's
+//!      `capabilities().v2`.
+//!   7. `backend.generate_v2(resolved)`; pre-stream errors map to v2
+//!      error codes, mid-stream failure (no Done) → `BackendUnavailable`.
+//!   8. Stream `TokenEventV2`s, translating each to `ResponseV2::Frame`
+//!      / `Done` (written as length-prefixed JSON frames).
 
 use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
@@ -25,11 +28,14 @@ use crate::queue::SubmitError;
 use crate::router::{Router, RouterError};
 use inferd_engine::{GenerateError, TokenEventV2};
 use inferd_proto::ProtoError;
-use inferd_proto::v2::{ErrorCodeV2, RequestV2, ResponseBlock, ResponseV2};
-use inferd_proto::write_frame;
+use inferd_proto::v2::{
+    Attachment, BlobDescriptor, BlobDescriptorTag, ErrorCodeV2, RequestV2, ResponseBlock,
+    ResponseV2, WIRE_VERSION,
+};
+use inferd_proto::{FrameType, MAX_FRAME_BYTES, decode_json_payload, write_lp_json};
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
@@ -84,11 +90,15 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
     }
 
     loop {
-        let request: RequestV2 = match read_request_v2(&mut reader).await {
+        // 1. Request JSON frame.
+        let mut request: RequestV2 = match read_json_frame::<_, RequestV2>(&mut reader).await {
             Ok(Some(r)) => r,
             Ok(None) => return Ok(()),
             Err(ProtoError::Io(e)) => return Err(e),
             Err(e) => {
+                // Framing or decode error before we even have a request
+                // id — report against an empty id and close, since the
+                // byte stream is no longer trustworthy.
                 let resp = ResponseV2::Error {
                     id: String::new(),
                     code: error_code_for(&e),
@@ -100,11 +110,45 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
         };
 
         let id = request.id.clone();
+
+        // 2. Wire-version gate (ADR 0021). Fail loudly on mismatch.
+        if request.wire_version != WIRE_VERSION {
+            let resp = ResponseV2::Error {
+                id,
+                code: ErrorCodeV2::WireVersionUnsupported,
+                message: format!(
+                    "unsupported wire_version {}: this daemon speaks wire_version {}",
+                    request.wire_version, WIRE_VERSION
+                ),
+            };
+            write_response_v2(&writer, &resp).await?;
+            // A version mismatch means the peer's framing assumptions may
+            // differ from ours; don't try to resync on this connection.
+            return Ok(());
+        }
+
+        // 3. Attachment BLOBs. Each attachment's raw bytes arrive as a
+        //    BlobDescriptor JSON frame followed by a BLOB frame, in the
+        //    order the attachments appear in the request. Install them by
+        //    id. A framing/correlation failure here closes the connection.
+        if let Err(e) = read_attachment_blobs(&mut reader, &mut request.attachments).await {
+            let resp = ResponseV2::Error {
+                id: request.id.clone(),
+                code: error_code_for(&e),
+                message: e.to_string(),
+            };
+            write_response_v2(&writer, &resp).await?;
+            return Ok(());
+        }
+
+        // 4. Structural validation. `resolve` consumes the request, so
+        //    capture the id first for the error path.
+        let req_id_for_resolve = request.id.clone();
         let resolved = match request.resolve() {
             Ok(r) => r,
             Err(e) => {
                 let resp = ResponseV2::Error {
-                    id,
+                    id: req_id_for_resolve,
                     code: ErrorCodeV2::InvalidRequest,
                     message: e.to_string(),
                 };
@@ -280,69 +324,188 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
 fn error_code_for(e: &ProtoError) -> ErrorCodeV2 {
     match e {
         ProtoError::FrameTooLarge => ErrorCodeV2::FrameTooLarge,
-        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) => ErrorCodeV2::InvalidRequest,
+        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) | ProtoError::MalformedFrame(_) => {
+            ErrorCodeV2::InvalidRequest
+        }
         ProtoError::Io(_) => ErrorCodeV2::Internal,
     }
 }
 
-async fn read_auth_frame<R>(reader: &mut R) -> Option<AuthFrame>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-    let mut line = Vec::with_capacity(256);
-    let limit = inferd_proto::MAX_FRAME_BYTES;
-    loop {
-        let buf = reader.fill_buf().await.ok()?;
-        if buf.is_empty() {
-            return None;
-        }
-        if let Some(idx) = buf.iter().position(|&b| b == b'\n') {
-            if line.len() + idx > limit {
-                return None;
+// --- length-prefixed framing (async) ---------------------------------------
+//
+// Async mirror of inferd_proto's sync `read_lp_frame`. The proto codec
+// is `std::io::BufRead`-based; the daemon's transport is tokio
+// `AsyncRead`, so we re-implement the same wire grammar here:
+// `[uvarint payload_len][1 byte type][payload]`, 64 MiB cap enforced on
+// `payload_len` before the payload is read.
+
+const MAX_VARINT_BYTES: usize = 5;
+
+/// Read one length-prefixed frame. `Ok(None)` on a clean between-frames
+/// EOF (peer closed). Errors mirror the sync codec: `FrameTooLarge` for
+/// an oversize length, `MalformedFrame` for an unknown type byte / a
+/// non-terminating length varint / mid-frame EOF, `Io` for transport
+/// errors.
+async fn read_lp_raw<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<(FrameType, Vec<u8>)>, ProtoError> {
+    // payload_len (LEB128 varint).
+    let mut value: u64 = 0;
+    let mut shift: u32 = 0;
+    for i in 0..MAX_VARINT_BYTES {
+        let mut b = [0u8; 1];
+        if reader.read(&mut b).await? == 0 {
+            if i == 0 {
+                return Ok(None); // clean EOF between frames
             }
-            line.extend_from_slice(&buf[..idx]);
-            reader.consume(idx + 1);
-            return AuthFrame::from_json(&line);
+            return Err(ProtoError::MalformedFrame(
+                "stream ended mid-length-varint".into(),
+            ));
         }
-        if line.len() + buf.len() > limit {
-            return None;
+        value |= u64::from(b[0] & 0x7f) << shift;
+        if b[0] & 0x80 == 0 {
+            break;
         }
-        line.extend_from_slice(buf);
-        let n = buf.len();
-        reader.consume(n);
+        shift += 7;
+        if i == MAX_VARINT_BYTES - 1 {
+            return Err(ProtoError::MalformedFrame(format!(
+                "length varint exceeded {MAX_VARINT_BYTES} bytes"
+            )));
+        }
+    }
+    if value > MAX_FRAME_BYTES as u64 {
+        return Err(ProtoError::FrameTooLarge);
+    }
+    let payload_len = value as usize;
+
+    // frame_type (1 byte).
+    let mut type_byte = [0u8; 1];
+    read_exact_or_malformed(reader, &mut type_byte, "frame-type byte").await?;
+    let frame_type = match type_byte[0] {
+        0x01 => FrameType::Json,
+        0x02 => FrameType::Blob,
+        other => {
+            return Err(ProtoError::MalformedFrame(format!(
+                "unknown frame-type byte 0x{other:02x}"
+            )));
+        }
+    };
+
+    // payload.
+    let mut payload = vec![0u8; payload_len];
+    read_exact_or_malformed(reader, &mut payload, "frame payload").await?;
+    Ok(Some((frame_type, payload)))
+}
+
+async fn read_exact_or_malformed<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut [u8],
+    what: &str,
+) -> Result<(), ProtoError> {
+    match reader.read_exact(buf).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Err(ProtoError::MalformedFrame(
+            format!("stream ended mid-frame reading {what}"),
+        )),
+        Err(e) => Err(ProtoError::Io(e)),
     }
 }
 
-async fn read_request_v2<R>(reader: &mut R) -> Result<Option<RequestV2>, ProtoError>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-    let mut line = Vec::with_capacity(512);
-    let limit = inferd_proto::MAX_FRAME_BYTES;
-    loop {
-        let buf = reader.fill_buf().await?;
-        if buf.is_empty() {
-            if line.is_empty() {
-                return Ok(None);
+/// Read one length-prefixed JSON frame and decode it as `T`. Errors if
+/// the next frame is a BLOB where a JSON control frame was expected.
+async fn read_json_frame<R: AsyncRead + Unpin, T: serde::de::DeserializeOwned>(
+    reader: &mut R,
+) -> Result<Option<T>, ProtoError> {
+    match read_lp_raw(reader).await? {
+        None => Ok(None),
+        Some((FrameType::Json, payload)) => decode_json_payload::<T>(&payload).map(Some),
+        Some((FrameType::Blob, _)) => Err(ProtoError::MalformedFrame(
+            "expected a JSON control frame, got a BLOB frame".into(),
+        )),
+    }
+}
+
+/// For each attachment in `attachments`, read its `BlobDescriptor` JSON
+/// frame followed by its BLOB frame and install the raw bytes by id
+/// (ADR 0021). Descriptors must reference attachment ids present in the
+/// request, the BLOB length must match the descriptor, and each
+/// attachment must receive exactly one BLOB.
+async fn read_attachment_blobs<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    attachments: &mut [Attachment],
+) -> Result<(), ProtoError> {
+    let expected = attachments.len();
+    for _ in 0..expected {
+        // Descriptor (JSON frame).
+        let desc: BlobDescriptor = match read_json_frame(reader).await? {
+            Some(d) => d,
+            None => {
+                return Err(ProtoError::MalformedFrame(
+                    "stream ended before all attachment BLOBs were sent".into(),
+                ));
             }
-            return inferd_proto::read_frame::<&[u8], RequestV2>(&mut &line[..]);
+        };
+        if !matches!(desc.frame_kind, BlobDescriptorTag::AttachmentBlob) {
+            return Err(ProtoError::MalformedFrame(
+                "expected an attachment_blob descriptor".into(),
+            ));
         }
-        if let Some(idx) = buf.iter().position(|&b| b == b'\n') {
-            if line.len() + idx > limit {
-                return Err(ProtoError::FrameTooLarge);
-            }
-            line.extend_from_slice(&buf[..=idx]);
-            reader.consume(idx + 1);
-            return inferd_proto::read_frame::<&[u8], RequestV2>(&mut &line[..]);
-        }
-        if line.len() + buf.len() > limit {
+        if desc.len > MAX_FRAME_BYTES as u64 {
             return Err(ProtoError::FrameTooLarge);
         }
-        line.extend_from_slice(buf);
-        let n = buf.len();
-        reader.consume(n);
+
+        // BLOB frame.
+        let (ftype, bytes) = match read_lp_raw(reader).await? {
+            Some(v) => v,
+            None => {
+                return Err(ProtoError::MalformedFrame(
+                    "stream ended before the attachment BLOB frame".into(),
+                ));
+            }
+        };
+        if !matches!(ftype, FrameType::Blob) {
+            return Err(ProtoError::MalformedFrame(
+                "expected a BLOB frame after its descriptor".into(),
+            ));
+        }
+        if bytes.len() as u64 != desc.len {
+            return Err(ProtoError::MalformedFrame(format!(
+                "attachment {:?}: BLOB length {} != descriptor len {}",
+                desc.attachment_id,
+                bytes.len(),
+                desc.len
+            )));
+        }
+
+        // Correlate by id and install. Reject a descriptor naming an id
+        // not in the request, or a second BLOB for an already-filled
+        // attachment.
+        let target = attachments
+            .iter_mut()
+            .find(|a| a.id() == desc.attachment_id)
+            .ok_or_else(|| {
+                ProtoError::MalformedFrame(format!(
+                    "BLOB descriptor names unknown attachment id {:?}",
+                    desc.attachment_id
+                ))
+            })?;
+        if !target.bytes().is_empty() {
+            return Err(ProtoError::MalformedFrame(format!(
+                "attachment {:?} received more than one BLOB",
+                desc.attachment_id
+            )));
+        }
+        target.set_bytes(bytes);
+    }
+    Ok(())
+}
+
+/// Read a length-prefixed JSON auth frame (TCP F-8). `None` on EOF,
+/// non-JSON frame, or a payload that isn't a valid `AuthFrame`.
+async fn read_auth_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Option<AuthFrame> {
+    match read_lp_raw(reader).await.ok()?? {
+        (FrameType::Json, payload) => AuthFrame::from_json(&payload),
+        (FrameType::Blob, _) => None,
     }
 }
 
@@ -351,7 +514,7 @@ async fn write_response_v2<W: AsyncWrite + Unpin>(
     resp: &ResponseV2,
 ) -> io::Result<()> {
     let mut buf = Vec::with_capacity(512);
-    write_frame(&mut buf, resp)
+    write_lp_json(&mut buf, resp)
         .map_err(|e| io::Error::other(format!("serialise v2 response: {e}")))?;
     let mut guard = writer.lock().await;
     guard.write_all(&buf).await?;

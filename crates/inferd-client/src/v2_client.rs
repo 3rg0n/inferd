@@ -1,19 +1,22 @@
-//! v2 inference-socket client. NDJSON over UDS / pipe / loopback TCP.
+//! v2 inference-socket client — the single generation surface.
 //!
-//! Spec: ADR 0015. v2 lives on a *separate* socket from v1 — clients
-//! pick a transport variant per platform with `dial_uds`,
-//! `dial_pipe`, or `dial_tcp`, mirroring `Client`'s shape but using
-//! the v2 wire types (`RequestV2` / `ResponseV2`). The framing
-//! contract is identical: 64 MiB cap, `\n`-delimited NDJSON, terminal
-//! `done` / `error` ends the stream.
+//! Spec: ADR 0021. As of v0.4 v2 is the only generation socket and
+//! rides the length-prefixed, type-tagged framing
+//! (`[uvarint len][1 byte type][payload]`, type `0x01` JSON / `0x02`
+//! BLOB). Clients pick a transport with `dial_uds` / `dial_pipe` /
+//! `dial_tcp`. A request carrying attachments sends the JSON request
+//! frame, then per attachment a `BlobDescriptor` JSON frame followed by
+//! a BLOB frame with the raw bytes (no base64). 64 MiB per-frame cap;
+//! terminal `done` / `error` ends the stream.
 
 use crate::client::ClientError;
-use inferd_proto::v2::{RequestV2, ResponseV2};
+use inferd_proto::v2::{BlobDescriptor, RequestV2, ResponseV2, WIRE_VERSION};
+use inferd_proto::{FrameType, MAX_FRAME_BYTES};
 #[cfg(unix)]
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
@@ -52,9 +55,9 @@ impl ClientV2 {
         Ok(Self::wrap(Box::new(read), Box::new(write)))
     }
 
-    /// Open a Unix domain socket connection (Unix only). Default v2
-    /// path: `${XDG_RUNTIME_DIR}/inferd/infer.v2.sock` on Linux,
-    /// `${TMPDIR}/inferd/infer.v2.sock` on macOS.
+    /// Open a Unix domain socket connection (Unix only). Default
+    /// generation path: `${XDG_RUNTIME_DIR}/inferd/inferd.sock` on
+    /// Linux, `${TMPDIR}/inferd/inferd.sock` on macOS.
     #[cfg(unix)]
     pub async fn dial_uds(path: &Path) -> Result<Self, ClientError> {
         let stream = tokio::net::UnixStream::connect(path).await?;
@@ -63,7 +66,7 @@ impl ClientV2 {
     }
 
     /// Open a Windows named pipe connection (Windows only). Default
-    /// v2 path: `\\.\pipe\inferd-infer-v2`.
+    /// generation path: `\\.\pipe\inferd`.
     #[cfg(windows)]
     pub async fn dial_pipe(path: &str) -> Result<Self, ClientError> {
         use tokio::net::windows::named_pipe::ClientOptions;
@@ -97,17 +100,38 @@ impl ClientV2 {
     }
 
     /// Send a `RequestV2` and return a stream of `ResponseV2` frames.
-    /// The stream completes after a terminal `done` or `error` frame
-    /// (or yields `Err(ClientError::UnexpectedEof)` if the daemon
-    /// closes the connection mid-stream).
-    pub async fn generate(&mut self, req: RequestV2) -> Result<FrameStreamV2, ClientError> {
-        let mut buf = Vec::with_capacity(512);
-        serde_json::to_writer(&mut buf, &req)?;
-        buf.push(b'\n');
+    ///
+    /// Writes the request as a length-prefixed JSON frame; then, for
+    /// each attachment carrying bytes, a `BlobDescriptor` JSON frame
+    /// followed by a BLOB frame with the raw bytes (ADR 0021). Sets
+    /// `wire_version` so the daemon can detect a mismatch. The returned
+    /// stream completes after a terminal `done` / `error` frame, or
+    /// yields `Err(ClientError::UnexpectedEof)` if the daemon closes
+    /// mid-stream.
+    pub async fn generate(&mut self, mut req: RequestV2) -> Result<FrameStreamV2, ClientError> {
+        req.wire_version = WIRE_VERSION;
+
+        // Detach attachment bytes so the request JSON frame carries only
+        // metadata; bytes follow as BLOB frames. (Attachment::bytes is
+        // already #[serde(skip)], so the JSON wouldn't include them
+        // regardless — but we need the raw bytes here to send them.)
+        let blobs: Vec<(String, Vec<u8>)> = req
+            .attachments
+            .iter()
+            .filter(|a| !a.bytes().is_empty())
+            .map(|a| (a.id().to_string(), a.bytes().to_vec()))
+            .collect();
 
         {
             let mut g = self.inner.lock().await;
-            g.write.write_all(&buf).await?;
+            // 1. Request JSON frame.
+            write_lp_json_async(&mut g.write, &req).await?;
+            // 2. Per attachment: descriptor JSON frame + BLOB frame.
+            for (id, bytes) in &blobs {
+                let desc = BlobDescriptor::new(id.clone(), bytes.len() as u64);
+                write_lp_json_async(&mut g.write, &desc).await?;
+                write_lp_blob_async(&mut g.write, bytes).await?;
+            }
             g.write.flush().await?;
         }
 
@@ -115,29 +139,27 @@ impl ClientV2 {
         let stream = async_stream::stream! {
             loop {
                 let mut g = inner.lock().await;
-                let mut line = Vec::with_capacity(512);
-                let n = match g.read.read_until(b'\n', &mut line).await {
-                    Ok(n) => n,
-                    Err(e) => { yield Err(ClientError::Io(e)); return; }
-                };
-                if n == 0 {
-                    yield Err(ClientError::UnexpectedEof);
-                    return;
-                }
+                let frame = read_lp_raw_async(&mut g.read).await;
                 drop(g);
-
-                match serde_json::from_slice::<ResponseV2>(&line) {
-                    Ok(resp) => {
-                        let terminal = resp.is_terminal();
-                        yield Ok(resp);
-                        if terminal {
-                            return;
+                match frame {
+                    Ok(None) => { yield Err(ClientError::UnexpectedEof); return; }
+                    Ok(Some((FrameType::Json, payload))) => {
+                        match serde_json::from_slice::<ResponseV2>(&payload) {
+                            Ok(resp) => {
+                                let terminal = resp.is_terminal();
+                                yield Ok(resp);
+                                if terminal { return; }
+                            }
+                            Err(e) => { yield Err(ClientError::Decode(e)); return; }
                         }
                     }
-                    Err(e) => {
-                        yield Err(ClientError::Decode(e));
+                    Ok(Some((FrameType::Blob, _))) => {
+                        yield Err(ClientError::MalformedFrame(
+                            "daemon sent a BLOB frame on the response stream".into(),
+                        ));
                         return;
                     }
+                    Err(e) => { yield Err(e); return; }
                 }
             }
         };
@@ -145,14 +167,134 @@ impl ClientV2 {
     }
 }
 
-/// Default v2 admin / inference endpoint paths, mirroring the
-/// daemon's `endpoint::default_v2_addr`. Returned as `PathBuf` on
-/// Unix and as a pipe-path string on Windows; callers pick by `cfg`.
+// --- length-prefixed framing (async client side) ---------------------------
+
+const MAX_VARINT_BYTES: usize = 5;
+
+async fn write_lp_json_async<W: AsyncWrite + Unpin, T: serde::Serialize>(
+    w: &mut W,
+    frame: &T,
+) -> Result<(), ClientError> {
+    let payload = serde_json::to_vec(frame)?;
+    write_lp_payload_async(w, FrameType::Json, &payload).await
+}
+
+async fn write_lp_blob_async<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    bytes: &[u8],
+) -> Result<(), ClientError> {
+    write_lp_payload_async(w, FrameType::Blob, bytes).await
+}
+
+async fn write_lp_payload_async<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    frame_type: FrameType,
+    payload: &[u8],
+) -> Result<(), ClientError> {
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(ClientError::MalformedFrame(format!(
+            "outgoing frame {} exceeds {} byte cap",
+            payload.len(),
+            MAX_FRAME_BYTES
+        )));
+    }
+    let mut prefix = [0u8; MAX_VARINT_BYTES];
+    let n = encode_uvarint(payload.len() as u64, &mut prefix);
+    w.write_all(&prefix[..n]).await?;
+    w.write_all(&[frame_type as u8]).await?;
+    w.write_all(payload).await?;
+    Ok(())
+}
+
+fn encode_uvarint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
+    let mut i = 0;
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out[i] = byte;
+        i += 1;
+        if value == 0 {
+            return i;
+        }
+    }
+}
+
+/// Read one length-prefixed frame. `Ok(None)` on a clean between-frames
+/// EOF; `MalformedFrame` on a bad type byte / non-terminating varint /
+/// oversize length / mid-frame EOF.
+async fn read_lp_raw_async<R: AsyncRead + Unpin>(
+    r: &mut R,
+) -> Result<Option<(FrameType, Vec<u8>)>, ClientError> {
+    let mut value: u64 = 0;
+    let mut shift: u32 = 0;
+    for i in 0..MAX_VARINT_BYTES {
+        let mut b = [0u8; 1];
+        if r.read(&mut b).await? == 0 {
+            if i == 0 {
+                return Ok(None);
+            }
+            return Err(ClientError::MalformedFrame(
+                "stream ended mid-length-varint".into(),
+            ));
+        }
+        value |= u64::from(b[0] & 0x7f) << shift;
+        if b[0] & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if i == MAX_VARINT_BYTES - 1 {
+            return Err(ClientError::MalformedFrame("length varint too long".into()));
+        }
+    }
+    if value > MAX_FRAME_BYTES as u64 {
+        return Err(ClientError::MalformedFrame(format!(
+            "incoming frame length {value} exceeds {MAX_FRAME_BYTES} byte cap"
+        )));
+    }
+    let len = value as usize;
+
+    let mut type_byte = [0u8; 1];
+    read_exact_async(r, &mut type_byte).await?;
+    let frame_type = match type_byte[0] {
+        0x01 => FrameType::Json,
+        0x02 => FrameType::Blob,
+        other => {
+            return Err(ClientError::MalformedFrame(format!(
+                "unknown frame-type byte 0x{other:02x}"
+            )));
+        }
+    };
+
+    let mut payload = vec![0u8; len];
+    read_exact_async(r, &mut payload).await?;
+    Ok(Some((frame_type, payload)))
+}
+
+async fn read_exact_async<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut [u8],
+) -> Result<(), ClientError> {
+    match r.read_exact(buf).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(ClientError::MalformedFrame("stream ended mid-frame".into()))
+        }
+        Err(e) => Err(ClientError::Io(e)),
+    }
+}
+
+/// Default generation endpoint path, mirroring the daemon's
+/// `endpoint::default_addr` (ADR 0021 — one generation socket on a
+/// neutral path, no `-v2` suffix). Returned as `PathBuf` on Unix and as
+/// a pipe-path string on Windows; callers pick by `cfg`.
 ///
-/// Linux fallback chain (same as v1's admin chain):
-/// 1. `${XDG_RUNTIME_DIR}/inferd/infer.v2.sock`
-/// 2. `${HOME}/.inferd/run/infer.v2.sock`
-/// 3. `/tmp/inferd/infer.v2.sock`
+/// Linux fallback chain (same as the admin chain):
+/// 1. `${XDG_RUNTIME_DIR}/inferd/inferd.sock`
+/// 2. `${HOME}/.inferd/run/inferd.sock`
+/// 3. `/tmp/inferd/inferd.sock`
 pub fn default_v2_addr() -> std::path::PathBuf {
     #[cfg(target_os = "linux")]
     {
@@ -160,7 +302,7 @@ pub fn default_v2_addr() -> std::path::PathBuf {
             let mut p = std::path::PathBuf::from(xdg);
             if !p.as_os_str().is_empty() {
                 p.push("inferd");
-                p.push("infer.v2.sock");
+                p.push("inferd.sock");
                 return p;
             }
         }
@@ -169,26 +311,26 @@ pub fn default_v2_addr() -> std::path::PathBuf {
             if !p.as_os_str().is_empty() {
                 p.push(".inferd");
                 p.push("run");
-                p.push("infer.v2.sock");
+                p.push("inferd.sock");
                 return p;
             }
         }
-        std::path::PathBuf::from("/tmp/inferd/infer.v2.sock")
+        std::path::PathBuf::from("/tmp/inferd/inferd.sock")
     }
     #[cfg(target_os = "macos")]
     {
         let mut p = std::env::temp_dir();
         p.push("inferd");
-        p.push("infer.v2.sock");
+        p.push("inferd.sock");
         p
     }
     #[cfg(windows)]
     {
-        std::path::PathBuf::from(r"\\.\pipe\inferd-infer-v2")
+        std::path::PathBuf::from(r"\\.\pipe\inferd")
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
-        std::path::PathBuf::from("/tmp/inferd/infer.v2.sock")
+        std::path::PathBuf::from("/tmp/inferd/inferd.sock")
     }
 }
 
@@ -198,7 +340,6 @@ mod tests {
     use inferd_proto::v2::{
         ContentBlock, ErrorCodeV2, MessageV2, ResponseBlock, RoleV2, StopReasonV2, UsageV2,
     };
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     fn sample_request() -> RequestV2 {
         RequestV2 {
@@ -213,6 +354,36 @@ mod tests {
         }
     }
 
+    /// Read one length-prefixed frame on the test server side, mirroring
+    /// the client's reader. Returns `(type_byte, payload)`.
+    async fn srv_read_lp<R: AsyncRead + Unpin>(r: &mut R) -> (u8, Vec<u8>) {
+        let mut value: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            let mut b = [0u8; 1];
+            r.read_exact(&mut b).await.unwrap();
+            value |= u64::from(b[0] & 0x7f) << shift;
+            if b[0] & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        let mut tb = [0u8; 1];
+        r.read_exact(&mut tb).await.unwrap();
+        let mut payload = vec![0u8; value as usize];
+        r.read_exact(&mut payload).await.unwrap();
+        (tb[0], payload)
+    }
+
+    async fn srv_write_lp_json<W: AsyncWrite + Unpin, T: serde::Serialize>(w: &mut W, frame: &T) {
+        let payload = serde_json::to_vec(frame).unwrap();
+        let mut prefix = [0u8; MAX_VARINT_BYTES];
+        let n = encode_uvarint(payload.len() as u64, &mut prefix);
+        w.write_all(&prefix[..n]).await.unwrap();
+        w.write_all(&[FrameType::Json as u8]).await.unwrap();
+        w.write_all(&payload).await.unwrap();
+    }
+
     #[tokio::test]
     async fn generate_streams_frame_then_done() {
         let (server_side, client_side) = tokio::io::duplex(4096);
@@ -220,31 +391,34 @@ mod tests {
         let mut client = ClientV2::wrap(Box::new(read), Box::new(write));
 
         let server = tokio::spawn(async move {
-            let (rx, mut tx) = tokio::io::split(server_side);
-            let mut br = tokio::io::BufReader::new(rx);
-            let mut req_line = Vec::new();
-            br.read_until(b'\n', &mut req_line).await.unwrap();
+            let (mut rx, mut tx) = tokio::io::split(server_side);
+            // Read the request frame (length-prefixed JSON).
+            let (rtype, payload) = srv_read_lp(&mut rx).await;
+            assert_eq!(rtype, FrameType::Json as u8);
+            let req: RequestV2 = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(req.wire_version, WIRE_VERSION);
 
-            let frame = serde_json::to_vec(&ResponseV2::Frame {
-                id: "v2-test".into(),
-                block: ResponseBlock::Text { delta: "hi".into() },
-            })
-            .unwrap();
-            tx.write_all(&frame).await.unwrap();
-            tx.write_all(b"\n").await.unwrap();
-
-            let done = serde_json::to_vec(&ResponseV2::Done {
-                id: "v2-test".into(),
-                usage: UsageV2 {
-                    input_tokens: 1,
-                    output_tokens: 1,
+            srv_write_lp_json(
+                &mut tx,
+                &ResponseV2::Frame {
+                    id: "v2-test".into(),
+                    block: ResponseBlock::Text { delta: "hi".into() },
                 },
-                stop_reason: StopReasonV2::EndTurn,
-                backend: "mock".into(),
-            })
-            .unwrap();
-            tx.write_all(&done).await.unwrap();
-            tx.write_all(b"\n").await.unwrap();
+            )
+            .await;
+            srv_write_lp_json(
+                &mut tx,
+                &ResponseV2::Done {
+                    id: "v2-test".into(),
+                    usage: UsageV2 {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    },
+                    stop_reason: StopReasonV2::EndTurn,
+                    backend: "mock".into(),
+                },
+            )
+            .await;
         });
 
         let stream = client.generate(sample_request()).await.unwrap();
@@ -280,10 +454,8 @@ mod tests {
         let mut client = ClientV2::wrap(Box::new(read), Box::new(write));
 
         let server = tokio::spawn(async move {
-            let (rx, _tx) = tokio::io::split(server_side);
-            let mut br = tokio::io::BufReader::new(rx);
-            let mut req_line = Vec::new();
-            br.read_until(b'\n', &mut req_line).await.unwrap();
+            let (mut rx, _tx) = tokio::io::split(server_side);
+            let _ = srv_read_lp(&mut rx).await; // consume request
             // server_side drops here -> EOF on client.
         });
 

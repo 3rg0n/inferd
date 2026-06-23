@@ -4,7 +4,7 @@ This guide is for anyone building a tool that wants local LLM inference and deci
 
 ## What inferd is to your product
 
-**inferd is a local LLM gateway** — Anthropic-API-shaped, but over IPC instead of HTTPS. It owns the model-specific work (chat templating, tokenization decisions, attachment routing once v2 ships, tool-call lifecycle); your product owns the user experience (input capture, rendering, session memory, tool execution).
+**inferd is a local LLM gateway** — Anthropic-API-shaped, but over IPC instead of HTTPS. It owns the model-specific work (chat templating, tokenization decisions, attachment routing, tool-call lifecycle); your product owns the user experience (input capture, rendering, session memory, tool execution).
 
 Mental model:
 
@@ -25,12 +25,12 @@ This is the same split Anthropic's `/v1/messages` API draws between Claude Code 
 1. Install the daemon binary on the user's machine. Pre-built tarballs at [GitHub Releases](https://github.com/3rg0n/inferd/releases).
 2. Write `~/.inferd/config.json` with the model you want.
 3. Start the daemon as a service (systemd / launchd / Windows service — units shipped in the tarball).
-4. Connect to its inference socket from your code, send NDJSON, stream tokens back.
+4. Connect to its generation socket from your code, send a length-prefixed v2 request, stream tokens back.
 
 Daemon's contract:
-- Wire protocol v1 is frozen and text-only (see [`docs/protocol-v1.md`](docs/protocol-v1.md)). v2 (typed content blocks + attachments + tools) lives on a separate socket per [ADR 0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md) — shipping in v0.2.0; see "[v2 wire (v0.2)](#v2-wire-v02--typed-content-blocks-attachments-tools)" below.
+- One generation wire (v2), frozen, on the length-prefixed type-tagged framing introduced in v0.4 ([ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)): typed content blocks, attachments, tools, in-band `wire_version`. The old text-only v1 NDJSON wire was folded into v2 and removed — a text-only request is a single `text` content block. See "[Generation wire](#generation-wire--typed-content-blocks-attachments-tools)" below.
 - One warm model per daemon process ([ADR 0012](docs/adr/0012-one-warm-model-per-inferd-process.md)). Need N models? Run N daemons on N socket paths.
-- The inference socket only exists when the daemon is `ready`. Connect-refused = not ready = your code's job to wait or passthrough.
+- The generation socket only exists when the daemon is `ready`. Connect-refused = not ready = your code's job to wait or passthrough.
 - Errors: callers own retry. Daemon never retries, never fails over, never rewrites.
 
 ## Step 1 — install the daemon
@@ -104,15 +104,15 @@ The model named here is the only model that daemon serves. Want a second model? 
 
 ### Default endpoint paths
 
-| Platform | Inference | Admin |
+| Platform | Generation | Admin |
 |---|---|---|
-| Linux | `${XDG_RUNTIME_DIR}/inferd/infer.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
-| macOS | `${TMPDIR}/inferd/infer.sock` | `${TMPDIR}/inferd/admin.sock` |
-| Windows | `\\.\pipe\inferd-infer` | `\\.\pipe\inferd-admin` |
+| Linux | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
+| macOS | `${TMPDIR}/inferd/inferd.sock` | `${TMPDIR}/inferd/admin.sock` |
+| Windows | `\\.\pipe\inferd` | `\\.\pipe\inferd-admin` |
 
-(v2 and embed bind on additional sockets when enabled — see "[v2 wire (v0.2)](#v2-wire-v02--typed-content-blocks-attachments-tools)" and "[Embeddings (v0.2)](#embeddings-v02)" below.)
+(The embed surface binds on its own socket when an embed-capable backend is configured — see "[Embeddings](#embeddings)" below.)
 
-The **inference socket** is what your product talks to for `generate` requests. Bound only after the daemon is `ready`.
+The **generation socket** is what your product talks to for `generate` requests. Bound only after the daemon is `ready`.
 
 The **admin socket** is bound earlier (during model load). Subscribe to it for progress events during the first-boot model download — your installer / status UI can show download progress.
 
@@ -120,31 +120,31 @@ The **admin socket** is bound earlier (during model load). Subscribe to it for p
 
 ```toml
 [dependencies]
-# v0.1: text-only v1 wire. v0.2: same v1 surface plus v2 typed content
-# blocks. Pick the line that matches the wire you're targeting.
-inferd-client = "0.2"
+inferd-client = "0.4"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 ```
 
 ```rust
-use inferd_client::{Client, Request, Message, Role, Response};
+use inferd_client::{ClientV2, RequestV2, MessageV2, RoleV2, ContentBlock, ResponseV2, ResponseBlock};
 use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pattern A passive readiness: connect-and-retry until the
-    // daemon's inference socket is bound.
+    // daemon's generation socket is bound.
     let mut client = inferd_client::dial_and_wait_ready(
         std::time::Duration::from_secs(60),
-        || Client::dial_uds(std::path::Path::new("/run/user/1000/inferd/infer.sock")),
+        || ClientV2::dial_uds(&inferd_client::default_v2_addr()),
     ).await?;
 
-    let mut stream = client.generate(Request {
+    // A text-only request is a single Text content block. The client
+    // stamps `wire_version` for you.
+    let mut stream = client.generate(RequestV2 {
         id: "demo-1".into(),
-        messages: vec![Message {
-            role: Role::User,
-            content: "Hello, who are you?".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "Hello, who are you?".into() }],
         }],
         max_tokens: Some(64),
         ..Default::default()
@@ -152,14 +152,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(frame) = stream.next().await {
         match frame? {
-            Response::Token { content, .. } => print!("{content}"),
-            Response::Done { backend, stop_reason, .. } => {
+            ResponseV2::Frame { block: ResponseBlock::Text { delta }, .. } => print!("{delta}"),
+            ResponseV2::Frame { .. } => {} // thinking / tool_use blocks
+            ResponseV2::Done { backend, stop_reason, .. } => {
                 println!("\n[done; backend={backend}, stop={stop_reason:?}]");
             }
-            Response::Error { code, message, .. } => {
+            ResponseV2::Error { code, message, .. } => {
                 eprintln!("[error {code:?}: {message}]");
             }
-            Response::Status { .. } => {}
         }
     }
     Ok(())
@@ -173,25 +173,26 @@ import "github.com/3rg0n/inferd/clients/go"
 
 ctx, _ := context.WithTimeout(context.Background(), 60*time.Second)
 client, err := inferd.DialAndWaitReady(ctx, func() (*inferd.Client, error) {
-    return inferd.DialUDS("/run/user/1000/inferd/infer.sock")
+    return inferd.DialUDS(ctx, inferd.DefaultInferAddr())
 })
 if err != nil { panic(err) }
 defer client.Close()
 
-stream, err := client.Generate(ctx, &inferd.Request{
-    ID:        "demo-1",
-    Messages:  []inferd.Message{{Role: "user", Content: "hello"}},
-    MaxTokens: 64,
+stream, err := client.GenerateV2(ctx, inferd.RequestV2{
+    ID:       "demo-1",
+    Messages: []inferd.MessageV2{{Role: inferd.RoleUser, Content: []inferd.ContentBlock{inferd.TextBlock("hello")}}},
 })
 if err != nil { panic(err) }
 
-for stream.Next() {
-    switch f := stream.Frame().(type) {
-    case *inferd.TokenFrame:
-        fmt.Print(f.Content)
-    case *inferd.DoneFrame:
+for f := range stream {
+    switch f.Type {
+    case inferd.ResponseV2Frame:
+        if f.Block != nil && f.Block.Type == inferd.BlockText {
+            fmt.Print(f.Block.Delta)
+        }
+    case inferd.ResponseV2Done:
         fmt.Printf("\n[done; backend=%s]\n", f.Backend)
-    case *inferd.ErrorFrame:
+    case inferd.ResponseV2Error:
         log.Printf("[error %s: %s]", f.Code, f.Message)
     }
 }
@@ -199,9 +200,9 @@ for stream.Next() {
 
 ### Other languages
 
-The wire format is plain NDJSON over a Unix socket / Windows named pipe / loopback TCP. No gRPC, no SSE, no protobuf. `socket.connect()` + `send(json + "\n")` + `recv()` works in any language with a JSON parser.
+The generation wire is length-prefixed, type-tagged frames over a Unix socket / Windows named pipe / loopback TCP: `[uvarint payload_len][1 byte type: 0x01 JSON / 0x02 BLOB][payload]`, 64 MiB payload cap. Send a JSON frame (`0x01`) carrying the request (with `"wire_version": 1`); for each attachment send a `BlobDescriptor` JSON frame then a BLOB frame (`0x02`) with the raw bytes. Read response frames the same way. No gRPC, no SSE, no protobuf — a varint codec plus a JSON parser is enough. (The embed surface is simpler still: newline-delimited JSON.)
 
-The Rust types in [`inferd-proto`](https://crates.io/crates/inferd-proto) are the schema reference if you want to generate bindings.
+The Rust types in [`inferd-proto`](https://crates.io/crates/inferd-proto) are the schema reference if you want to generate bindings; ADR 0021 specifies the framing.
 
 ## Wait-for-ready patterns
 
@@ -255,18 +256,17 @@ The daemon never retries on its own. It never falls over to a different backend 
 ## Gotchas
 
 - **Daemon must be running before your code connects.** If your installer starts the daemon and your app immediately connects, use Pattern A's retry — there's a race during bring-up.
-- **Don't depend on a specific `${XDG_RUNTIME_DIR}` value.** The Rust + Go clients have helpers (`default_inference_addr` / `DefaultInferenceAddr`) that resolve the chain correctly.
+- **Don't depend on a specific `${XDG_RUNTIME_DIR}` value.** The Rust + Go clients have helpers (`default_v2_addr` / `DefaultInferAddr`) that resolve the chain correctly.
 - **PowerShell's default UTF-8 writes a BOM.** If you're poking the daemon from raw PowerShell, use `[System.Text.UTF8Encoding] $false`. The Rust + Go clients don't have this issue.
 - **The admin socket has mode `0600`** — only the daemon's own user can connect. The inference socket is `0660` and respects an `inferd-users` group when configured.
 
-## v2 wire (v0.2) — typed content blocks, attachments, tools
+## Generation wire — typed content blocks, attachments, tools
 
-v0.2 ships an Anthropic-shaped wire protocol on a *separate* socket alongside v1. v1 stays frozen forever (text-only `messages[].content` as a `String`); v2 carries multimodal + tool-calling without breaking anything you build today.
-
-The shape is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md). On the wire:
+The single generation surface (v2) is Anthropic-shaped — typed `messages[].content` blocks carrying text, multimodal, and tool-calling. The content shape is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md); the framing is length-prefixed and type-tagged per [ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md). The request JSON frame:
 
 ```json
 {
+  "wire_version": 1,
   "id": "req-001",
   "messages": [
     {
@@ -278,7 +278,7 @@ The shape is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-b
     }
   ],
   "attachments": [
-    {"id": "img-1", "kind": "image", "mime": "image/jpeg", "bytes": "<base64>"}
+    {"type": "image", "id": "img-1", "width": 768, "height": 512}
   ],
   "tools": [
     {"name": "get_weather", "description": "...", "input_schema": {...}}
@@ -287,25 +287,31 @@ The shape is locked in [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-b
 }
 ```
 
-Recognisable from Anthropic's `/v1/messages`. Borrowed deliberately so middleware authors who've written against Anthropic / OpenAI / Bedrock can write against inferd with the same mental model.
+Recognisable from Anthropic's `/v1/messages`. Borrowed deliberately so middleware authors who've written against Anthropic / OpenAI / Bedrock can write against inferd with the same mental model. Note the attachment metadata carries no `bytes` — the raw bytes ride out-of-band in a BLOB frame (below).
+
+### Framing
+
+Each frame is `[uvarint payload_len][1 byte type][payload]`, type `0x01` = JSON, `0x02` = BLOB, 64 MiB payload cap. A request with no attachments is a single JSON frame. A request with attachments is: the request JSON frame, then for each attachment a `BlobDescriptor` JSON frame (`{"frame":"attachment_blob","attachment_id":"img-1","len":1179648}`) immediately followed by a BLOB frame carrying its raw bytes. The daemon reassembles by `attachment_id`. Responses are length-prefixed JSON frames (`frame` / `done` / `error`).
+
+The `inferd-client` (Rust) and `clients/go` clients do all of this for you — `ClientV2::generate` / `Client.GenerateV2` take a `RequestV2` with attachment bytes attached and emit the frames in order.
 
 ### Endpoint
 
-v2 binds on its own socket alongside v1:
+One generation socket (v0.4 / ADR 0021 — the old `infer.sock` / `infer.v2.sock` split is gone):
 
-| Platform | v1 inference | v2 inference |
-|---|---|---|
-| Linux | `${XDG_RUNTIME_DIR}/inferd/infer.sock` | `${XDG_RUNTIME_DIR}/inferd/infer.v2.sock` |
-| macOS | `${TMPDIR}/inferd/infer.sock` | `${TMPDIR}/inferd/infer.v2.sock` |
-| Windows | `\\.\pipe\inferd-infer` | `\\.\pipe\inferd-infer-v2` |
+| Platform | Generation |
+|---|---|
+| Linux | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` |
+| macOS | `${TMPDIR}/inferd/inferd.sock` |
+| Windows | `\\.\pipe\inferd` |
 
-The daemon must be started with `--v2` (or `INFERD_V2=1`) for the v2 socket to be bound. The shipped systemd / launchd / Windows units are v1-only by default; flip the flag in your operator config when you're ready.
+It's bound by default as soon as the daemon is `ready` — no flag to flip. (Loopback TCP is opt-in via `--tcp` / `listen.tcp` for cross-VM cases.)
 
 ### Attachments are raw bytes, not data URLs
 
-Per [ADR 0016](docs/adr/0016-attachments-are-raw-bytes-the-daemon-doesnt-link-codecs.md), the daemon does **not** link image / audio codecs. Your middleware decodes the user's JPEG / PNG / WAV / MP4 *before* the wire — `attachment.bytes` is base64'd raw RGB (for images) or PCM (for audio), with the geometry passed in the surrounding wire fields. The daemon then hands those bytes to the engine's mtmd helpers verbatim.
+Per [ADR 0016](docs/adr/0016-attachments-are-raw-bytes-the-daemon-doesnt-link-codecs.md), the daemon does **not** link image / audio codecs. Your middleware decodes the user's JPEG / PNG / WAV / MP4 *before* the wire — the attachment carries raw RGB (for images) or PCM (for audio) bytes with the geometry in the JSON metadata. As of v0.4 (ADR 0021) those bytes travel as a raw BLOB frame keyed by `attachment_id`, **not** base64-in-JSON. The daemon hands the bytes to the engine's mtmd helpers verbatim.
 
-This keeps the daemon's binary surface tiny and the threat model narrow (no codec CVEs). The Rust client in 0.2 grows helpers to do the encoding-side work for the common formats; until then, it's `image::open(...).resize(...).to_rgb8()` two lines.
+This keeps the daemon's binary surface tiny and the threat model narrow (no codec CVEs), and avoids the ~33% base64 inflation on every image. On the encode side it's `image::open(...).resize(...).to_rgb8()` two lines, then hand the `Vec<u8>` to the attachment.
 
 ### Tools
 
@@ -315,12 +321,11 @@ Function calling is first-class:
 - The model's tool-call sequences (`<|tool_call>...<tool_call|>` for Gemma 4; OpenAI's `tool_calls` array for the openai-compat backend) are parsed by the daemon into structured `tool_use` content blocks in the response stream — you never grep raw token streams.
 - Send the function results back as `tool_result` blocks in the follow-up request, addressed by `tool_call_id`. The daemon templates the result back into the conversation in the engine-shaped form.
 
-### What this means for v0.1 middleware authors
+### Migrating from a v1 (pre-v0.4) client
 
-- Today's `Message { role, content: String }` → v2's `Message { role, content: Vec<ContentBlock> }`. The same semantic intent as a typed array instead of a flat string.
-- v1 stays valid. If you don't need multimodal or tools, you don't have to migrate. The v1 socket keeps serving the same wire forever.
-- When you migrate, the migration is local: `Message` keeps its `role` field, gains a `content: Vec<ContentBlock>` instead of `content: String`. Request id, sampling params, streaming response handling — unchanged.
-- Connect to the v2 endpoint path (above), not the v1 path. The Rust client's v2 surface lands as `inferd-client = "0.2"` with the same dial-and-wait semantics.
+- v1's `Message { role, content: String }` becomes `Message { role, content: Vec<ContentBlock> }` — a text-only turn is a single `ContentBlock::Text`. Same semantic intent, typed array instead of a flat string.
+- The transport changed: length-prefixed frames, not NDJSON. Use `inferd-client` 0.4+ (`ClientV2`) / `clients/go` `GenerateV2` — they handle framing + `wire_version` for you. A hand-rolled NDJSON v1 client will not interoperate with a v0.4 daemon.
+- Connect to the single generation socket (above). Request id, sampling params, and streaming response handling are otherwise unchanged.
 
 ### Backends in v0.2
 
@@ -332,11 +337,11 @@ The router (per [ADR 0007](docs/adr/0007-backend-routing-and-failure-semantics.m
 
 Apps don't pick the backend — operators do, in `config.json`. There's no per-request `backend` field on the wire ([ADR 0006](docs/adr/0006-lean-core-ecosystem-extensions.md)).
 
-## Embeddings (v0.2)
+## Embeddings
 
-v0.2 adds an embeddings surface on a *third* dedicated socket per [ADR 0017](docs/adr/0017-embeddings-on-a-third-socket.md). Wire shape: single-frame request, single-frame response — no streaming, since an embedding is a complete vector. Same NDJSON, same 64 MiB cap, same one-warm-model admission slot as v1 / v2.
+The embeddings surface is a dedicated socket per [ADR 0017](docs/adr/0017-embeddings-on-a-third-socket.md). Wire shape: single-frame request, single-frame response — no streaming, since an embedding is a complete vector. NDJSON framing (the generation surface's length-prefixed framing doesn't apply here — embeddings never carry BLOBs), 64 MiB cap, same one-warm-model admission slot as generation.
 
-The default embed-capable backend is `llamacpp` configured with `embed: true` and a model that supports it (the [`embeddinggemma-300m`](https://huggingface.co/google/embeddinggemma-300m) GGUF is the v0.2 reference).
+The default embed-capable backend is `llamacpp` configured with `embed: true` and a model that supports it (the [`embeddinggemma-300m`](https://huggingface.co/google/embeddinggemma-300m) GGUF is the reference).
 
 ### Endpoint
 
@@ -436,12 +441,11 @@ Single terminal frame, two outcomes — `embeddings` (success) or `error` with a
 
 inferd follows semver:
 
-- **v1 wire** is frozen and immutable. New optional fields may appear; older parsers ignore them. Breaking changes go to v2 on a separate socket path (per [ADR 0008](docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md)).
-- **v2 wire** lands in `0.2.x` per [ADR 0015](docs/adr/0015-v2-wire-protocol-typed-content-blocks.md). v2 is also frozen once shipped — additive changes only; further breaking shapes become v3 on yet another socket.
-- **embed wire** lands in `0.2.x` per [ADR 0017](docs/adr/0017-embeddings-on-a-third-socket.md). Same separate-socket-per-surface pattern; frozen once shipped.
-- **Crate versions** track the daemon: `inferd-proto`, `inferd-engine`, `inferd-client`, and the `inferd` CLI all advance together. `inferd-client 0.2.x` always uses `inferd-proto 0.2.x` and works against any `inferd-daemon 0.2.x`.
+- **Generation wire (v2)** is frozen as of v0.4 per [ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md). New optional fields may appear; older parsers ignore them. A *breaking* change bumps the in-band `wire_version` — the daemon rejects a request whose `wire_version` it doesn't speak with `wire_version_unsupported`, so a mismatch fails loudly instead of corrupting the stream. (This replaced the old "successor on a separate socket" scheme for generation.)
+- **Embed wire** is frozen per [ADR 0017](docs/adr/0017-embeddings-on-a-third-socket.md); additive changes only, breaking changes would go to a successor socket.
+- **Crate versions** track the daemon: `inferd-proto`, `inferd-engine`, `inferd-client`, and the `inferdctl` CLI all advance together. `inferd-client 0.4.x` always uses `inferd-proto 0.4.x` and works against any `inferd-daemon 0.4.x`.
 
-`cargo add inferd-client` resolves to whatever the latest minor is. v1 consumers using `inferd-client = "0.1"` keep working unchanged against the v1 socket of a v0.2 daemon — the daemon binds both sockets at the same time when `--v2` is set, and v1's wire is unchanged.
+`cargo add inferd-client` resolves to whatever the latest minor is. **Pre-launch break:** v0.4 changed the generation framing, so a v0.3 client does not interoperate with a v0.4 daemon (and vice versa) — upgrade client and daemon together. After v0.4 the freeze posture returns: the `wire_version` gate keeps later changes from silently breaking older clients.
 
 ## Where to file issues
 

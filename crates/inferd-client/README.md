@@ -3,11 +3,12 @@
 Rust client for the [inferd](https://github.com/3rg0n/inferd)
 local-inference daemon.
 
-NDJSON-over-IPC. Three frozen wire surfaces, each on its own socket:
-v1 text generation (`Client`, spec at
-[`docs/protocol-v1.md`](https://github.com/3rg0n/inferd/blob/main/docs/protocol-v1.md)),
-v2 typed content blocks / attachments / tools (`ClientV2`, ADR 0015),
-and embeddings (`EmbedClient`, ADR 0017).
+Two frozen wire surfaces, each on its own socket: generation
+(`ClientV2` — typed content blocks / attachments / tools, ADR 0015)
+on the length-prefixed, type-tagged framing introduced in v0.4
+([ADR 0021](https://github.com/3rg0n/inferd/blob/main/docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)),
+and embeddings (`EmbedClient`, ADR 0017, NDJSON). The original
+text-only v1 surface was folded into `ClientV2` and removed in v0.4.
 
 ## Install the daemon first
 
@@ -28,27 +29,29 @@ the daemon's stdout if you're running it directly.
 ## Quickstart
 
 ```rust,no_run
-use inferd_client::{Client, Request, Message, Role, Response};
+use inferd_client::{ClientV2, RequestV2, MessageV2, RoleV2, ContentBlock, ResponseV2, ResponseBlock};
 use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Pattern A: connect-and-retry against the inference socket.
+    // Pattern A: connect-and-retry against the generation socket.
     // The successful connect IS the readiness signal — F-13 in the
-    // upstream threat model guarantees the inference socket only
+    // upstream threat model guarantees the generation socket only
     // exists when the daemon is `ready`.
     let mut client = inferd_client::dial_and_wait_ready(
         std::time::Duration::from_secs(30),
-        || Client::dial_tcp("127.0.0.1:47321"),
+        || ClientV2::dial_tcp("127.0.0.1:47321"),
     )
     .await?;
 
+    // Text-only is a single Text content block; the client stamps
+    // `wire_version` for you.
     let mut stream = client
-        .generate(Request {
+        .generate(RequestV2 {
             id: "demo-1".into(),
-            messages: vec![Message {
-                role: Role::User,
-                content: "hello".into(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text { text: "hello".into() }],
             }],
             ..Default::default()
         })
@@ -56,14 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(frame) = stream.next().await {
         match frame? {
-            Response::Token { content, .. } => print!("{content}"),
-            Response::Done { backend, stop_reason, .. } => {
+            ResponseV2::Frame { block: ResponseBlock::Text { delta }, .. } => print!("{delta}"),
+            ResponseV2::Frame { .. } => {} // thinking / tool_use blocks
+            ResponseV2::Done { backend, stop_reason, .. } => {
                 println!("\n[done; backend={backend}, stop={stop_reason:?}]");
             }
-            Response::Error { code, message, .. } => {
+            ResponseV2::Error { code, message, .. } => {
                 eprintln!("[error {code:?}: {message}]");
             }
-            Response::Status { .. } => {}
         }
     }
     Ok(())
@@ -74,14 +77,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Constructor | Platform |
 |---|---|
-| `Client::dial_tcp("127.0.0.1:47321")` | All |
-| `Client::dial_uds(&path)` | Unix |
-| `Client::dial_pipe(r"\\.\pipe\inferd-infer")` | Windows |
+| `ClientV2::dial_tcp("127.0.0.1:47321")` | All |
+| `ClientV2::dial_uds(&path)` | Unix |
+| `ClientV2::dial_pipe(r"\\.\pipe\inferd")` | Windows |
+
+For embeddings, use `EmbedClient::dial_*` (ADR 0017).
 
 ## Wait-for-ready
 
-Two patterns from the upstream `docs/protocol-v1.md` §"Client
-connection lifecycle":
+Two patterns:
 
 - **Pattern A — passive**: `dial_and_wait_ready(timeout, dial_fn)`.
   Retries connect with exponential backoff (100ms → 5s cap) for
@@ -96,16 +100,17 @@ connection lifecycle":
 
 ## Daemon endpoints (default paths)
 
-| Platform | Inference | Admin |
+| Platform | Generation | Admin |
 |---|---|---|
-| Linux | `${XDG_RUNTIME_DIR}/inferd/infer.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
-| macOS | `${TMPDIR}/inferd/infer.sock` | `${TMPDIR}/inferd/admin.sock` |
-| Windows | `\\.\pipe\inferd-infer` | `\\.\pipe\inferd-admin` |
+| Linux | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
+| macOS | `${TMPDIR}/inferd/inferd.sock` | `${TMPDIR}/inferd/admin.sock` |
+| Windows | `\\.\pipe\inferd` | `\\.\pipe\inferd-admin` |
 
 Operators may override via `--uds` / `--pipe` / `--admin-addr` on
 the daemon. Loopback TCP (`127.0.0.1:47321`) is opt-in for
 container / WSL scenarios and supports an API key as the first
-NDJSON frame.
+frame. (The embed surface binds its own socket when an embed-capable
+backend is configured.)
 
 ## Versioning
 
@@ -115,16 +120,18 @@ contract:
 
 ```toml
 [dependencies]
-inferd-client = "0.3"
+inferd-client = "0.4"
 ```
 
-`inferd-client 0.3.x` always uses `inferd-proto 0.3.x` and talks
-to `inferd-daemon 0.3.x`. The published patch versions move in
-lockstep; the crate-level `=`-pin keeps the wire contract exact
-across the workspace at build time. Each shipped wire surface
-(v1 / v2 / embed) is frozen: changes within a surface are
-backwards-additive only; breaking changes go to a successor on a
-separate socket.
+`inferd-client 0.4.x` always uses `inferd-proto 0.4.x` and talks
+to `inferd-daemon 0.4.x`. The published patch versions move in
+lockstep. The generation (v2) and embed surfaces are each frozen:
+changes within a surface are backwards-additive only; a breaking
+change to the generation wire bumps the in-band `wire_version`
+(ADR 0021), so a mismatch fails loudly rather than corrupting the
+stream. **Pre-launch break:** v0.4 changed the generation framing —
+a v0.3 client does not interoperate with a v0.4 daemon; upgrade both
+together.
 
 ## Compatibility
 

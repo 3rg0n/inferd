@@ -240,35 +240,8 @@ pub struct Cli {
     #[arg(long, env = "INFERD_ADMIN_ADDR")]
     pub admin_addr: Option<PathBuf>,
 
-    /// Enable the v2 inference endpoint per ADR 0015. v2 binds on a
-    /// *separate* socket from v1: `infer.v2.sock` on Unix /
-    /// `\\.\pipe\inferd-infer-v2` on Windows. v1 stays on its own
-    /// socket and is unaffected.
-    ///
-    /// Phase 1B: the v2 endpoint accepts and validates v2 requests
-    /// but returns `Error{code:internal, message:"v2 generation not
-    /// implemented"}` because the Backend trait does not yet expose
-    /// `generate_v2`. Use this to integration-test middleware that
-    /// will speak v2 once Phase 2A lands.
-    #[arg(long, env = "INFERD_V2")]
-    pub v2: bool,
-
-    /// Override the default v2 inference endpoint path.
-    /// Mirrors `--uds` / `--pipe` for v2; on Linux/macOS this is a
-    /// UDS path, on Windows a named-pipe path. Has no effect unless
-    /// `--v2` is also set.
-    #[arg(long, env = "INFERD_V2_ADDR")]
-    pub v2_addr: Option<PathBuf>,
-
-    /// Loopback TCP bind address for the v2 endpoint. Mutually
-    /// exclusive with `--v2-addr`. Useful for tests that don't want
-    /// the platform default (UDS / named pipe). Has no effect
-    /// unless `--v2` is also set.
-    #[arg(long, env = "INFERD_V2_TCP", conflicts_with = "v2_addr")]
-    pub v2_tcp: Option<String>,
-
     /// Enable the embed inference endpoint per ADR 0017. The embed
-    /// endpoint binds on a *separate* socket from v1/v2:
+    /// endpoint binds on a socket separate from the generation socket:
     /// `infer.embed.sock` on Unix / `\\.\pipe\inferd-infer-embed`
     /// on Windows. Has no effect unless the active backend's
     /// `capabilities().embed` is true (capability-driven binding).
@@ -382,52 +355,6 @@ mod tests {
         // Ensures clap's `#[command]` derives don't conflict; cheap smoke
         // test that catches lots of misconfigurations.
         Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn cli_accepts_v2_flag() {
-        let cli = Cli::parse_from([
-            "inferd-daemon",
-            "--lock",
-            "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
-            "--v2",
-            "--v2-tcp",
-            "127.0.0.1:0",
-        ]);
-        assert!(cli.v2);
-        assert!(cli.v2_tcp.is_some());
-        assert!(cli.v2_addr.is_none());
-    }
-
-    #[test]
-    fn cli_rejects_v2_addr_with_v2_tcp() {
-        let result = Cli::try_parse_from([
-            "inferd-daemon",
-            "--lock",
-            "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
-            "--v2",
-            "--v2-tcp",
-            "127.0.0.1:0",
-            "--v2-addr",
-            "/tmp/inferd-v2.sock",
-        ]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn cli_v2_disabled_by_default() {
-        let cli = Cli::parse_from([
-            "inferd-daemon",
-            "--lock",
-            "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
-        ]);
-        assert!(!cli.v2);
     }
 
     #[test]

@@ -60,31 +60,35 @@ pub fn default_admin_addr() -> std::path::PathBuf {
     }
 }
 
-/// Default v2 inference endpoint per ADR 0015 §Endpoints.
+/// Default generation endpoint (ADR 0021).
 ///
-/// - Linux: `${XDG_RUNTIME_DIR}/inferd/infer.v2.sock` (with the
-///   same fallback chain as v1)
-/// - macOS: `${TMPDIR}/inferd/infer.v2.sock`
-/// - Windows: `\\.\pipe\inferd-infer-v2`
-pub fn default_v2_addr() -> std::path::PathBuf {
+/// As of v0.4 there is one generation socket — v1 was folded into v2 —
+/// at a neutral path (no `-v2` suffix, since there is no other version
+/// to disambiguate from):
+///
+/// - Linux: `${XDG_RUNTIME_DIR}/inferd/inferd.sock` (same fallback
+///   chain as the admin/embed sockets)
+/// - macOS: `${TMPDIR}/inferd/inferd.sock`
+/// - Windows: `\\.\pipe\inferd`
+pub fn default_addr() -> std::path::PathBuf {
     #[cfg(target_os = "linux")]
     {
-        linux_runtime_path("infer.v2.sock")
+        linux_runtime_path("inferd.sock")
     }
     #[cfg(target_os = "macos")]
     {
         let mut p = std::env::temp_dir();
         p.push("inferd");
-        p.push("infer.v2.sock");
+        p.push("inferd.sock");
         p
     }
     #[cfg(windows)]
     {
-        std::path::PathBuf::from(DEFAULT_PIPE_V2_PATH)
+        std::path::PathBuf::from(DEFAULT_PIPE_PATH)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
-        std::path::PathBuf::from("/tmp/inferd/infer.v2.sock")
+        std::path::PathBuf::from("/tmp/inferd/inferd.sock")
     }
 }
 
@@ -118,7 +122,7 @@ pub fn default_embed_addr() -> std::path::PathBuf {
 
 /// Resolve a Linux runtime-dir path with the fallback chain
 /// documented on `default_admin_addr`. `leaf` is the basename to
-/// append (e.g. `admin.sock`, `infer.sock`, `inferd.lock`).
+/// append (e.g. `admin.sock`, `inferd.sock`, `inferd.lock`).
 #[cfg(target_os = "linux")]
 pub fn linux_runtime_path(leaf: &str) -> std::path::PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
@@ -283,15 +287,11 @@ pub async fn bind_uds(_path: &Path, _group: Option<&str>) -> io::Result<()> {
     ))
 }
 
-/// Default Windows named-pipe path for the inference endpoint.
+/// Default Windows named-pipe path for the (single, v0.4) generation
+/// endpoint. Neutral name — no `-v2` suffix, since v1 was folded in and
+/// there is no other version to disambiguate from (ADR 0021).
 #[cfg(windows)]
-pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\inferd-infer";
-
-/// Default Windows named-pipe path for the v2 inference endpoint
-/// per ADR 0015 §Endpoints. Distinct from `DEFAULT_PIPE_PATH` so v1
-/// and v2 can coexist on the same daemon.
-#[cfg(windows)]
-pub const DEFAULT_PIPE_V2_PATH: &str = r"\\.\pipe\inferd-infer-v2";
+pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\inferd";
 
 /// Default Windows named-pipe path for the admin endpoint per
 /// `docs/protocol-v1.md` §"Admin endpoint". Shared between v1 and v2

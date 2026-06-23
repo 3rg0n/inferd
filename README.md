@@ -34,8 +34,9 @@ inferd solves that by being the *only* local inference endpoint on the
 host. It:
 
 - Loads a model once, keeps it warm.
-- Exposes a small NDJSON-over-IPC protocol on a Unix socket, Windows
-  named pipe, or loopback TCP.
+- Exposes a small IPC protocol on a Unix socket, Windows named pipe, or
+  loopback TCP — length-prefixed, type-tagged frames for generation
+  (ADR 0021), NDJSON for embeddings (ADR 0017).
 - Enforces per-caller identity (UID on Unix, SID on Windows) and an
   optional API key for loopback TCP.
 - Multiplexes requests through a single engine or across a pool of
@@ -60,10 +61,12 @@ What ships today (v0.3):
   multimodal by default (vision projector pulled on first boot).
 - **Runtime accelerator detection** (ADR 0019): one binary ships every
   ggml backend as a loadable module and picks the strongest at boot.
-- **Three frozen wire surfaces**, each on its own socket: v1 text
-  generation (`docs/protocol-v1.md`), v2 typed content blocks /
-  attachments / tools (ADR 0015), and embeddings (ADR 0017). NDJSON
-  over IPC throughout.
+- **Two frozen wire surfaces**, each on its own socket: generation
+  (v2 — typed content blocks / attachments / tools, ADR 0015) on the
+  length-prefixed, type-tagged framing introduced in v0.4 (ADR 0021,
+  with raw BLOB media and an in-band `wire_version`), and embeddings
+  (ADR 0017, NDJSON). The original text-only v1 surface was folded into
+  v2 and removed in v0.4.
 - **Cloud backend adapters** behind the same `Backend` trait —
   `openai-compat` (vLLM, LM Studio, LocalAI, llama.cpp's HTTP server,
   OpenAI/Anthropic) and `bedrock-invoke` — feature-gated, outbound
@@ -129,8 +132,8 @@ directives documented in `THREAT_MODEL.md` F-16.
 > **Why not `/run/inferd/`?** That directory is for system daemons
 > running as root. `systemd --user` cannot write there. inferd
 > resolves runtime paths via `$XDG_RUNTIME_DIR` (set by
-> `systemd-logind`) on Linux per the algorithm in
-> `docs/protocol-v1.md` §"Default endpoint resolution".
+> `systemd-logind`) on Linux, falling back to `$HOME/.inferd/run/`
+> then `/tmp/inferd/` (see `endpoint::default_addr` / ADR 0021).
 
 #### WSL note
 

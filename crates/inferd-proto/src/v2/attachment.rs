@@ -40,6 +40,19 @@ use serde::{Deserialize, Serialize};
 /// `bytes` is standard-base64-encoded (RFC 4648, with `+/` and `=`
 /// padding). After ~1.33× inflation the raw payload must still leave
 /// room within the 64 MiB per-frame cap.
+/// ## Bytes ride out-of-band (ADR 0021)
+///
+/// As of the v0.4 length-prefixed framing, the raw payload does **not**
+/// travel inside this JSON object. The JSON attachment carries only
+/// metadata (`kind` / `id` / `width` / `height` / `sample_rate`); the
+/// decoded bytes are sent in a separate length-prefixed BLOB frame,
+/// each preceded by a [`BlobDescriptor`] naming the `id`. The `bytes`
+/// field below is therefore `#[serde(skip)]` — `Vec<u8>` of *raw*
+/// decoded octets (no base64), populated in-memory by the producer
+/// before sending the BLOB and by the daemon after reading it. This
+/// kills the +33% base64 tax and lets the daemon hand raw RGB straight
+/// to mtmd. Decode posture is unchanged (ADR 0016): the consumer still
+/// decodes media to raw bytes; only the transport moved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Attachment {
@@ -53,12 +66,13 @@ pub enum Attachment {
         width: u32,
         /// Image height in pixels.
         height: u32,
-        /// Base64 of `width * height * 3` interleaved RGB bytes.
-        bytes: String,
+        /// Raw `width * height * 3` interleaved RGB bytes. Carried in a
+        /// BLOB frame, not this JSON object.
+        #[serde(skip)]
+        bytes: Vec<u8>,
     },
-    /// Decoded audio PCM. `bytes` is base64 of `n_samples *
-    /// sizeof(f32)` little-endian float32 samples at the named
-    /// sample rate.
+    /// Decoded audio PCM: `bytes` is `n_samples * sizeof(f32)`
+    /// little-endian float32 samples at the named sample rate.
     Audio {
         /// Caller-chosen identifier; unique within the request.
         id: String,
@@ -67,20 +81,22 @@ pub enum Attachment {
         /// adapter init time and reports via
         /// `BackendCapabilities`).
         sample_rate: u32,
-        /// Base64 of float32 PCM samples (little-endian).
-        bytes: String,
+        /// Raw little-endian float32 PCM bytes. Carried in a BLOB frame.
+        #[serde(skip)]
+        bytes: Vec<u8>,
     },
-    /// Reserved. Engine support is a separate concern; v2.0 daemons
-    /// reject video attachments with `attachment_unsupported` until
-    /// a video-capable adapter ships. Wire shape is intentionally
-    /// kept stub-thin; future revisions add fields without breaking
-    /// v2.0 clients (forward-compat: serde will accept extra fields
-    /// silently).
+    /// Reserved. Engine support is a separate concern; daemons reject
+    /// video attachments with `attachment_unsupported` until a
+    /// video-capable adapter ships. Wire shape is intentionally kept
+    /// stub-thin; future revisions add fields without breaking older
+    /// clients (forward-compat: serde accepts extra fields silently).
     Video {
         /// Caller-chosen identifier; unique within the request.
         id: String,
-        /// Base64 of decoded video frames; precise format TBD.
-        bytes: String,
+        /// Raw decoded video bytes; precise format TBD. Carried in a
+        /// BLOB frame.
+        #[serde(skip)]
+        bytes: Vec<u8>,
     },
     /// Forward-compat escape hatch — any `kind` value the local build
     /// doesn't recognise lands here so older clients/daemons don't
@@ -117,5 +133,67 @@ impl Attachment {
     /// `true` if this attachment is video.
     pub fn is_video(&self) -> bool {
         matches!(self, Attachment::Video { .. })
+    }
+
+    /// The raw (decoded, un-base64'd) attachment bytes. Empty for
+    /// `Unknown`, and empty on a freshly-deserialised attachment until
+    /// the matching BLOB frame has been applied via [`set_bytes`].
+    ///
+    /// [`set_bytes`]: Attachment::set_bytes
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Attachment::Image { bytes, .. }
+            | Attachment::Audio { bytes, .. }
+            | Attachment::Video { bytes, .. } => bytes,
+            Attachment::Unknown => &[],
+        }
+    }
+
+    /// Install the raw bytes read from the attachment's BLOB frame. The
+    /// daemon calls this after reading the BLOB whose descriptor named
+    /// this attachment's id. No-op on `Unknown`.
+    pub fn set_bytes(&mut self, raw: Vec<u8>) {
+        match self {
+            Attachment::Image { bytes, .. }
+            | Attachment::Audio { bytes, .. }
+            | Attachment::Video { bytes, .. } => *bytes = raw,
+            Attachment::Unknown => {}
+        }
+    }
+}
+
+/// Descriptor JSON frame that precedes each attachment BLOB frame
+/// (ADR 0021). The producer sends, per attachment: this descriptor
+/// (a JSON control frame) naming the `attachment_id` and the BLOB's
+/// byte length, then the BLOB frame itself. The reader uses `id` to
+/// correlate the bytes to the attachment in the already-received
+/// `RequestV2`, and `len` to sanity-check the BLOB it reads next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlobDescriptor {
+    /// Discriminates this control frame on the wire.
+    #[serde(rename = "type")]
+    pub frame_kind: BlobDescriptorTag,
+    /// The `Attachment::id` the following BLOB frame's bytes belong to.
+    pub attachment_id: String,
+    /// Expected byte length of the following BLOB frame.
+    pub len: u64,
+}
+
+/// The `type` tag value identifying a [`BlobDescriptor`] JSON frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlobDescriptorTag {
+    /// Marks the frame as an attachment-blob descriptor.
+    AttachmentBlob,
+}
+
+impl BlobDescriptor {
+    /// Build a descriptor for `attachment_id` covering `len` BLOB bytes.
+    pub fn new(attachment_id: impl Into<String>, len: u64) -> Self {
+        Self {
+            frame_kind: BlobDescriptorTag::AttachmentBlob,
+            attachment_id: attachment_id.into(),
+            len,
+        }
     }
 }
