@@ -1,0 +1,38 @@
+clients/go/protocol_v2.go
+  s_126aec4081f728::t_4dda051e3b0f02 219-221,232-235
+clients/go/client_windows.go
+  s_126aec4081f728::t_ffe6d8afba15e8 31-39
+crates/inferd-client/src/v2_client.rs
+  s_126aec4081f728::t_a58c7459a76e76 49-57
+clients/go/client.go
+  s_126aec4081f728::t_bde6eff98352c3 42-47
+site/index.html
+  s_126aec4081f728::t_1cd65126ca192d 279
+CHANGELOG.md
+  s_126aec4081f728::t_e53090fefaf930 19-42
+docs/protocol-v2.md
+  s_126aec4081f728::t_85b8ccd53fee60 59,64-69
+  s_126aec4081f728::t_c1fb322cc05a02 38-39,43-48
+  s_126aec4081f728::t_581573e1dbc975 160-176
+  s_126aec4081f728::t_521a19d94ed5b7 1-37,40-42,49-58,60-63,70-159,177-463
+docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md
+  s_126aec4081f728::t_a0b6d24cad8497 1-106
+clients/go/client_unix.go
+  s_126aec4081f728::t_51ab1fc31720a2 11-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "751f79ef033ca24f074b46e20de79b98abd9cb6f",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
