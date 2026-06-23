@@ -46,9 +46,15 @@ struct Inner {
 }
 
 impl ClientV2 {
-    /// Open a TCP connection to `addr` (e.g. `"127.0.0.1:47322"`).
-    /// v2 TCP transport is opt-in (config-flagged off by default);
-    /// see ADR 0015 §Endpoints for the configured port convention.
+    /// Open a TCP connection to `addr` (e.g. `"127.0.0.1:47321"`).
+    ///
+    /// **Deprecated (ADR 0022).** The daemon's inbound loopback-TCP
+    /// listener is deprecated in v0.4.0 and will be removed in v0.4.1.
+    /// New code should dial the local UDS / named pipe via
+    /// [`dial_uds`](Self::dial_uds) / [`dial_pipe`](Self::dial_pipe)
+    /// (start from [`default_v2_addr`]). For network access, use the
+    /// separate `inferd-http` bridge (ADR 0020). Retained for the
+    /// v0.4.x test harness only.
     pub async fn dial_tcp(addr: &str) -> Result<Self, ClientError> {
         let stream = TcpStream::connect(addr).await?;
         let (read, write) = stream.into_split();

@@ -28,7 +28,7 @@ defer cancel()
 // upstream threat model guarantees the generation socket only
 // exists when the daemon is `ready`.
 client, err := inferd.DialAndWaitReady(ctx, func(ctx context.Context) (*inferd.Client, error) {
-    return inferd.DialTCP(ctx, "127.0.0.1:47321")
+    return inferd.DialInfer(ctx) // platform default: UDS on Unix, named pipe on Windows
 })
 if err != nil { /* handle */ }
 defer client.Close()
@@ -115,9 +115,15 @@ declared in `RequestV2.Tools`. The stream terminates with one `done`
 
 | Function | Platform | Default (`DefaultInferAddr()`) |
 |---|---|---|
-| `DialTCP(ctx, "127.0.0.1:47321")` | All | Loopback only by convention; daemon refuses to bind public addresses unless explicitly configured. |
+| `DialInfer(ctx)` | All | Platform default: UDS on Unix, named pipe on Windows. |
 | `DialUDS(ctx, path)` | Unix (`//go:build unix`) | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` |
 | `DialPipe(ctx, path)` | Windows | `\\.\pipe\inferd` |
+
+> The daemon binds no inbound network listener — it is reachable only
+> over the local UDS / named pipe ([ADR 0022](https://github.com/3rg0n/inferd/blob/main/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
+> A `DialTCP` function still exists in this release but is **deprecated
+> and unsupported**, slated for removal in v0.4.1; for network access use
+> the separate `inferd-http` bridge (ADR 0020).
 
 `DialAndWaitReady(ctx, dial)` wraps any of the three with an
 exponential-backoff retry loop (start 100ms, cap 5s) for
@@ -169,7 +175,7 @@ for {
 }
 inference:
 client, _ := inferd.DialAndWaitReady(ctx, func(c context.Context) (*inferd.Client, error) {
-    return inferd.DialTCP(c, "127.0.0.1:47321")
+    return inferd.DialInfer(c)
 })
 defer client.Close()
 // ... use client.Generate as in the quickstart.
@@ -201,7 +207,7 @@ in v0.4.
 Any Go consumer that wants local inference imports this
 module instead of embedding its own engine. Call sites
 construct `inferd.Client`, point it at the running daemon's
-endpoint (UDS / named pipe / loopback TCP), and stream
+endpoint (UDS on Unix, named pipe on Windows), and stream
 tokens back through the same connection.
 
 ## Tests

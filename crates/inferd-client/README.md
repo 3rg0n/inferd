@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // exists when the daemon is `ready`.
     let mut client = inferd_client::dial_and_wait_ready(
         std::time::Duration::from_secs(30),
-        || ClientV2::dial_tcp("127.0.0.1:47321"),
+        || ClientV2::dial_uds(&inferd_client::default_v2_addr()), // Windows: ClientV2::dial_pipe(r"\\.\pipe\inferd")
     )
     .await?;
 
@@ -77,11 +77,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Constructor | Platform |
 |---|---|
-| `ClientV2::dial_tcp("127.0.0.1:47321")` | All |
 | `ClientV2::dial_uds(&path)` | Unix |
 | `ClientV2::dial_pipe(r"\\.\pipe\inferd")` | Windows |
 
+`default_v2_addr()` returns the platform default generation socket path.
 For embeddings, use `EmbedClient::dial_*` (ADR 0017).
+
+> The daemon binds no inbound network listener — it is reachable only
+> over the local UDS / named pipe ([ADR 0022](https://github.com/3rg0n/inferd/blob/main/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
+> A `dial_tcp` constructor still exists in this release but is
+> **deprecated and unsupported**, slated for removal in v0.4.1; reach
+> inferd over a network port via the separate `inferd-http` bridge
+> ([ADR 0020](https://github.com/3rg0n/inferd/blob/main/docs/adr/0020-inferd-http-bridge-is-a-separate-process.md)).
 
 ## Wait-for-ready
 
@@ -107,10 +114,10 @@ Two patterns:
 | Windows | `\\.\pipe\inferd` | `\\.\pipe\inferd-admin` |
 
 Operators may override via `--uds` / `--pipe` / `--admin-addr` on
-the daemon. Loopback TCP (`127.0.0.1:47321`) is opt-in for
-container / WSL scenarios and supports an API key as the first
-frame. (The embed surface binds its own socket when an embed-capable
-backend is configured.)
+the daemon. (The embed surface binds its own socket when an
+embed-capable backend is configured.) The daemon binds no inbound
+network listener (ADR 0022); network access is the `inferd-http`
+bridge's job (ADR 0020).
 
 ## Versioning
 

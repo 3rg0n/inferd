@@ -28,6 +28,15 @@ func dialAdminAddr(ctx context.Context, addr string) (net.Conn, error) {
 	return conn, nil
 }
 
+// DialInfer opens a connection to the daemon's generation socket at the
+// platform-default path. On Windows that is the named pipe at
+// DefaultInferAddr(); on Unix the equivalent dials the UDS. Use this for
+// portable, transport-agnostic code; reach for DialUDS / DialPipe only
+// when you need a non-default path.
+func DialInfer(ctx context.Context) (*Client, error) {
+	return DialPipe(ctx, DefaultInferAddr())
+}
+
 // DialPipe opens a Windows named-pipe connection to the inferd daemon.
 //
 // Windows-only. v0.1 uses os.OpenFile against the pipe path with a

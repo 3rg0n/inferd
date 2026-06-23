@@ -1,9 +1,10 @@
 # inferd-daemon
 
 The binary. Owns the lifecycle, admission queue, single-instance
-lock, NDJSON endpoints (Unix socket / Windows named pipe / loopback
-TCP), admin socket, activity log, model store, fetch, and
-boot/shutdown flow.
+lock, IPC endpoints (Unix socket / Windows named pipe / loopback
+TCP) — length-prefixed, type-tagged frames for generation (ADR 0021),
+NDJSON for embeddings (ADR 0017) — admin socket, activity log, model
+store, fetch, and boot/shutdown flow.
 
 ## Invariants
 

@@ -39,6 +39,12 @@ func New(conn net.Conn) *Client {
 }
 
 // DialTCP opens a TCP connection to the inferd daemon.
+//
+// DEPRECATED (ADR 0022): the daemon's inbound loopback-TCP listener is
+// deprecated in v0.4.0 and will be removed in v0.4.1. New code should
+// dial the local UDS / named pipe via DialInfer / DialUDS / DialPipe.
+// For network access, use the separate inferd-http bridge (ADR 0020).
+// This constructor is retained for the v0.4.x test harness only.
 func DialTCP(ctx context.Context, addr string) (*Client, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)

@@ -70,6 +70,12 @@ pub struct Cli {
     pub lock: PathBuf,
 
     /// Loopback TCP bind address. Mutually exclusive with `--uds` and `--pipe`.
+    ///
+    /// DEPRECATED (ADR 0022): the daemon binds no inbound network
+    /// listener as of v0.4; this flag is deprecated in v0.4.0 and will be
+    /// removed in v0.4.1. Use `--uds` (Unix) / `--pipe` (Windows). For
+    /// network access, run the separate inferd-http bridge (ADR 0020).
+    /// Retained in v0.4.x for the cross-platform test harness only.
     #[arg(long, env = "INFERD_TCP", conflicts_with_all = ["uds", "pipe"])]
     pub tcp: Option<String>,
 
