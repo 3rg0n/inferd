@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Windows arm64 release tarball** (`aarch64-pc-windows-msvc`). Built
+  natively on GitHub's GA `windows-11-arm` runner (not a cross-compile)
+  and added to the release matrix — so releases now ship 5 targets:
+  Linux x86_64 + arm64, macOS arm64, Windows x86_64 + arm64. The arm64
+  Windows build is `dl-backends` (CPU ggml variants; no CUDA on Windows
+  arm64), uses the default VS CMake generator (cmake-rs targets ARM64 via
+  `-A ARM64`), and bundles the same arch-agnostic `install.ps1`. The
+  publish job's asset-completeness check was bumped 4→5.
+
 ### Changed
 
 - **CI: Windows CUDA release build switched to the Ninja CMake generator**

@@ -7,9 +7,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Status: v0.5.0.** `inferd-proto` and `inferd-client` are on crates.io;
-the daemon binary ships via GitHub releases for Linux x86_64, macOS
-aarch64, and Windows x86_64. See `context.md` for the hand-off brief to
-first-time contributors and `docs/adr/` for the design decisions.
+the daemon binary ships via GitHub releases for Linux (x86_64 + arm64),
+macOS arm64, and Windows (x86_64 + arm64). See `context.md` for the
+hand-off brief to first-time contributors and `docs/adr/` for the design
+decisions.
 
 inferd is a single host-wide Rust service that owns the hard parts of
 running a local LLM — loading the model, holding it warm, multiplexing
