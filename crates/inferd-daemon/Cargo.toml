@@ -1,6 +1,6 @@
 [package]
 name = "inferd-daemon"
-description = "The inferd daemon: NDJSON-over-IPC server, admission queue, single-instance lock, router, activity log."
+description = "The inferd daemon: IPC over Unix socket / Windows named pipe (length-prefixed type-tagged frames for generation, NDJSON for embeddings), admission queue, single-instance lock, router, grammar support, activity log."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

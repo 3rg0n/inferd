@@ -1,6 +1,6 @@
 [package]
 name = "inferd-proto"
-description = "Wire format for inferd: NDJSON Request/Response frames, bounded reader, request validation."
+description = "Wire format for inferd: length-prefixed type-tagged frames (generation), NDJSON (embeddings), bounded reader, request validation."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

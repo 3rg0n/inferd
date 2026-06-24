@@ -51,7 +51,7 @@ building a non-client tool that needs to parse or generate frames
 
 ```toml
 [dependencies]
-inferd-proto = "0.4"
+inferd-proto = "0.5"
 ```
 
 ## License

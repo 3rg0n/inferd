@@ -6,7 +6,7 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: v0.4.0.** `inferd-proto` and `inferd-client` are on crates.io;
+**Status: v0.5.0.** `inferd-proto` and `inferd-client` are on crates.io;
 the daemon binary ships via GitHub releases for Linux x86_64, macOS
 aarch64, and Windows x86_64. See `context.md` for the hand-off brief to
 first-time contributors and `docs/adr/` for the design decisions.
@@ -34,11 +34,11 @@ inferd solves that by being the *only* local inference endpoint on the
 host. It:
 
 - Loads a model once, keeps it warm.
-- Exposes a small IPC protocol on a Unix socket, Windows named pipe, or
-  loopback TCP — length-prefixed, type-tagged frames for generation
-  (ADR 0021), NDJSON for embeddings (ADR 0017).
-- Enforces per-caller identity (UID on Unix, SID on Windows) and an
-  optional API key for loopback TCP.
+- Exposes a small IPC protocol on a Unix socket or Windows named pipe
+  (no inbound network listener, ADR 0022) — length-prefixed, type-tagged
+  frames for generation (ADR 0021), NDJSON for embeddings (ADR 0017).
+- Enforces per-caller identity via kernel-attested peer credentials
+  (UID on Unix, SID on Windows).
 - Multiplexes requests through a single engine or across a pool of
   backend adapters.
 - Stores models in a shared content-addressable layout (ADR 0011)
@@ -55,7 +55,7 @@ inference daemon; they connect to inferd.
 
 ## Scope
 
-What ships today (v0.4):
+What ships today (v0.5):
 
 - **Local llama.cpp via FFI**, Gemma 4 E4B as the reference model —
   multimodal by default (vision projector pulled on first boot).
@@ -67,6 +67,12 @@ What ships today (v0.4):
   with raw BLOB media and an in-band `wire_version`), and embeddings
   (ADR 0017, NDJSON). The original text-only v1 surface was folded into
   v2 and removed in v0.4.
+- **Structured-output grammar** (v0.5, ADR 0013): a request may carry a
+  `response_format` JSON Schema, which the daemon compiles to a GBNF
+  grammar so output is constrained to match the schema.
+- **No inbound network listener** (v0.5, ADR 0022): the daemon binds a
+  Unix socket / named pipe only; loopback TCP was removed. Network reach
+  is a separate bridge process's job (ADR 0020).
 - **Cloud backend adapters** behind the same `Backend` trait —
   `openai-compat` (vLLM, LM Studio, LocalAI, llama.cpp's HTTP server,
   OpenAI/Anthropic) and `bedrock-invoke` — feature-gated, outbound
@@ -113,8 +119,8 @@ into the shared model store; watch with `inferdctl watch`.
 ### Linux
 
 ```sh
-tar xzf inferd-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
-cd inferd-v0.3.0-x86_64-unknown-linux-gnu
+tar xzf inferd-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
+cd inferd-v0.5.0-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin ~/.config/systemd/user
 cp -f inferd-daemon inferdctl ~/.local/bin/
 cp -f backends/* ~/.local/bin/            # ggml backend modules ($ORIGIN RPATH)
@@ -158,8 +164,8 @@ and run `wsl.exe --shutdown` from Windows.
 ### macOS (Apple Silicon)
 
 ```sh
-tar xzf inferd-v0.3.0-aarch64-apple-darwin.tar.gz
-cd inferd-v0.3.0-aarch64-apple-darwin
+tar xzf inferd-v0.5.0-aarch64-apple-darwin.tar.gz
+cd inferd-v0.5.0-aarch64-apple-darwin
 ./packaging/launchd/install-launchagent.sh ./inferd-daemon
 inferdctl watch
 ```
@@ -171,8 +177,8 @@ bootstraps it. The probe picks Metal on Apple Silicon.
 ### Windows
 
 ```powershell
-Expand-Archive inferd-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-cd inferd-v0.3.0-x86_64-pc-windows-msvc
+Expand-Archive inferd-v0.5.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+cd inferd-v0.5.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
     -SourceBinary .\inferd-daemon.exe
 inferdctl watch

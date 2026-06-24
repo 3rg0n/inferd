@@ -1,6 +1,6 @@
 [package]
 name = "inferd-engine"
-description = "Backend trait and adapters for inferd. v0.1: mock + libllama (FFI). v0.2: cloud adapters."
+description = "Backend trait and adapters for inferd: llamacpp (FFI, runtime accelerator selection), openai-compat, bedrock-invoke, mock. Generation (typed content blocks + JSON-Schema→GBNF grammar) and embeddings."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

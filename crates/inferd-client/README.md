@@ -126,18 +126,19 @@ contract:
 
 ```toml
 [dependencies]
-inferd-client = "0.4"
+inferd-client = "0.5"
 ```
 
-`inferd-client 0.4.x` always uses `inferd-proto 0.4.x` and talks
-to `inferd-daemon 0.4.x`. The published patch versions move in
+`inferd-client 0.5.x` always uses `inferd-proto 0.5.x` and talks
+to `inferd-daemon 0.5.x`. The published patch versions move in
 lockstep. The generation (v2) and embed surfaces are each frozen:
 changes within a surface are backwards-additive only; a breaking
 change to the generation wire bumps the in-band `wire_version`
 (ADR 0021), so a mismatch fails loudly rather than corrupting the
-stream. **Pre-launch break:** v0.4 changed the generation framing —
-a v0.3 client does not interoperate with a v0.4 daemon; upgrade both
-together.
+stream. v0.5 is wire-compatible with v0.4 (the new `response_format`
+grammar field is backwards-additive). The v0.4 → v0.3 framing change
+*was* breaking — a v0.3 client does not interoperate with a v0.4+
+daemon; upgrade both together.
 
 ## Compatibility
 
