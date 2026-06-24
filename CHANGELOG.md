@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: Windows CUDA release build switched to the Ninja CMake generator**
+  (`inferd-engine/build.rs`), decoupling the `.cu` compile from MSBuild +
+  CUDA's `visual_studio_integration` props. `nvcc` now invokes `cl.exe`
+  directly, so the build no longer depends on a CUDA-toolkit ↔ VS-version
+  pairing — fixing the drift (#162) that forced the `windows-2022` pin
+  after CUDA 12.6's VS-2022-only integration broke on `windows-2025`/VS
+  2026 (rc.1). `release.yml` now runs the Windows CUDA job on
+  `windows-latest`, sets up the MSVC dev environment (cl.exe + ninja on
+  PATH) via `ilammas/msvc-dev-cmd`, and drops the now-unneeded
+  `visual_studio_integration` CUDA sub-package. Verified locally:
+  Ninja-driven `dl-backends,cuda` build produces a real `ggml-cuda.dll`
+  (CUDA 13.3 + VS 2022 BuildTools). The runner image no longer has to be
+  pinned to match the toolkit.
+
 ## [0.5.0] - 2026-06-24
 
 GA promotion of `[0.5.0-rc.1]` (below) — no code changes beyond the

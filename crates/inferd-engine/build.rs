@@ -101,6 +101,26 @@ fn build_llamacpp() {
     let is_x86_64 = target_arch == "x86_64";
 
     let mut config = cmake::Config::new(&cpp_wrapper);
+
+    // Windows + CUDA: drive CMake with the **Ninja** generator instead of
+    // the default Visual Studio generator. The VS generator compiles
+    // `.cu` files through MSBuild, which requires CUDA's
+    // `visual_studio_integration` `.props`/`.targets` — and those are
+    // version-matched to a *specific* VS release. CUDA 12.6 only ships VS
+    // 2022 integration, so on a newer image (windows-2025 → VS 2026)
+    // `enable_language(CUDA)` fails "No CUDA toolset found" (the #162
+    // drift). Ninja sidesteps MSBuild entirely: `nvcc` invokes `cl.exe`
+    // directly, so the build is VS-version-agnostic and the runner image
+    // no longer has to be pinned to match the CUDA toolkit. Requires
+    // `cl.exe` + `ninja` on PATH (the MSVC dev environment) — release.yml
+    // enters it via ilammas/msvc-dev-cmd before the build. Only the
+    // CUDA build needs this; the non-CUDA Windows path keeps the default
+    // generator (no nvcc, no MSBuild-integration dependency).
+    let win_cuda = cfg!(all(target_os = "windows", feature = "cuda"));
+    if win_cuda {
+        config.generator("Ninja");
+    }
+
     config
         // CMake build via the cpp/ wrapper. Strip every llama.cpp
         // component inferd does not consume (servers / CLIs / tests /

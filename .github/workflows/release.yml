@@ -76,16 +76,19 @@ jobs:
           # CUDA redist DLLs are bundled next to the exe by the Windows
           # bundling step. Hosts without an NVIDIA driver fall through to
           # CPU at the runtime probe (ADR 0019).
-          # Pinned to windows-2022 (VS 2022 / MSVC 19.4x), NOT
-          # windows-latest. As of mid-2026 windows-latest → windows-2025
-          # ships VS 2026 / MSVC 19.51, and CUDA 12.6's
-          # `visual_studio_integration` only registers its MSBuild props
-          # for VS 2022 — so on windows-2025 cmake's `enable_language(CUDA)`
-          # fails with "No CUDA toolset found" (rc.1 Windows build break).
-          # Pinning the older image keeps the CUDA→MSVC toolset path
-          # working. Revisit when CUDA ships VS 2026 integration (then we
-          # can move to windows-2025 / a newer CUDA).
-          - os: windows-2022
+          # windows-latest (NOT pinned). The CUDA build uses the **Ninja**
+          # CMake generator (set in inferd-engine/build.rs for
+          # windows+cuda), so `nvcc` invokes `cl.exe` directly instead of
+          # going through MSBuild + CUDA's `visual_studio_integration`
+          # props. Those props are version-matched to a specific VS
+          # release, and that coupling was the #162 drift: CUDA 12.6 only
+          # ships VS 2022 integration, so the default VS generator broke
+          # "No CUDA toolset found" the moment windows-latest rolled to
+          # VS 2026 (rc.1). Ninja is VS-version-agnostic, so the image no
+          # longer has to be pinned to match the toolkit. Requires the
+          # MSVC dev environment on PATH (cl.exe + ninja) — the
+          # msvc-dev-cmd step below provides it.
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
             features: inferd-daemon/dl-backends,inferd-daemon/cuda
@@ -156,13 +159,31 @@ jobs:
       # first-class sub-package (`cublas` / `libcublas`), so no post-step
       # apt workaround is needed — Jimver resolves them directly. The
       # action exports CUDA_PATH so cmake's FindCUDAToolkit locates nvcc.
+      #
+      # NOTE: no `visual_studio_integration` sub-package. We drive CMake
+      # with the Ninja generator (build.rs), so nvcc calls cl.exe directly
+      # and never touches CUDA's MSBuild `.props` — installing them would
+      # be dead weight and re-introduce the VS-version coupling (#162).
       - name: Install CUDA toolkit (Windows x86_64 only)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
         with:
           cuda: '12.6.0'
           method: 'network'
-          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","visual_studio_integration"]'
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust"]'
+
+      # The Ninja-driven CUDA build (build.rs sets the Ninja generator for
+      # windows+cuda) needs `cl.exe` and `ninja` on PATH — i.e. the MSVC
+      # developer environment. ilammas/msvc-dev-cmd injects the vcvars
+      # environment into subsequent steps; ninja ships with the VS C++
+      # workload on the runner image. This replaces the implicit MSBuild
+      # toolchain discovery the VS generator used to do, and is what makes
+      # the build VS-version-agnostic (#162 fix).
+      - name: Set up MSVC dev environment (Windows x86_64 only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: ilammas/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: x64
 
       # No rust-cache for release builds. Release runs are rare,
       # correctness > speed, and we've now seen Swatinem's cache
