@@ -1,0 +1,72 @@
+clients/go/dial_test_unix_test.go
+  s_126aec4081f728::t_eebc20a7ed5c05 1-17
+crates/inferd-client/Cargo.toml
+  s_126aec4081f728::t_c8d21664369b2b 24
+CHANGELOG.md
+  s_126aec4081f728::t_1e9d178bbcff6e 10-40
+crates/inferd-daemon/tests/queue_full.rs
+  s_126aec4081f728::t_7f1fbd348433d4 1-16,18,22,26,28,30,32,34,36,39-41,43,45-48,50,52-65,74,77-83,85-86,88-90,94-99,101-102,104-108,111-157,159-173,184-188,190-192,195-199,201-217
+  s_126aec4081f728::t_cb40f2c62f1d3f 66-72
+  s_126aec4081f728::t_31422b646f111b 174-180
+  s_126aec4081f728::t_a93b171b5f9c50 17,19-21,23-25,27,29,31,33,35,37-38
+  s_126aec4081f728::t_78a311e6f7124e 158,181-183,189,193-194,200
+  s_126aec4081f728::t_9e628d23db00e7 100,103,109-110
+  s_126aec4081f728::t_e0bc2eb0e40ef6 42,44,49,51,73,75-76,84,87,91-93
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_ff65d8bba6d69f 353
+crates/inferd-daemon/tests/stress.rs
+  s_126aec4081f728::t_60dafd05cd5fe9 80-86
+  s_126aec4081f728::t_529b46a0ae85ca 1-79,87-288
+crates/inferd-daemon/src/lifecycle_v2.rs
+  s_126aec4081f728::t_bc8a0bb680c25e 518
+Cargo.toml
+  s_126aec4081f728::t_c8d21664369b2b 16
+crates/inferd-daemon/tests/v2_stub.rs
+  s_126aec4081f728::t_9bd691ac916126 163,174,194
+  s_126aec4081f728::t_0c295975e9dad7 238,241,249
+  s_126aec4081f728::t_57f4bc6adfe553 302,311,313
+  s_126aec4081f728::t_7989b3672c9ad3 402,405,407
+  s_126aec4081f728::t_f2cfa913e873f9 347,355,357
+  s_126aec4081f728::t_01feafbf630d01 205,208,221
+  s_126aec4081f728::t_fbfaf3ddd87fed 262,265,267
+  s_126aec4081f728::t_3ec1264f82c325 52,56,61,64-66,68-72,75,77,80,82,93-95,105-107
+  s_126aec4081f728::t_e8ff2686c15bc9 17-19,23,28-32,34,36,38,43,45,47,49-50
+  s_126aec4081f728::t_ec20577d3f4f76 116,123,125
+  s_126aec4081f728::t_aa5f8a4980124d 62-63,67
+  s_126aec4081f728::t_7f1fbd348433d4 1-16,20-22,24-27,33,35,37,39-42,44,46,48,51,53-55,57-60,73-74,76,78-79,81,83-92,96-104,108-115,117-122,124,126-162,164-173,175-193,195-204,206-207,209-220,222-237,239-240,242-248,250-261,263-264,266,268-301,303-310,312,314-346,348-354,356,358-369,371-380,382,384-401,403-404,406,408-445
+  s_126aec4081f728::t_383d0b95dbfe92 370,381,383
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_c8d21664369b2b 56
+clients/go/dial_test_windows_test.go
+  s_126aec4081f728::t_6b2694167d6074 1-17
+crates/inferd/Cargo.toml
+  s_126aec4081f728::t_c8d21664369b2b 22-23
+crates/inferd-daemon/src/lifecycle_embed.rs
+  s_126aec4081f728::t_82d6b601206750 274
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_c8d21664369b2b 47-48
+crates/inferd-daemon/src/peercred.rs
+  s_126aec4081f728::t_fb58a92421af01 34
+crates/inferd-daemon/tests/logx.rs
+  s_126aec4081f728::t_529b46a0ae85ca 1-68,76-171
+  s_126aec4081f728::t_1d0373ca23fcb3 69-75
+crates/inferd-daemon/tests/echo_llamacpp.rs
+  s_126aec4081f728::t_529b46a0ae85ca 1-76,79,83-154
+  s_126aec4081f728::t_c3124a523fa35d 77-78,80-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "45ac4cbb39efab1a6b0fbcdf94f2e63566758897",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
