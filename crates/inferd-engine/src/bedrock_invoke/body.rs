@@ -656,6 +656,7 @@ mod tests {
             top_k: None,
             max_tokens: None,
             stream: None,
+            response_format: None,
         };
         let err = request_body(&r).unwrap_err();
         assert_eq!(err, BodyError::AttachmentUnsupported("image"));

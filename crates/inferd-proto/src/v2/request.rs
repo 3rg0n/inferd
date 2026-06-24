@@ -185,7 +185,7 @@ pub struct RequestV2 {
 /// defaults are applied at the backend layer, not the proto layer,
 /// because they vary per backend in v2 — unlike v1 where Gemma 4
 /// defaults could be hard-coded).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ResolvedV2 {
     /// Wire-format version the request declared (already validated as
     /// supported by `resolve`).

@@ -500,6 +500,7 @@ mod tests {
             top_k: None,
             max_tokens: None,
             stream: None,
+            response_format: None,
         };
         let err = request_from_resolved(&r, "m").unwrap_err();
         assert_eq!(err, MapperError::AttachmentUnsupported("image"));
