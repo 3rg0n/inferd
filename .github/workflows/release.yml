@@ -205,14 +205,14 @@ jobs:
 
       # The Ninja-driven CUDA build (build.rs sets the Ninja generator for
       # windows+cuda) needs `cl.exe` and `ninja` on PATH — i.e. the MSVC
-      # developer environment. ilammas/msvc-dev-cmd injects the vcvars
+      # developer environment. ilammy/msvc-dev-cmd injects the vcvars
       # environment into subsequent steps; ninja ships with the VS C++
       # workload on the runner image. This replaces the implicit MSBuild
       # toolchain discovery the VS generator used to do, and is what makes
       # the build VS-version-agnostic (#162 fix).
       - name: Set up MSVC dev environment (Windows x86_64 only)
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: ilammas/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
         with:
           arch: x64
 
