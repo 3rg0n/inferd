@@ -1,0 +1,33 @@
+crates/inferd-engine/cpp/grammar_shim.cpp
+  s_126aec4081f728::t_85e1c2ebd6a047 1-56
+crates/inferd-engine/tests/grammar_llamacpp.rs
+  s_126aec4081f728::t_a93a9e8b4132e2 61-64
+  s_126aec4081f728::t_615638445501fd 1-5,7-52,54-60,65
+  s_126aec4081f728::t_b70b12366b5ba1 6
+  s_126aec4081f728::t_2832ef9e2c72f6 53
+  s_126aec4081f728::t_c1dcc55228eea0 66-118
+crates/inferd-engine/cpp/string_utils.cpp
+  s_126aec4081f728::t_85e1c2ebd6a047 1-49
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_a93a9e8b4132e2 28,759-765,788-870,956-962,970-972,974-977,1007-1011
+crates/inferd-engine/src/llamacpp/grammar.rs
+  s_126aec4081f728::t_85e1c2ebd6a047 1-69
+crates/inferd-proto/src/v2/request.rs
+  s_126aec4081f728::t_85e1c2ebd6a047 12,15-30,446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "a5f3e3c20aef8d2b2dfca7eecb9074d2a2345375",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
