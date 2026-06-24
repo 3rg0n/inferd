@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
+GA promotion of `[0.5.0-rc.1]` (below) — no code changes beyond the
+version bump. Validated install=work from the rc.1 release tarballs on
+all three testable platforms (real `llamacpp`, no mock):
+
 ### Validation
 
 - **Windows x86_64 CUDA (RTX 5080) — v0.5.0-rc.1 tarball validation green
