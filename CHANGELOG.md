@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-06-24
+## [0.5.0-rc.1] - 2026-06-24
 
 **Breaking: the daemon binds no inbound network listener.** Inbound
 loopback TCP — deprecated in 0.4.0 ([ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md))
