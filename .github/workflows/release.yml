@@ -10,11 +10,14 @@ name: Release
 #   - linux aarch64 (gnu)
 #   - macos aarch64 (Apple Silicon)
 #   - windows x86_64 (msvc)
+#   - windows aarch64 (msvc)
 #
-# Windows aarch64 was attempted via `windows-11-arm` in v0.1.7 but
-# the llamacpp build failed on the runner — likely an LLVM/clang
-# setup difference vs the x64 image. Held until that's debugged;
-# see #63 for the issue.
+# Windows aarch64 (`windows-11-arm`) was attempted in v0.1.7 and failed
+# — the llamacpp build couldn't find libclang for bindgen (the x64 image
+# ships LLVM, the arm64 image does not). Re-added in v0.5.x with an
+# explicit native-arm64 LLVM install step (LIBCLANG_PATH) gated to that
+# target. dl-backends only (no CUDA on Windows arm64 — NVIDIA ships no
+# CUDA toolkit for Windows-on-ARM; the runtime probe picks CPU). See #63.
 #
 # Builds ship with the `dl-backends` feature (ADR 0019, v0.3) so
 # the binary supports real inference out of the box, with the
@@ -122,6 +125,22 @@ jobs:
       - name: Install LLVM (macOS)
         if: runner.os == 'macOS'
         run: brew install llvm
+
+      # Windows arm64 (windows-11-arm) needs an EXPLICIT LLVM install for
+      # bindgen. The x64 Windows image ships LLVM and bindgen 0.71 finds
+      # it via the registry (so no step there) — but the arm64 image does
+      # NOT, which is exactly the v0.1.7 `windows-11-arm` failure ("the
+      # llamacpp build failed … likely an LLVM/clang setup difference vs
+      # the x64 image", #63). Install a native arm64 LLVM and point
+      # bindgen at its libclang via LIBCLANG_PATH. x64 Windows is
+      # untouched (still uses the image's bundled LLVM).
+      - name: Install LLVM (Windows arm64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: KyleMayes/install-llvm-action@a7a1a882e2d06ebe05d5bb97c3e1f8c984ae96fc  # v2.0.7
+        with:
+          version: '18.1.8'
+          arch: arm64
+          env: true   # exports LLVM_PATH + LIBCLANG_PATH for bindgen
 
       # CUDA toolkit for x86_64-linux only — needed because that target's
       # `features:` includes inferd-daemon/cuda, which flips
