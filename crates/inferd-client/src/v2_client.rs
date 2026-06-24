@@ -1,10 +1,10 @@
 //! v2 inference-socket client — the single generation surface.
 //!
-//! Spec: ADR 0021. As of v0.4 v2 is the only generation socket and
+//! Spec: ADR 0021. As of v0.5 v2 is the only generation socket and
 //! rides the length-prefixed, type-tagged framing
 //! (`[uvarint len][1 byte type][payload]`, type `0x01` JSON / `0x02`
-//! BLOB). Clients pick a transport with `dial_uds` / `dial_pipe` /
-//! `dial_tcp`. A request carrying attachments sends the JSON request
+//! BLOB). Clients pick a transport with `dial_uds` (Unix) or `dial_pipe`
+//! (Windows). A request carrying attachments sends the JSON request
 //! frame, then per attachment a `BlobDescriptor` JSON frame followed by
 //! a BLOB frame with the raw bytes (no base64). 64 MiB per-frame cap;
 //! terminal `done` / `error` ends the stream.
@@ -17,7 +17,6 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
 
@@ -26,10 +25,9 @@ pub type FrameStreamV2 = Pin<Box<dyn Stream<Item = Result<ResponseV2, ClientErro
 
 /// v2 inference-socket client.
 ///
-/// Construct via `dial_tcp` / `dial_uds` (Unix) / `dial_pipe`
-/// (Windows). Wrap with [`crate::dial_and_wait_ready`] to retry
-/// connect during daemon bring-up — the retry helper is generic over
-/// the client type so the same wait logic serves v1 and v2.
+/// Construct via `dial_uds` (Unix) or `dial_pipe` (Windows).
+/// Wrap with [`crate::dial_and_wait_ready`] to retry connect during
+/// daemon bring-up — the retry helper is generic over the client type.
 pub struct ClientV2 {
     inner: Arc<Mutex<Inner>>,
 }
@@ -46,21 +44,6 @@ struct Inner {
 }
 
 impl ClientV2 {
-    /// Open a TCP connection to `addr` (e.g. `"127.0.0.1:47321"`).
-    ///
-    /// **Deprecated (ADR 0022).** The daemon's inbound loopback-TCP
-    /// listener is deprecated in v0.4.0 and will be removed in v0.4.1.
-    /// New code should dial the local UDS / named pipe via
-    /// [`dial_uds`](Self::dial_uds) / [`dial_pipe`](Self::dial_pipe)
-    /// (start from [`default_v2_addr`]). For network access, use the
-    /// separate `inferd-http` bridge (ADR 0020). Retained for the
-    /// v0.4.x test harness only.
-    pub async fn dial_tcp(addr: &str) -> Result<Self, ClientError> {
-        let stream = TcpStream::connect(addr).await?;
-        let (read, write) = stream.into_split();
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
-    }
-
     /// Open a Unix domain socket connection (Unix only). Default
     /// generation path: `${XDG_RUNTIME_DIR}/inferd/inferd.sock` on
     /// Linux, `${TMPDIR}/inferd/inferd.sock` on macOS.

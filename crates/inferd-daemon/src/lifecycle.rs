@@ -45,17 +45,13 @@ pub struct ReadyTimeout(pub Duration);
 /// Per-accept context that the lifecycle hands to every spawned
 /// connection task.
 ///
-/// Today it carries the optional TCP API key (THREAT_MODEL F-8) and
-/// the shared admission gate (queue_full enforcement). New per-
-/// connection policy (rate limits, per-caller quotas) extends this
-/// struct rather than each `serve_*` signature.
+/// Today it carries the shared admission gate (queue_full enforcement).
+/// New per-connection policy (rate limits, per-caller quotas) extends
+/// this struct rather than each `serve_*` signature. (Peer identity is
+/// kernel-attested per transport — UDS/pipe, F-7 — so there is no
+/// in-band API-key field; inbound TCP was removed in ADR 0022.)
 #[derive(Clone, Default)]
 pub struct AcceptContext {
-    /// When `Some` and the connection is TCP, the daemon requires an
-    /// auth frame as the first NDJSON line on the wire and constant-
-    /// time-compares the key against this value. UDS / pipe ignore
-    /// this field — F-7 covers them.
-    pub expected_api_key: Option<String>,
     /// Shared admission gate. `None` for tests / dev paths that
     /// don't care about queue depth — those treat every request
     /// as admitted. Production lifecycle always passes `Some`.
@@ -65,7 +61,6 @@ pub struct AcceptContext {
 impl std::fmt::Debug for AcceptContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AcceptContext")
-            .field("expected_api_key", &self.expected_api_key.is_some())
             .field(
                 "admission_capacity",
                 &self.admission.as_ref().map(|a| a.capacity()),

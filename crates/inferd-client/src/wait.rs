@@ -35,14 +35,15 @@ pub enum WaitError {
 /// attempt. This indirection lets callers swap transports without
 /// us duplicating the retry loop:
 ///
-/// ```no_run
+/// ```ignore
 /// use inferd_client::{dial_and_wait_ready, ClientV2};
 /// use std::time::Duration;
+/// use std::path::Path;
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = dial_and_wait_ready(
 ///     Duration::from_secs(30),
-///     || ClientV2::dial_tcp("127.0.0.1:47322"),
+///     || ClientV2::dial_uds(Path::new("/tmp/inferd/inferd.sock")),
 /// )
 /// .await?;
 /// # Ok(()) }

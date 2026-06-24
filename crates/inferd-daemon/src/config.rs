@@ -69,23 +69,13 @@ pub struct Cli {
     #[arg(long, env = "INFERD_LOCK")]
     pub lock: PathBuf,
 
-    /// Loopback TCP bind address. Mutually exclusive with `--uds` and `--pipe`.
-    ///
-    /// DEPRECATED (ADR 0022): the daemon binds no inbound network
-    /// listener as of v0.4; this flag is deprecated in v0.4.0 and will be
-    /// removed in v0.4.1. Use `--uds` (Unix) / `--pipe` (Windows). For
-    /// network access, run the separate inferd-http bridge (ADR 0020).
-    /// Retained in v0.4.x for the cross-platform test harness only.
-    #[arg(long, env = "INFERD_TCP", conflicts_with_all = ["uds", "pipe"])]
-    pub tcp: Option<String>,
-
-    /// Unix domain socket path. Mutually exclusive with `--tcp` and `--pipe`. Unix only.
-    #[arg(long, env = "INFERD_UDS", conflicts_with_all = ["tcp", "pipe"])]
+    /// Unix domain socket path. Mutually exclusive with `--pipe`. Unix only.
+    #[arg(long, env = "INFERD_UDS", conflicts_with_all = ["pipe"])]
     pub uds: Option<PathBuf>,
 
     /// Windows named pipe path (e.g. `\\.\pipe\inferd-infer`).
-    /// Mutually exclusive with `--tcp` and `--uds`. Windows only.
-    #[arg(long, env = "INFERD_PIPE", conflicts_with_all = ["tcp", "uds"])]
+    /// Mutually exclusive with `--uds`. Windows only.
+    #[arg(long, env = "INFERD_PIPE", conflicts_with_all = ["uds"])]
     pub pipe: Option<String>,
 
     /// Group name for the UDS (Unix only). Ignored on other transports.
@@ -220,16 +210,6 @@ pub struct Cli {
     #[arg(long, default_value_t = 300, env = "INFERD_BEDROCK_TIMEOUT_SECS")]
     pub bedrock_timeout_secs: u64,
 
-    /// Optional pre-shared API key. When set, TCP clients MUST send
-    /// `{"type":"auth","key":"<this value>"}` as their first NDJSON
-    /// frame on the connection or the daemon closes the connection.
-    /// UDS and named-pipe transports ignore this — kernel-attested
-    /// peer credentials (F-7) do the work there.
-    ///
-    /// Comparison is constant-time. THREAT_MODEL F-8.
-    #[arg(long, env = "INFERD_API_KEY", hide_env_values = true)]
-    pub api_key: Option<String>,
-
     /// Path to the operator JSON config file. Default
     /// `~/.inferd/config.json`. When present, fetch + auto-pull are
     /// driven from it; CLI flags (`--model-path`, `--model-sha256`,
@@ -260,26 +240,20 @@ pub struct Cli {
     /// unless `--embed` is also set.
     #[arg(long, env = "INFERD_EMBED_ADDR")]
     pub embed_addr: Option<PathBuf>,
-
-    /// Loopback TCP bind address for the embed endpoint. Mutually
-    /// exclusive with `--embed-addr`. Has no effect unless `--embed`
-    /// is also set.
-    #[arg(long, env = "INFERD_EMBED_TCP", conflicts_with = "embed_addr")]
-    pub embed_tcp: Option<String>,
 }
 
 impl Cli {
     /// Validate that exactly one transport is selected. clap enforces
     /// mutual exclusion; this checks the at-least-one part.
     pub fn require_one_transport(&self) -> Result<(), &'static str> {
-        let count = [self.tcp.is_some(), self.uds.is_some(), self.pipe.is_some()]
+        let count = [self.uds.is_some(), self.pipe.is_some()]
             .iter()
             .filter(|b| **b)
             .count();
         match count {
             1 => Ok(()),
-            0 => Err("must specify one of --tcp, --uds, --pipe"),
-            _ => Err("--tcp, --uds, --pipe are mutually exclusive"),
+            0 => Err("must specify one of --uds, --pipe"),
+            _ => Err("--uds and --pipe are mutually exclusive"),
         }
     }
 }
@@ -290,16 +264,17 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    #[cfg(unix)]
     fn cli_parses_minimum_required() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
         ]);
-        assert!(cli.tcp.is_some());
-        assert!(cli.uds.is_none());
+        assert!(cli.uds.is_some());
+        assert!(cli.pipe.is_none());
         assert_eq!(cli.queue_depth, 10);
         assert_eq!(cli.active_permits, 1);
         cli.require_one_transport().unwrap();
@@ -312,6 +287,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn cli_rejects_both_transports_via_clap() {
         // clap-level mutual exclusion: this should fail to parse, not
         // require_one_transport's runtime check.
@@ -319,10 +295,10 @@ mod tests {
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
             "--uds",
             "/tmp/inferd.sock",
+            "--pipe",
+            r"\\.\pipe\inferd-test",
         ]);
         assert!(result.is_err());
     }
@@ -338,22 +314,7 @@ mod tests {
         ]);
         assert!(cli.pipe.is_some());
         assert!(cli.uds.is_none());
-        assert!(cli.tcp.is_none());
         cli.require_one_transport().unwrap();
-    }
-
-    #[test]
-    fn cli_rejects_pipe_with_tcp_via_clap() {
-        let result = Cli::try_parse_from([
-            "inferd-daemon",
-            "--lock",
-            "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
-            "--pipe",
-            r"\\.\pipe\inferd-test",
-        ]);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -364,59 +325,44 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn cli_accepts_embed_flag() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--embed",
-            "--embed-tcp",
-            "127.0.0.1:0",
-        ]);
-        assert!(cli.embed);
-        assert!(cli.embed_tcp.is_some());
-        assert!(cli.embed_addr.is_none());
-    }
-
-    #[test]
-    fn cli_rejects_embed_addr_with_embed_tcp() {
-        let result = Cli::try_parse_from([
-            "inferd-daemon",
-            "--lock",
-            "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
-            "--embed",
-            "--embed-tcp",
-            "127.0.0.1:0",
             "--embed-addr",
             "/tmp/inferd-embed.sock",
         ]);
-        assert!(result.is_err());
+        assert!(cli.embed);
+        assert!(cli.embed_addr.is_some());
     }
 
     #[test]
+    #[cfg(unix)]
     fn cli_embed_disabled_by_default() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
         ]);
         assert!(!cli.embed);
     }
 
     #[test]
+    #[cfg(unix)]
     fn cli_llamacpp_embed_flags_default_off() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
         ]);
         assert!(!cli.llamacpp_embed);
         assert!(cli.llamacpp_embed_pooling.is_none());
@@ -424,6 +370,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn cli_accepts_llamacpp_embed_flags() {
         // Issue #16: dev-mode + legacy single-model configs need a
         // CLI route to flip embed on without rewriting the config.
@@ -431,8 +378,8 @@ mod tests {
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--llamacpp-embed",
             "--llamacpp-embed-pooling",
             "1",
@@ -446,13 +393,14 @@ mod tests {
 
     #[cfg(feature = "openai")]
     #[test]
+    #[cfg(unix)]
     fn cli_accepts_openai_compat_backend() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--backend",
             "openai-compat",
             "--openai-base-url",
@@ -476,13 +424,14 @@ mod tests {
 
     #[cfg(feature = "bedrock")]
     #[test]
+    #[cfg(unix)]
     fn cli_accepts_bedrock_invoke_backend() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--backend",
             "bedrock-invoke",
             "--bedrock-region",
@@ -506,13 +455,14 @@ mod tests {
 
     #[cfg(feature = "bedrock")]
     #[test]
+    #[cfg(unix)]
     fn cli_bedrock_timeout_defaults_to_300() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--backend",
             "bedrock-invoke",
             "--bedrock-region",
@@ -527,13 +477,14 @@ mod tests {
 
     #[cfg(feature = "openai")]
     #[test]
+    #[cfg(unix)]
     fn cli_openai_timeout_defaults_to_300() {
         let cli = Cli::parse_from([
             "inferd-daemon",
             "--lock",
             "/tmp/inferd.lock",
-            "--tcp",
-            "127.0.0.1:0",
+            "--uds",
+            "/tmp/inferd.sock",
             "--backend",
             "openai-compat",
             "--openai-base-url",

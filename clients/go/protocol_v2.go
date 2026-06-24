@@ -157,19 +157,40 @@ type ToolV2 struct {
 // Pointer-typed sampling fields distinguish "omitted" (daemon applies
 // the backend's default) from "explicitly zero", matching the v1
 // Request convention.
+// ResponseFormat specifies a structured output constraint for generation.
+//
+// The Type field discriminates variants (e.g. "json_schema"). The Schema
+// field (when populated) contains a JSON Schema the model output must conform
+// to. The daemon translates the schema to engine-specific constraints
+// (e.g. GBNF grammar for llamacpp).
+type ResponseFormat struct {
+	Type   string          `json:"type"`                    // "json_schema"
+	Schema json.RawMessage `json:"schema,omitempty"`        // JSON Schema bytes
+}
+
+// JSONSchemaFormat is a helper to construct a ResponseFormat for JSON Schema
+// structured output. The schema argument should be marshalled JSON bytes.
+func JSONSchemaFormat(schema json.RawMessage) *ResponseFormat {
+	return &ResponseFormat{
+		Type:   "json_schema",
+		Schema: schema,
+	}
+}
+
 type RequestV2 struct {
 	// WireVersion is set automatically by Client.GenerateV2 to
 	// WireVersion (ADR 0021); a daemon rejects a mismatch loudly.
-	WireVersion uint32         `json:"wire_version"`
-	ID          string         `json:"id,omitempty"`
-	Messages    []MessageV2    `json:"messages"`
-	Attachments []AttachmentV2 `json:"attachments,omitempty"`
-	Tools       []ToolV2       `json:"tools,omitempty"`
-	Temperature *float64       `json:"temperature,omitempty"`
-	TopP        *float64       `json:"top_p,omitempty"`
-	TopK        *uint32        `json:"top_k,omitempty"`
-	MaxTokens   *uint32        `json:"max_tokens,omitempty"`
-	Stream      *bool          `json:"stream,omitempty"`
+	WireVersion  uint32           `json:"wire_version"`
+	ID           string           `json:"id,omitempty"`
+	Messages     []MessageV2      `json:"messages"`
+	Attachments  []AttachmentV2   `json:"attachments,omitempty"`
+	Tools        []ToolV2         `json:"tools,omitempty"`
+	Temperature  *float64         `json:"temperature,omitempty"`
+	TopP         *float64         `json:"top_p,omitempty"`
+	TopK         *uint32          `json:"top_k,omitempty"`
+	MaxTokens    *uint32          `json:"max_tokens,omitempty"`
+	Stream       *bool            `json:"stream,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 
 // ResponseV2Type discriminates v2 response frames on the wire.

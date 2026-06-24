@@ -142,6 +142,30 @@ if (INFERD_BUILD_MTMD)
     install(TARGETS mtmd ARCHIVE DESTINATION lib)
 endif()
 
+# inferd grammar shim: wraps json_schema_to_grammar from llama.cpp.
+# Builds a static library containing only the grammar conversion logic
+# and the C shim. Uses the same pattern as mtmd (extract only what we
+# need, link transitively via llama + ggml, don't pull in llama-common).
+add_library(inferd_grammar STATIC
+    ${CMAKE_CURRENT_LIST_DIR}/string_utils.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/grammar_shim.cpp
+    ${LLAMA_CPP_DIR}/common/json-schema-to-grammar.cpp
+)
+
+target_include_directories(inferd_grammar PUBLIC  ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(inferd_grammar PRIVATE ${LLAMA_CPP_DIR}/common)
+target_include_directories(inferd_grammar PRIVATE ${LLAMA_CPP_DIR}/include)
+target_include_directories(inferd_grammar PRIVATE ${LLAMA_CPP_DIR}/vendor)
+target_include_directories(inferd_grammar PRIVATE ${LLAMA_CPP_DIR}/vendor/nlohmann)
+target_link_libraries     (inferd_grammar PUBLIC ggml llama)
+target_compile_features   (inferd_grammar PRIVATE cxx_std_17)
+
+if (NOT MSVC)
+    target_compile_options(inferd_grammar PRIVATE -Wno-cast-qual)
+endif()
+
+install(TARGETS inferd_grammar ARCHIVE DESTINATION lib)
+
 # macOS: ggml-blas is defined by the add_subdirectory above when
 # GGML_BLAS=ON, but EXCLUDE_FROM_ALL means it won't compile unless
 # something with a build dependency pulls it in. Wire it to ggml so

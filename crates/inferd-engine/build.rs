@@ -230,19 +230,20 @@ fn build_llamacpp() {
     }
 
     if dl_backends {
-        // Shared mode: link only libllama + libmtmd. ggml-* libs are
-        // either pulled in transitively by libllama (ggml / ggml-base)
-        // or runtime-loaded modules (ggml-cpu / ggml-metal / ggml-cuda
-        // / ggml-vulkan / ggml-hip).
+        // Shared mode: link only libllama + libmtmd + libinferd_grammar.
+        // ggml-* libs are either pulled in transitively by libllama
+        // (ggml / ggml-base) or runtime-loaded modules (ggml-cpu / ggml-metal
+        // / ggml-cuda / ggml-vulkan / ggml-hip).
         println!("cargo:rustc-link-lib=static=mtmd");
+        println!("cargo:rustc-link-lib=static=inferd_grammar");
         println!("cargo:rustc-link-lib=dylib=llama");
         println!("cargo:rustc-link-lib=dylib=ggml");
         println!("cargo:rustc-link-lib=dylib=ggml-base");
     } else {
-        // Static mode (v0.2.x). Static link order matters. mtmd
-        // depends on llama + ggml so it goes first; then llama; then
-        // ggml.
+        // Static mode (v0.2.x). Static link order matters. mtmd + grammar
+        // depend on llama + ggml so they go first; then llama; then ggml.
         println!("cargo:rustc-link-lib=static=mtmd");
+        println!("cargo:rustc-link-lib=static=inferd_grammar");
         println!("cargo:rustc-link-lib=static=llama");
         println!("cargo:rustc-link-lib=static=ggml");
         println!("cargo:rustc-link-lib=static=ggml-base");

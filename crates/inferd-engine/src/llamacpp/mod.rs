@@ -13,6 +13,7 @@
 mod accelerator;
 pub mod backend;
 pub mod chat_template;
+pub mod grammar;
 pub mod loader;
 pub mod mtmd;
 pub mod tool_parser;

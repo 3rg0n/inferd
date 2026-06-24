@@ -9,7 +9,24 @@ use crate::error::ProtoError;
 use crate::v2::attachment::Attachment;
 use crate::v2::tool::{Tool, ToolCallId, ToolUseInput};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+
+/// Structured output format constraint for generation.
+///
+/// Specifies a JSON Schema that the model output must conform to.
+/// The daemon translates this to engine-specific constraints (e.g., GBNF
+/// grammar for llamacpp). Backends that don't support structured output
+/// ignore this field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Output must conform to a JSON Schema.
+    JsonSchema {
+        /// The JSON Schema that output must match.
+        schema: Value,
+    },
+}
 
 /// Conversation role on a v2 message.
 ///
@@ -153,6 +170,10 @@ pub struct RequestV2 {
     /// Stream tokens vs return one final `done`; daemon defaults to streaming.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+
+    /// Optional structured output constraint; daemon ignores if backend doesn't support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
 /// `RequestV2` with semantic validation completed.
@@ -164,7 +185,7 @@ pub struct RequestV2 {
 /// defaults are applied at the backend layer, not the proto layer,
 /// because they vary per backend in v2 — unlike v1 where Gemma 4
 /// defaults could be hard-coded).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ResolvedV2 {
     /// Wire-format version the request declared (already validated as
     /// supported by `resolve`).
@@ -187,6 +208,8 @@ pub struct ResolvedV2 {
     pub max_tokens: Option<u32>,
     /// Streaming flag, if set.
     pub stream: Option<bool>,
+    /// Structured output constraint, if set.
+    pub response_format: Option<ResponseFormat>,
 }
 
 impl RequestV2 {
@@ -261,6 +284,7 @@ impl RequestV2 {
             top_k: self.top_k,
             max_tokens: self.max_tokens,
             stream: self.stream,
+            response_format: self.response_format,
         })
     }
 }
@@ -338,4 +362,85 @@ fn check_kind(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_response_format_round_trip() {
+        // Test that response_format serializes and deserializes correctly.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "answer": { "type": "string" }
+            },
+            "required": ["answer"]
+        });
+
+        let format = ResponseFormat::JsonSchema { schema };
+
+        // Serialize to JSON.
+        let json_str = serde_json::to_string(&format).expect("serialize");
+
+        // Deserialize back.
+        let deserialized: ResponseFormat = serde_json::from_str(&json_str).expect("deserialize");
+
+        assert_eq!(format, deserialized);
+    }
+
+    #[test]
+    fn test_request_v2_with_response_format() {
+        // Test that a RequestV2 with response_format round-trips correctly.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+
+        let req = RequestV2 {
+            wire_version: 1,
+            id: "test".to_owned(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "Hello".to_owned(),
+                }],
+            }],
+            response_format: Some(ResponseFormat::JsonSchema { schema }),
+            ..Default::default()
+        };
+
+        // Serialize and deserialize.
+        let json_str = serde_json::to_string(&req).expect("serialize");
+        let deserialized: RequestV2 = serde_json::from_str(&json_str).expect("deserialize");
+
+        assert_eq!(req, deserialized);
+        assert!(deserialized.response_format.is_some());
+    }
+
+    #[test]
+    fn test_request_v2_without_response_format() {
+        // Test that a RequestV2 without response_format is forward-compatible.
+        let req = RequestV2 {
+            wire_version: 1,
+            id: "test".to_owned(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "Hello".to_owned(),
+                }],
+            }],
+            ..Default::default()
+        };
+
+        // Serialize and deserialize.
+        let json_str = serde_json::to_string(&req).expect("serialize");
+        let deserialized: RequestV2 = serde_json::from_str(&json_str).expect("deserialize");
+
+        assert_eq!(req, deserialized);
+        assert!(deserialized.response_format.is_none());
+    }
 }

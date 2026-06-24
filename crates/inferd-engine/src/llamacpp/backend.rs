@@ -25,6 +25,7 @@ use crate::backend::{
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::Gemma4Renderer;
+use crate::llamacpp::grammar;
 use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
 use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
 use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
@@ -755,10 +756,13 @@ fn build_sampler_chain_v2(
     req: &ResolvedV2,
     seed: u32,
 ) -> Result<*mut ffi::llama_sampler, LlamaCppError> {
-    // _vocab is unused today (v2 has no GBNF grammar — the model
-    // self-constrains tool calls structurally). Kept in the signature
-    // to mirror build_sampler_chain's shape so a future grammar
-    // extension doesn't require a signature break.
+    // The grammar sampler is NOT added here. Per llama.cpp's reference
+    // `common_sampler` (common/sampling.cpp), a grammar sampler must be
+    // kept SEPARATE from the chain and applied out-of-band per token
+    // (apply-grammar → apply-chain → accept) — driving it through
+    // `llama_sampler_sample` on the chain throws a C++ exception that
+    // aborts the process across FFI. See `build_grammar_sampler_v2` +
+    // the grammar handling in `run_generation_v2`.
     let temperature = req.temperature.unwrap_or(1.0) as f32;
     let top_p = req.top_p.unwrap_or(0.95) as f32;
     let top_k = req.top_k.unwrap_or(64) as i32;
@@ -779,6 +783,89 @@ fn build_sampler_chain_v2(
         ffi::llama_sampler_chain_add(chain, ffi::llama_sampler_init_dist(seed));
     }
     Ok(chain)
+}
+
+/// Build the standalone grammar sampler for a `response_format`
+/// constraint, or `None` when the request carries no constraint.
+///
+/// Kept separate from the sampler chain on purpose (ADR 0013 + the
+/// llama.cpp `common_sampler` pattern): the grammar sampler is applied
+/// to the candidate logits and `accept`-ed manually in the decode loop,
+/// never sampled via `llama_sampler_sample`. A bad schema returns an
+/// error here — it must never reach a throw-across-FFI that would abort
+/// the daemon.
+fn build_grammar_sampler_v2(
+    vocab: *const ffi::llama_vocab,
+    req: &ResolvedV2,
+) -> Result<Option<*mut ffi::llama_sampler>, LlamaCppError> {
+    let Some(format) = &req.response_format else {
+        return Ok(None);
+    };
+    let inferd_proto::v2::ResponseFormat::JsonSchema { schema } = format;
+
+    // Compile JSON Schema → GBNF (the shim catches C++ exceptions and
+    // returns an error rather than unwinding into Rust).
+    let gbnf = grammar::json_schema_to_gbnf(schema).map_err(|_| LlamaCppError::Sampler)?;
+    let gbnf_cstr = CString::new(gbnf).map_err(|_| LlamaCppError::Sampler)?;
+    let root = CString::new("root").map_err(|_| LlamaCppError::Sampler)?;
+
+    // SAFETY: FFI; vocab valid for the lock's lifetime. init_grammar
+    // returns NULL (never throws) on a malformed grammar.
+    let grmr = unsafe { ffi::llama_sampler_init_grammar(vocab, gbnf_cstr.as_ptr(), root.as_ptr()) };
+    if grmr.is_null() {
+        return Err(LlamaCppError::Sampler);
+    }
+    Ok(Some(grmr))
+}
+
+/// Sample one token under a grammar constraint, following llama.cpp's
+/// `common_sampler_sample` grammar-first path: build the candidate array
+/// from the last logits, apply the grammar sampler (masks
+/// non-conforming tokens to -inf), then apply the chain
+/// (top_k/top_p/temp/dist) which selects from the survivors. Returns the
+/// selected token id.
+///
+/// SAFETY: `ctx` must have just decoded at least one token (logits for
+/// index -1 valid); `chain` and `grmr` must be live samplers built for
+/// this context's vocab; `n_vocab` must equal the model vocab size.
+unsafe fn sample_with_grammar(
+    ctx: *mut ffi::llama_context,
+    chain: *mut ffi::llama_sampler,
+    grmr: *mut ffi::llama_sampler,
+    n_vocab: usize,
+) -> ffi::llama_token {
+    // Logits for the most recent token (-1).
+    let logits = unsafe { ffi::llama_get_logits_ith(ctx, -1) };
+    let mut cur: Vec<ffi::llama_token_data> = (0..n_vocab)
+        .map(|i| ffi::llama_token_data {
+            id: i as ffi::llama_token,
+            // SAFETY: logits points to at least n_vocab floats.
+            logit: unsafe { *logits.add(i) },
+            p: 0.0,
+        })
+        .collect();
+
+    let mut cur_p = ffi::llama_token_data_array {
+        data: cur.as_mut_ptr(),
+        size: cur.len(),
+        selected: -1,
+        sorted: false,
+    };
+
+    // Grammar first: mask non-conforming tokens. Then the chain selects.
+    unsafe {
+        ffi::llama_sampler_apply(grmr, &mut cur_p);
+        ffi::llama_sampler_apply(chain, &mut cur_p);
+    }
+
+    // The chain's dist sampler set `selected`; fall back to argmax-safe 0.
+    let sel = cur_p.selected;
+    if sel < 0 || (sel as usize) >= cur.len() {
+        // Defensive: no selection (shouldn't happen with a dist sampler) —
+        // return the first candidate id rather than indexing OOB.
+        return cur.first().map(|d| d.id).unwrap_or(0);
+    }
+    cur[sel as usize].id
 }
 
 /// v2 generation: tokenise the rendered prompt + bitmaps via mtmd,
@@ -866,6 +953,13 @@ fn run_generation_v2(
     let sampler = build_sampler_chain_v2(vocab, req, seed)?;
     let _sampler_guard = SamplerGuard { ptr: sampler };
 
+    // Optional standalone grammar sampler (response_format → GBNF). Kept
+    // OUT of the chain and applied manually per token, mirroring
+    // llama.cpp's `common_sampler` — chaining it would throw across FFI.
+    let grammar_sampler = build_grammar_sampler_v2(vocab, req)?;
+    let _grammar_guard = grammar_sampler.map(|ptr| SamplerGuard { ptr });
+    let n_vocab = unsafe { ffi::llama_vocab_n_tokens(vocab) } as usize;
+
     let mut completion_tokens: u32 = 0;
     let mut buf = [0u8; 256];
     let mut n_past = n_past;
@@ -873,9 +967,14 @@ fn run_generation_v2(
     let mut emitted_tool_use = false;
 
     for _ in 0..max_new {
-        // Sample.
+        // Sample. With a grammar constraint we run the two-phase
+        // grammar-first path (apply grammar to candidates → apply chain →
+        // accept); otherwise the chain samples directly.
         // SAFETY: FFI; sampler + ctx valid in scope.
-        let next: ffi::llama_token = unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) };
+        let next: ffi::llama_token = match grammar_sampler {
+            Some(grmr) => unsafe { sample_with_grammar(ctx, sampler, grmr, n_vocab) },
+            None => unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) },
+        };
 
         // SAFETY: FFI; vocab valid.
         let is_eog = unsafe { ffi::llama_vocab_is_eog(vocab, next) };
@@ -905,6 +1004,11 @@ fn run_generation_v2(
 
         // SAFETY: FFI; sampler valid.
         unsafe { ffi::llama_sampler_accept(sampler, next) };
+        // Advance the grammar state with the accepted token, if any.
+        if let Some(grmr) = grammar_sampler {
+            // SAFETY: FFI; grammar sampler valid for the loop's lifetime.
+            unsafe { ffi::llama_sampler_accept(grmr, next) };
+        }
 
         let piece = token_to_piece(vocab, next, &mut buf);
         let text = String::from_utf8_lossy(piece).into_owned();

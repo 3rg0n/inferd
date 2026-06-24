@@ -1,12 +1,12 @@
 //! End-to-end exit-criterion integration test (v0.4 / ADR 0021).
 //!
 //! Spins up the daemon's v2 lifecycle (against the `mock` backend) over
-//! loopback TCP, connects over the length-prefixed wire, sends a
+//! Unix domain socket, connects over the length-prefixed wire, sends a
 //! `RequestV2`, and asserts the response stream is shaped per ADR 0015
 //! (typed content blocks) framed per ADR 0021 (length-prefixed frames).
 //!
-//! Loopback TCP is used (rather than UDS) so this test runs unchanged on
-//! Windows. UDS-specific paths are exercised by `endpoint::tests`.
+//! Unix domain sockets are used per ADR 0022 (inbound TCP removed).
+//! Platform-specific tests: `echo_pipe.rs` for Windows.
 //!
 //! Coverage:
 //! - End-to-end request → text frame(s) → done.
@@ -18,21 +18,32 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::{collect_frames, text_request, write_request};
-use inferd_daemon::endpoint::bind_tcp;
+#[cfg(unix)]
+use inferd_daemon::endpoint::bind_uds;
+#[cfg(unix)]
 use inferd_daemon::lifecycle::wait_for_ready;
-use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
+#[cfg(unix)]
+use inferd_daemon::lifecycle_v2::{AcceptContext, serve_uds_v2};
+#[cfg(unix)]
 use inferd_daemon::router::Router;
+#[cfg(unix)]
 use inferd_engine::mock::{Mock, MockConfig};
+#[cfg(unix)]
 use inferd_proto::v2::{ErrorCodeV2, RequestV2, ResponseBlock, ResponseV2, StopReasonV2};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
-use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
+#[cfg(unix)]
 async fn boot_daemon(
     mock_config: MockConfig,
 ) -> (
-    String,
+    std::path::PathBuf,
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
@@ -43,25 +54,39 @@ async fn boot_daemon(
         .await
         .expect("backend ready");
 
-    let listener = bind_tcp("127.0.0.1:0").await.expect("bind tcp");
-    let addr = listener.local_addr().unwrap().to_string();
+    // Unique per test: tests in one binary run in parallel in the same
+    // process, so a pid-only name collides (AddrInUse). An atomic counter
+    // disambiguates within the process; pid spreads across processes.
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let socket_path = std::env::temp_dir().join(format!(
+        "inferd-test-echo-{}-{}.sock",
+        std::process::id(),
+        idx
+    ));
+    // Clean up any stale socket file.
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
+        let _ = serve_uds_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
 
-    (addr, shutdown_tx, handle)
+    (socket_path, shutdown_tx, handle)
 }
 
-async fn send_and_collect(addr: &str, req: &RequestV2) -> Vec<ResponseV2> {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
+#[cfg(unix)]
+async fn send_and_collect(path: &std::path::Path, req: &RequestV2) -> Vec<ResponseV2> {
+    let mut stream = UnixStream::connect(path).await.expect("connect");
     write_request(&mut stream, req).await;
     let (read_half, _write_half) = stream.into_split();
     let mut reader = tokio::io::BufReader::new(read_half);
     collect_frames(&mut reader).await
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn end_to_end_streams_text_then_done() {
     let (addr, shutdown, handle) = boot_daemon(MockConfig {
@@ -107,6 +132,7 @@ async fn end_to_end_streams_text_then_done() {
     let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn invalid_request_yields_error_frame() {
     let (addr, shutdown, handle) = boot_daemon(MockConfig::default()).await;
@@ -132,6 +158,7 @@ async fn invalid_request_yields_error_frame() {
     let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn mid_stream_drop_yields_backend_unavailable_error() {
     // Mock that emits 1 text frame then drops the stream without Done.
@@ -164,10 +191,11 @@ async fn mid_stream_drop_yields_backend_unavailable_error() {
     let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
 }
 
-// THREAT_MODEL F-13: connecting before bind_tcp returns must fail. We
+// THREAT_MODEL F-13: connecting before bind_uds returns must fail. We
 // can't easily test this in-process, but we can assert the gating
 // condition: wait_for_ready blocks on a non-ready backend and completes
 // once it flips ready.
+#[cfg(unix)]
 #[tokio::test]
 async fn ready_gating_blocks_listener_creation_until_ready() {
     let mock = Arc::new(Mock::new());

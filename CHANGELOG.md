@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
+GA promotion of `[0.5.0-rc.1]` (below) — no code changes beyond the
+version bump. Validated install=work from the rc.1 release tarballs on
+all three testable platforms (real `llamacpp`, no mock):
+
+### Validation
+
+- **Windows x86_64 CUDA (RTX 5080) — v0.5.0-rc.1 tarball validation green
+  (2026-06-24):** SHA256 verified. `inferd-daemon 0.5.0-rc.1` +
+  `inferdctl 0.5.0-rc.1` (backends flattened next to the exe).
+  TCP-removal confirmed (`--tcp` → "unexpected argument", rejected). Real
+  `llamacpp` backend on CUDA, model ready ~7s → real generate
+  (`answer="Paris"`, `backend=llamacpp`, `stop=end_turn`) + grammar
+  (`response_format` JSON Schema → `{"city":"Paris","population":2141000}`,
+  valid JSON matching schema). Windows CUDA build clean under the new
+  CUDA v13.3 toolkit (did not reopen #162).
+- **Linux x86_64 / WSL Ubuntu — v0.5.0-rc.1 tarball validation green
+  (2026-06-24):** SHA256 verified. Versions `0.5.0-rc.1`. `--tcp`
+  rejected. Real `llamacpp` backend (CPU) over UDS → real generate
+  (`"Paris"`, `backend=llamacpp`, `end_turn`) + grammar
+  (`{"city":"Paris","population":2141000}`, valid JSON). Config
+  validation correctly rejected a non-`https` `source_url` along the way
+  (expected hardening).
+- **macOS arm64 Metal — v0.5.0-rc.1 tarball validation green (2026-06-24):**
+  SHA256 verified. `inferd-daemon 0.5.0-rc.1` + `inferdctl 0.5.0-rc.1`.
+  TCP-removal confirmed (`--tcp` rejected: "unexpected argument"). Installed
+  via `install-launchagent.sh` → `status=ready`, `wire_version=1`,
+  `accelerator=metal`, `device=MTL0 vram=11.8 GiB`. Real embed (256-dim).
+  Grammar tests (`grammar_llamacpp`, `llamacpp-integration`):
+  `response_format_constrains_output_to_json` → `{"city":"Paris","population":2141000}` ✅;
+  `malformed_schema_errors_does_not_crash` → clean error, daemon survives ✅.
+  Both in 12.71s. No panic, no abort. See issue #40.
+
+## [0.5.0-rc.1] - 2026-06-24
+
+**Breaking: the daemon binds no inbound network listener.** Inbound
+loopback TCP — deprecated in 0.4.0 ([ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md))
+— is removed. The daemon is reachable only over its local Unix domain
+socket (Unix) / named pipe (Windows), authenticated by kernel-attested
+peer credentials (THREAT_MODEL F-7). Anything needing network access
+goes through the separate `inferd-http` bridge ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md),
+Surface B). Cut as 0.5.0 (not 0.4.1) because removing the published
+client TCP constructors is a breaking API change and Cargo treats
+0.4.x as compatible. (ADR 0022's body says "v0.4.1"; superseded by this
+release's actual versioning — the ADR is immutable so its text stands as
+the decision-time record.)
+
+### Added
+
+- **Structured output (`response_format`)** — a `RequestV2` may carry an
+  optional `response_format: { type: "json_schema", schema: {...} }`
+  (additive; no `wire_version` bump). The daemon shapes this
+  model-agnostic JSON Schema to the engine (ADR 0013 gateway): the
+  llamacpp backend compiles it to GBNF (`json_schema_to_grammar`) and
+  installs a grammar sampler, so generated output is guaranteed to be
+  valid JSON conforming to the schema. The grammar sampler is kept
+  separate from the sampler chain and applied per-token
+  (apply-grammar → apply-chain → accept), mirroring llama.cpp's
+  `common_sampler` — chaining it would throw across FFI. A malformed
+  schema fails closed (error frame), never crashes the daemon. Verified
+  on a real model: `{"city":"Paris","population":2141000}` from a
+  city/population schema. Cloud-backend pass-through (openai/bedrock
+  `response_format`) is a follow-up; 0.5.0 ships the llamacpp path.
+
+### Removed
+
+- **Daemon:** `--tcp` / `INFERD_TCP`, `--embed-tcp` / `INFERD_EMBED_TCP`,
+  and `--api-key` / `INFERD_API_KEY` flags; the `endpoint::bind_tcp`
+  listener + `DEFAULT_TCP_ADDR`; the `serve_tcp_v2` / `serve_tcp_embed`
+  loops; the first-frame `{"type":"auth","key":...}` TCP auth path and
+  the entire `auth.rs` module (AuthFrame + constant-time key compare);
+  the `tcp`/`tcp_embed`/`api_key_env` `ListenConfig` fields;
+  `PeerIdentity::from_tcp` + its `remote_addr` field;
+  `AcceptContext::expected_api_key`.
+- **Rust client (`inferd-client`):** `ClientV2::dial_tcp` and
+  `EmbedClient::dial_tcp` (breaking — the reason for the minor bump).
+- **Go client:** `DialTCP` (breaking).
+
+### Changed
+
+- Daemon transport selection is now UDS (Unix) / named pipe (Windows)
+  only; `require_one_transport` and the platform error messages no
+  longer mention `--tcp`.
+- Integration tests re-homed off the TCP harness onto UDS
+  (`serve_uds_v2`) — `v2_stub` (incl. the W2 `wire_version`-mismatch
+  gate), `stress`, `queue_full`, `logx` (incl. the secret-redaction
+  security test), `echo_llamacpp`; the Go end-to-end test now dials the
+  per-test named pipe (Windows) / UDS (Unix). No test coverage was
+  dropped — only the harness transport changed.
+
 ## [0.4.0] - 2026-06-23
 
 The v0.4 line: a **unified IPC wire format** ([ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)).

@@ -121,9 +121,8 @@ declared in `RequestV2.Tools`. The stream terminates with one `done`
 
 > The daemon binds no inbound network listener — it is reachable only
 > over the local UDS / named pipe ([ADR 0022](https://github.com/3rg0n/inferd/blob/main/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
-> A `DialTCP` function still exists in this release but is **deprecated
-> and unsupported**, slated for removal in v0.4.1; for network access use
-> the separate `inferd-http` bridge (ADR 0020).
+> The `DialTCP` function was removed in 0.5.0 (deprecated in 0.4.0); for
+> network access use the separate `inferd-http` bridge (ADR 0020).
 
 `DialAndWaitReady(ctx, dial)` wraps any of the three with an
 exponential-backoff retry loop (start 100ms, cap 5s) for

@@ -1,8 +1,8 @@
-//! Embed-socket client. NDJSON over UDS / pipe / loopback TCP.
+//! Embed-socket client. NDJSON over UDS / named pipe.
 //!
 //! Spec: ADR 0017. The embed socket is the *third* inferd surface
-//! (v1, v2, embed), each on its own path. Construct an `EmbedClient`
-//! with `dial_tcp` / `dial_uds` / `dial_pipe`, then call `embed`
+//! (v2, embed), each on its own path. Construct an `EmbedClient`
+//! with `dial_uds` (Unix) or `dial_pipe` (Windows), then call `embed`
 //! per request. The connection is long-lived: send a request, receive
 //! one terminal frame, send the next request — there is no streaming
 //! since an embedding is a complete vector.
@@ -13,15 +13,13 @@ use inferd_proto::embed::{EmbedRequest, EmbedResponse};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 /// Embed-socket client.
 ///
-/// Construct via `dial_tcp` / `dial_uds` (Unix) / `dial_pipe`
-/// (Windows). Wrap with [`crate::dial_and_wait_ready`] to retry
-/// connect during daemon bring-up — the retry helper is generic over
-/// the client type so the same wait logic serves v1 / v2 / embed.
+/// Construct via `dial_uds` (Unix) or `dial_pipe` (Windows).
+/// Wrap with [`crate::dial_and_wait_ready`] to retry connect during
+/// daemon bring-up — the retry helper is generic over the client type.
 pub struct EmbedClient {
     inner: Arc<Mutex<Inner>>,
 }
@@ -38,15 +36,6 @@ struct Inner {
 }
 
 impl EmbedClient {
-    /// Open a TCP connection to `addr` (e.g. `"127.0.0.1:47323"`).
-    /// Embed TCP transport is opt-in (config-flagged off by default);
-    /// see ADR 0017 §Endpoints for the configured port convention.
-    pub async fn dial_tcp(addr: &str) -> Result<Self, ClientError> {
-        let stream = TcpStream::connect(addr).await?;
-        let (read, write) = stream.into_split();
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
-    }
-
     /// Open a Unix domain socket connection (Unix only). Default embed
     /// path: `${XDG_RUNTIME_DIR}/inferd/infer.embed.sock` on Linux,
     /// `${TMPDIR}/inferd/infer.embed.sock` on macOS.

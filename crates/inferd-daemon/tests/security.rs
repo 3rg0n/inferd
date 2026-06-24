@@ -17,9 +17,7 @@
 
 #![cfg(feature = "security")]
 
-use inferd_daemon::auth::{AuthFrame, key_matches};
 use inferd_daemon::lock::{Lock, LockError};
-use inferd_daemon::peercred::PeerIdentity;
 use inferd_daemon::redact::redact_in_place;
 use inferd_proto::v2::{ContentBlock, MessageV2, RequestV2, RoleV2, WIRE_VERSION};
 use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_lp_frame, write_lp_blob};
@@ -167,50 +165,14 @@ fn f3_redactor_passes_through_safe_text() {
 }
 
 // =====================================================================
-// F-7: PeerIdentity surface stable
-// =====================================================================
-
-#[test]
-fn f7_tcp_identity_has_no_kernel_attestation() {
-    let id = PeerIdentity::from_tcp("127.0.0.1:12345".parse().unwrap());
-    assert_eq!(id.transport, "tcp");
-    assert!(id.uid.is_none());
-    assert!(id.gid.is_none());
-    assert!(id.pid.is_none());
-    assert!(id.sid.is_none());
-    assert!(id.remote_addr.is_some());
-}
-
-// =====================================================================
-// F-8: API key constant-time compare
-// =====================================================================
-
-#[test]
-fn f8_key_matches_equal_keys() {
-    assert!(key_matches("super-secret", "super-secret"));
-}
-
-#[test]
-fn f8_key_matches_rejects_different_lengths() {
-    assert!(!key_matches("short", "longer-secret-string"));
-}
-
-#[test]
-fn f8_key_matches_rejects_subtle_difference() {
-    assert!(!key_matches("Super-Secret", "super-secret"));
-}
-
-#[test]
-fn f8_auth_frame_parses_correct_shape() {
-    let frame = AuthFrame::from_json(br#"{"type":"auth","key":"hello"}"#).unwrap();
-    assert_eq!(frame.key, "hello");
-}
-
-#[test]
-fn f8_auth_frame_rejects_non_auth_type() {
-    assert!(AuthFrame::from_json(br#"{"type":"request","messages":[]}"#).is_none());
-}
-
+// F-7 / F-8: inbound TCP + its shared-key auth were REMOVED in v0.5.0
+// (ADR 0022). The daemon binds no inbound network listener, so there is
+// no un-attested TCP peer identity and no `auth.rs` shared-key compare
+// to guard — the threat is closed by removal, not mitigation. The
+// surviving transports (UDS / named pipe) are authenticated by kernel
+// peer credentials, exercised by the lifecycle integration tests
+// (peercred::unix / windows). The former `f7_*` / `f8_*` cases were
+// deleted with the code they tested.
 // =====================================================================
 // F-1 corollary: unknown fields are tolerated on parse (forward compat
 // per ADR 0015/0021; not strictly a security finding but adjacent —

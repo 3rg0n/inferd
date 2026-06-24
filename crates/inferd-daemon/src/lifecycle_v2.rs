@@ -21,7 +21,6 @@
 //!   8. Stream `TokenEventV2`s, translating each to `ResponseV2::Frame`
 //!      / `Done` (written as length-prefixed JSON frames).
 
-use crate::auth::{AuthFrame, key_matches};
 use crate::endpoint::Connection;
 use crate::peercred::PeerIdentity;
 use crate::queue::SubmitError;
@@ -68,26 +67,6 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
     let (read_half, write_half) = tokio::io::split(&mut conn);
     let mut reader = BufReader::with_capacity(64 * 1024, read_half);
     let writer = Arc::new(Mutex::new(write_half));
-
-    // F-8 first-frame auth on TCP, identical to v1.
-    if transport == "tcp"
-        && let Some(expected) = ctx.expected_api_key.as_deref()
-    {
-        match read_auth_frame(&mut reader).await {
-            Some(frame) if key_matches(&frame.key, expected) => {
-                debug!(transport, "v2 tcp auth ok");
-            }
-            _ => {
-                warn!(
-                    target: "inferd_daemon::activity",
-                    peer = %peer,
-                    wire_version = "v2",
-                    "v2_tcp_auth_rejected"
-                );
-                return Ok(());
-            }
-        }
-    }
 
     loop {
         // 1. Request JSON frame.
@@ -500,15 +479,6 @@ async fn read_attachment_blobs<R: AsyncRead + Unpin>(
     Ok(())
 }
 
-/// Read a length-prefixed JSON auth frame (TCP F-8). `None` on EOF,
-/// non-JSON frame, or a payload that isn't a valid `AuthFrame`.
-async fn read_auth_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Option<AuthFrame> {
-    match read_lp_raw(reader).await.ok()?? {
-        (FrameType::Json, payload) => AuthFrame::from_json(&payload),
-        (FrameType::Blob, _) => None,
-    }
-}
-
 async fn write_response_v2<W: AsyncWrite + Unpin>(
     writer: &Mutex<W>,
     resp: &ResponseV2,
@@ -520,36 +490,6 @@ async fn write_response_v2<W: AsyncWrite + Unpin>(
     guard.write_all(&buf).await?;
     guard.flush().await?;
     Ok(())
-}
-
-/// Serve a v2 TCP listener.
-pub async fn serve_tcp_v2(
-    listener: tokio::net::TcpListener,
-    router: Arc<Router>,
-    ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
-) -> io::Result<()> {
-    info!(addr = ?listener.local_addr()?, "v2 tcp listener accepting");
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("v2 tcp shutdown signalled");
-                return Ok(());
-            }
-            accept = listener.accept() => {
-                let (stream, peer_addr) = accept?;
-                let peer = PeerIdentity::from_tcp(peer_addr);
-                let r = Arc::clone(&router);
-                let ctx = ctx.clone();
-                debug!(?peer_addr, "v2 tcp accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(stream, r, peer, ctx).await {
-                        warn!(error = ?e, "v2 connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
 }
 
 /// Serve a v2 Unix domain socket listener.
@@ -575,7 +515,7 @@ pub async fn serve_uds_v2(
                         warn!(error = %e, "v2 SO_PEERCRED failed; recording empty unix identity");
                         crate::peercred::PeerIdentity {
                             uid: None, gid: None, pid: None,
-                            sid: None, remote_addr: None,
+                            sid: None,
                             transport: "unix",
                         }
                     });
@@ -620,7 +560,7 @@ pub async fn serve_named_pipe_v2(
                         warn!(error = %e, "v2 GetNamedPipeClientProcessId failed; empty pipe identity");
                         crate::peercred::PeerIdentity {
                             uid: None, gid: None, pid: None,
-                            sid: None, remote_addr: None,
+                            sid: None,
                             transport: "pipe",
                         }
                     });

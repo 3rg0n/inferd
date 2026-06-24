@@ -16,39 +16,53 @@
 //!    Asserts the daemon survives without fd exhaustion.
 //!
 //! Uses the mock backend with `token_delay_ms` set so per-request work
-//! is observable. Loopback TCP transport; the length-prefixed wire is
-//! identical regardless of transport, so lifecycle-level concurrency
-//! bugs surface here equally.
+//! is observable. Unix domain socket transport per ADR 0022; the
+//! length-prefixed wire is identical regardless of transport, so
+//! lifecycle-level concurrency bugs surface here equally.
 
 mod common;
 
+#[cfg(unix)]
 use common::{collect_frames, read_lp_frame, text_request, write_request};
-use inferd_daemon::endpoint::bind_tcp;
+#[cfg(unix)]
+use inferd_daemon::endpoint::bind_uds;
+#[cfg(unix)]
 use inferd_daemon::lifecycle::wait_for_ready;
-use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
+#[cfg(unix)]
+use inferd_daemon::lifecycle_v2::{AcceptContext, serve_uds_v2};
+#[cfg(unix)]
 use inferd_daemon::router::Router;
+#[cfg(unix)]
 use inferd_engine::mock::{Mock, MockConfig};
+#[cfg(unix)]
 use inferd_proto::v2::ResponseV2;
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
 /// Number of concurrent client connections in the saturation test.
+#[cfg(unix)]
 const N_CLIENTS: usize = 50;
 
 /// Per-token delay for the mock backend during stress runs. Long enough
 /// that requests overlap on the wire, short enough that the suite stays
 /// well under one second of wall time per test.
+#[cfg(unix)]
 const TOKEN_DELAY: Duration = Duration::from_millis(5);
 
 /// Per-test wall-clock budget. Generous — these tests are about "does it
 /// finish at all under load," not exact latency.
+#[cfg(unix)]
 const TEST_BUDGET: Duration = Duration::from_secs(30);
 
+#[cfg(unix)]
 async fn boot_stress_daemon(
     tokens_per_request: usize,
 ) -> (
-    String,
+    std::path::PathBuf,
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
@@ -63,24 +77,33 @@ async fn boot_stress_daemon(
         .await
         .expect("backend ready");
 
-    let listener = bind_tcp("127.0.0.1:0").await.expect("bind tcp");
-    let addr = listener.local_addr().unwrap().to_string();
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let socket_path = std::env::temp_dir().join(format!(
+        "inferd-test-stress-{}-{}.sock",
+        std::process::id(),
+        idx
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
+        let _ = serve_uds_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
 
-    (addr, shutdown_tx, handle)
+    (socket_path, shutdown_tx, handle)
 }
 
 /// Send one request, return the parsed response frames in order. Retries
 /// the connect briefly on transient failures so loaded CI runners don't
 /// false-fail when the listener is busy.
-async fn one_request(addr: String, id: String) -> Vec<ResponseV2> {
+#[cfg(unix)]
+async fn one_request(path: std::path::PathBuf, id: String) -> Vec<ResponseV2> {
     let mut stream = None;
     for attempt in 0..10 {
-        match TcpStream::connect(&addr).await {
+        match UnixStream::connect(&path).await {
             Ok(s) => {
                 stream = Some(s);
                 break;
@@ -99,15 +122,16 @@ async fn one_request(addr: String, id: String) -> Vec<ResponseV2> {
     collect_frames(&mut reader).await
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn fifty_concurrent_clients_each_get_a_done_frame() {
-    let (addr, shutdown, handle) = boot_stress_daemon(8).await;
+    let (path, shutdown, handle) = boot_stress_daemon(8).await;
     let start = Instant::now();
 
     let tasks: Vec<_> = (0..N_CLIENTS)
         .map(|i| {
-            let addr = addr.clone();
-            tokio::spawn(async move { one_request(addr, format!("stress-{i}")).await })
+            let path = path.clone();
+            tokio::spawn(async move { one_request(path, format!("stress-{i}")).await })
         })
         .collect();
 
@@ -160,16 +184,17 @@ async fn fifty_concurrent_clients_each_get_a_done_frame() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn mid_stream_disconnect_does_not_break_the_daemon() {
     // 64 tokens × 5ms = ~320ms per request, plenty of time to drop
     // mid-stream.
-    let (addr, shutdown, handle) = boot_stress_daemon(64).await;
+    let (path, shutdown, handle) = boot_stress_daemon(64).await;
 
     // Issue a request, read the first frame, then drop the connection
     // mid-stream. Repeat 20 times.
     for i in 0..20 {
-        let mut stream = TcpStream::connect(&addr).await.expect("connect");
+        let mut stream = UnixStream::connect(&path).await.expect("connect");
         write_request(&mut stream, &text_request(&format!("cancel-{i}"), "x")).await;
 
         let (read_half, _w) = stream.into_split();
@@ -185,7 +210,7 @@ async fn mid_stream_disconnect_does_not_break_the_daemon() {
     // Give in-flight handler tasks a moment to drain, then issue one more
     // request and read it through to Done.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let frames = tokio::time::timeout(TEST_BUDGET, one_request(addr.clone(), "post-cancel".into()))
+    let frames = tokio::time::timeout(TEST_BUDGET, one_request(path.clone(), "post-cancel".into()))
         .await
         .expect("daemon hung after cancellations");
 
@@ -199,18 +224,19 @@ async fn mid_stream_disconnect_does_not_break_the_daemon() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn shutdown_with_jobs_in_flight_completes_quickly() {
     // 32 tokens × 5ms = ~160ms per request.
-    let (addr, shutdown, handle) = boot_stress_daemon(32).await;
+    let (path, shutdown, handle) = boot_stress_daemon(32).await;
 
     // Fire N concurrent requests but do NOT await them — we want jobs in
     // flight when the shutdown fires.
     let _bg_tasks: Vec<_> = (0..N_CLIENTS)
         .map(|i| {
-            let addr = addr.clone();
+            let path = path.clone();
             tokio::spawn(async move {
-                let _ = one_request(addr, format!("inflight-{i}")).await;
+                let _ = one_request(path, format!("inflight-{i}")).await;
             })
         })
         .collect();
@@ -232,21 +258,22 @@ async fn shutdown_with_jobs_in_flight_completes_quickly() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn connect_churn_does_not_leak_resources() {
     // Two-token requests so each is fast; the goal is high churn.
-    let (addr, shutdown, handle) = boot_stress_daemon(2).await;
+    let (path, shutdown, handle) = boot_stress_daemon(2).await;
 
     // 200 connect-and-immediately-close cycles. No request payload sent —
     // purely accept-loop pressure.
     for _ in 0..200 {
-        let stream = TcpStream::connect(&addr).await.expect("connect");
+        let stream = UnixStream::connect(&path).await.expect("connect");
         drop(stream);
     }
 
     // Daemon should still be alive and serving.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let frames = tokio::time::timeout(TEST_BUDGET, one_request(addr.clone(), "post-churn".into()))
+    let frames = tokio::time::timeout(TEST_BUDGET, one_request(path.clone(), "post-churn".into()))
         .await
         .expect("daemon hung after connect churn");
 

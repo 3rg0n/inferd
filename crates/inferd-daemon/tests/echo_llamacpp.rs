@@ -1,4 +1,4 @@
-//! Exit-criterion: end-to-end length-prefixed v2 over the daemon's TCP
+//! Exit-criterion: end-to-end length-prefixed v2 over the daemon's UDS
 //! transport with the real `LlamaCpp` backend (v0.4 / ADR 0021).
 //!
 //! Mirrors `tests/echo.rs` (mock backend) but uses `LlamaCpp::new`
@@ -16,22 +16,35 @@
 
 mod common;
 
+#[cfg(unix)]
 use common::{read_lp_frame, text_request, write_request};
-use inferd_daemon::endpoint::bind_tcp;
+#[cfg(unix)]
+use inferd_daemon::endpoint::bind_uds;
+#[cfg(unix)]
 use inferd_daemon::lifecycle::wait_for_ready;
-use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
+#[cfg(unix)]
+use inferd_daemon::lifecycle_v2::{AcceptContext, serve_uds_v2};
+#[cfg(unix)]
 use inferd_daemon::router::Router;
+#[cfg(unix)]
 use inferd_engine::llamacpp::{LlamaCpp, LlamaCppConfig};
+#[cfg(unix)]
 use inferd_proto::v2::{ResponseV2, StopReasonV2};
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
-use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
+#[cfg(unix)]
 fn model_path() -> Option<PathBuf> {
     std::env::var_os("INFERD_TEST_MODEL_PATH").map(PathBuf::from)
 }
 
+#[cfg(unix)]
 fn skipping_msg() {
     eprintln!(
         "[skip] INFERD_TEST_MODEL_PATH not set; skipping real-model daemon \
@@ -39,8 +52,9 @@ fn skipping_msg() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
-async fn end_to_end_real_inference_over_tcp() {
+async fn end_to_end_real_inference_over_uds() {
     let Some(path) = model_path() else {
         skipping_msg();
         return;
@@ -60,12 +74,20 @@ async fn end_to_end_real_inference_over_tcp() {
         .await
         .expect("backend ready");
 
-    let listener = bind_tcp("127.0.0.1:0").await.expect("bind tcp");
-    let addr = listener.local_addr().unwrap().to_string();
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let socket_path = std::env::temp_dir().join(format!(
+        "inferd-test-echo-llama-{}-{}.sock",
+        std::process::id(),
+        idx
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
+        let _ = serve_uds_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
 
     // One short request. Sampling fields stay at the backend defaults.
@@ -75,7 +97,7 @@ async fn end_to_end_real_inference_over_tcp() {
     req.top_k = Some(40);
     req.max_tokens = Some(16);
 
-    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    let mut stream = UnixStream::connect(&socket_path).await.expect("connect");
     write_request(&mut stream, &req).await;
 
     let (read_half, _w) = stream.into_split();

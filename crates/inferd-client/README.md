@@ -85,9 +85,8 @@ For embeddings, use `EmbedClient::dial_*` (ADR 0017).
 
 > The daemon binds no inbound network listener — it is reachable only
 > over the local UDS / named pipe ([ADR 0022](https://github.com/3rg0n/inferd/blob/main/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
-> A `dial_tcp` constructor still exists in this release but is
-> **deprecated and unsupported**, slated for removal in v0.4.1; reach
-> inferd over a network port via the separate `inferd-http` bridge
+> The `dial_tcp` constructor was removed in 0.5.0 (deprecated in 0.4.0);
+> reach inferd over a network port via the separate `inferd-http` bridge
 > ([ADR 0020](https://github.com/3rg0n/inferd/blob/main/docs/adr/0020-inferd-http-bridge-is-a-separate-process.md)).
 
 ## Wait-for-ready

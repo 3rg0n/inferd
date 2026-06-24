@@ -14,46 +14,72 @@
 //! Mock backend advertises v2 + thinking capability; multimodal +
 //! tools stay false. Tests that need richer surface configure the
 //! mock with explicit token tape.
+//!
+//! Unix domain sockets are used per ADR 0022 (inbound TCP removed).
+//! Platform-specific tests: `echo_pipe.rs` for Windows.
 
 mod common;
 
+#[cfg(unix)]
 use common::{
     collect_frames, image_attachment, read_lp_frame, text_request, write_lp_json, write_lp_payload,
     write_request,
 };
-use inferd_daemon::endpoint::bind_tcp;
-use inferd_daemon::lifecycle_v2::{AcceptContext, serve_tcp_v2};
+#[cfg(unix)]
+use inferd_daemon::endpoint::bind_uds;
+#[cfg(unix)]
+use inferd_daemon::lifecycle_v2::{AcceptContext, serve_uds_v2};
+#[cfg(unix)]
 use inferd_daemon::router::Router;
+#[cfg(unix)]
 use inferd_engine::mock::{Mock, MockConfig};
+#[cfg(unix)]
 use inferd_proto::FrameType;
+#[cfg(unix)]
 use inferd_proto::v2::{
     ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
     StopReasonV2,
 };
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
+#[cfg(unix)]
 use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
+#[cfg(unix)]
 async fn boot_v2_daemon_with_mock(
     mock: Arc<Mock>,
 ) -> (
-    String,
+    std::path::PathBuf,
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
     let router = Arc::new(Router::new(vec![mock]));
-    let listener = bind_tcp("127.0.0.1:0").await.expect("bind tcp");
-    let addr = listener.local_addr().unwrap().to_string();
+
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let socket_path = std::env::temp_dir().join(format!(
+        "inferd-test-v2_stub-{}-{}.sock",
+        std::process::id(),
+        idx
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = bind_uds(&socket_path, None).await.expect("bind uds");
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
-        let _ = serve_tcp_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
+        let _ = serve_uds_v2(listener, router, AcceptContext::default(), shutdown_rx).await;
     });
-    (addr, shutdown_tx, handle)
+    (socket_path, shutdown_tx, handle)
 }
 
+#[cfg(unix)]
 async fn boot_v2_daemon() -> (
-    String,
+    std::path::PathBuf,
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
@@ -64,8 +90,9 @@ async fn boot_v2_daemon() -> (
     .await
 }
 
-async fn send_and_read_one(addr: &str, req: &RequestV2) -> ResponseV2 {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
+#[cfg(unix)]
+async fn send_and_read_one(path: &std::path::Path, req: &RequestV2) -> ResponseV2 {
+    let mut stream = UnixStream::connect(path).await.expect("connect");
     write_request(&mut stream, req).await;
     let (read_half, _w) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -75,8 +102,9 @@ async fn send_and_read_one(addr: &str, req: &RequestV2) -> ResponseV2 {
     frames.into_iter().next().expect("expected one frame")
 }
 
-async fn send_and_read_all(addr: &str, req: &RequestV2) -> Vec<ResponseV2> {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
+#[cfg(unix)]
+async fn send_and_read_all(path: &std::path::Path, req: &RequestV2) -> Vec<ResponseV2> {
+    let mut stream = UnixStream::connect(path).await.expect("connect");
     write_request(&mut stream, req).await;
     let (read_half, _w) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -85,15 +113,16 @@ async fn send_and_read_all(addr: &str, req: &RequestV2) -> Vec<ResponseV2> {
         .expect("read budget exceeded")
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn valid_v2_request_streams_frames_and_terminates_with_done() {
     let mock = Arc::new(Mock::with_config(MockConfig {
         tokens: vec!["a".into(), "b".into(), "c".into()],
         ..Default::default()
     }));
-    let (addr, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
 
-    let frames = send_and_read_all(&addr, &text_request("v2-001", "hello")).await;
+    let frames = send_and_read_all(&path, &text_request("v2-001", "hello")).await;
 
     // Three Frame{Text} frames plus one Done.
     assert_eq!(frames.len(), 4, "got: {frames:#?}");
@@ -131,6 +160,7 @@ async fn valid_v2_request_streams_frames_and_terminates_with_done() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn valid_multimodal_v2_request_dispatches_to_backend() {
     // Mock doesn't actually ingest images, but the daemon's v2 path
@@ -141,7 +171,7 @@ async fn valid_multimodal_v2_request_dispatches_to_backend() {
         tokens: vec!["seen".into()],
         ..Default::default()
     }));
-    let (addr, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
 
     let req = RequestV2 {
         id: "v2-002".into(),
@@ -161,7 +191,7 @@ async fn valid_multimodal_v2_request_dispatches_to_backend() {
         ..Default::default()
     };
 
-    let frames = send_and_read_all(&addr, &req).await;
+    let frames = send_and_read_all(&path, &req).await;
     let last = frames.last().expect("zero frames");
     match last {
         ResponseV2::Done { id, .. } => assert_eq!(id, "v2-002"),
@@ -172,9 +202,10 @@ async fn valid_multimodal_v2_request_dispatches_to_backend() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn invalid_v2_request_dangling_attachment_returns_invalid_request() {
-    let (addr, shutdown, handle) = boot_v2_daemon().await;
+    let (path, shutdown, handle) = boot_v2_daemon().await;
 
     let req = RequestV2 {
         id: "v2-bad-1".into(),
@@ -187,7 +218,7 @@ async fn invalid_v2_request_dangling_attachment_returns_invalid_request() {
         ..Default::default()
     };
 
-    let resp = send_and_read_one(&addr, &req).await;
+    let resp = send_and_read_one(&path, &req).await;
     match resp {
         ResponseV2::Error { id, code, message } => {
             assert_eq!(id, "v2-bad-1");
@@ -204,9 +235,10 @@ async fn invalid_v2_request_dangling_attachment_returns_invalid_request() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn invalid_v2_request_empty_messages_returns_invalid_request() {
-    let (addr, shutdown, handle) = boot_v2_daemon().await;
+    let (path, shutdown, handle) = boot_v2_daemon().await;
 
     let req = RequestV2 {
         id: "v2-bad-2".into(),
@@ -214,7 +246,7 @@ async fn invalid_v2_request_empty_messages_returns_invalid_request() {
         ..Default::default()
     };
 
-    let resp = send_and_read_one(&addr, &req).await;
+    let resp = send_and_read_one(&path, &req).await;
     match resp {
         ResponseV2::Error { id, code, .. } => {
             assert_eq!(id, "v2-bad-2");
@@ -227,11 +259,12 @@ async fn invalid_v2_request_empty_messages_returns_invalid_request() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn malformed_json_on_v2_returns_invalid_request_then_closes() {
-    let (addr, shutdown, handle) = boot_v2_daemon().await;
+    let (path, shutdown, handle) = boot_v2_daemon().await;
 
-    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    let mut stream = UnixStream::connect(&path).await.expect("connect");
     // A well-framed length-prefixed JSON frame whose payload isn't valid
     // JSON: the daemon must emit an InvalidRequest error frame and close.
     write_lp_payload(
@@ -266,6 +299,7 @@ async fn malformed_json_on_v2_returns_invalid_request_then_closes() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn multiple_v2_requests_on_one_connection_each_terminate_independently() {
     // After a successful request, the daemon should keep the connection
@@ -274,9 +308,9 @@ async fn multiple_v2_requests_on_one_connection_each_terminate_independently() {
         tokens: vec!["once".into()],
         ..Default::default()
     }));
-    let (addr, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
 
-    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    let mut stream = UnixStream::connect(&path).await.expect("connect");
     for i in 0..3 {
         write_request(&mut stream, &text_request(&format!("v2-loop-{i}"), "hi")).await;
     }
@@ -310,6 +344,7 @@ async fn multiple_v2_requests_on_one_connection_each_terminate_independently() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn pre_stream_unavailable_returns_backend_unavailable() {
     let mock = Arc::new(Mock::with_config(MockConfig {
@@ -317,9 +352,9 @@ async fn pre_stream_unavailable_returns_backend_unavailable() {
         pre_stream_error: Some(inferd_engine::mock::MockError::Unavailable),
         ..Default::default()
     }));
-    let (addr, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
 
-    let resp = send_and_read_one(&addr, &text_request("v2-fail", "hi")).await;
+    let resp = send_and_read_one(&path, &text_request("v2-fail", "hi")).await;
     match resp {
         ResponseV2::Error { id, code, .. } => {
             assert_eq!(id, "v2-fail");
@@ -332,6 +367,7 @@ async fn pre_stream_unavailable_returns_backend_unavailable() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn mid_stream_drop_emits_backend_unavailable_terminal() {
     // Mock yields 2 tokens then drops without Done. The daemon must
@@ -342,9 +378,9 @@ async fn mid_stream_drop_emits_backend_unavailable_terminal() {
         mid_stream_drop_after: Some(2),
         ..Default::default()
     }));
-    let (addr, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
 
-    let frames = send_and_read_all(&addr, &text_request("v2-mid", "hi")).await;
+    let frames = send_and_read_all(&path, &text_request("v2-mid", "hi")).await;
     // 2 Frame{Text} + 1 Error = 3.
     assert_eq!(frames.len(), 3, "got: {frames:#?}");
     match frames.last().unwrap() {
@@ -363,11 +399,12 @@ async fn mid_stream_drop_emits_backend_unavailable_terminal() {
 /// daemon doesn't speak must get a single
 /// `Error{WireVersionUnsupported}` frame and then the connection must
 /// close — the daemon must NOT parse the body or resync (ADR 0021).
+#[cfg(unix)]
 #[tokio::test]
 async fn unsupported_wire_version_errors_and_closes() {
-    let (addr, shutdown, handle) = boot_v2_daemon().await;
+    let (path, shutdown, handle) = boot_v2_daemon().await;
 
-    let mut stream = TcpStream::connect(&addr).await.expect("connect");
+    let mut stream = UnixStream::connect(&path).await.expect("connect");
     // Build a request with a bogus wire_version. `write_request` would
     // overwrite it with WIRE_VERSION, so frame it directly.
     let mut req = text_request("v2-badver", "hi");

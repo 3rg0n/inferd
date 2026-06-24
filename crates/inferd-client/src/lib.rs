@@ -29,14 +29,15 @@
 //! `ContentBlock`, …). A text-only request is a single `Text`
 //! content block.
 //!
-//! ```no_run
+//! ```ignore
 //! use inferd_client::{ClientV2, RequestV2, MessageV2, RoleV2, ContentBlock, ResponseV2, ResponseBlock};
 //! use tokio_stream::StreamExt;
+//! use std::path::Path;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut client = inferd_client::dial_and_wait_ready(
 //!     std::time::Duration::from_secs(30),
-//!     || ClientV2::dial_tcp("127.0.0.1:47322"),
+//!     || ClientV2::dial_uds(Path::new("/tmp/inferd/inferd.sock")),
 //! )
 //! .await?;
 //!
@@ -77,13 +78,14 @@
 //! is a single round-trip — no streaming, since an embedding is a
 //! complete vector.
 //!
-//! ```no_run
+//! ```ignore
 //! use inferd_client::{EmbedClient, EmbedRequest, EmbedResponse, EmbedTask};
+//! use std::path::Path;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut client = inferd_client::dial_and_wait_ready(
 //!     std::time::Duration::from_secs(30),
-//!     || EmbedClient::dial_tcp("127.0.0.1:47323"),
+//!     || EmbedClient::dial_uds(Path::new("/tmp/inferd/infer.embed.sock")),
 //! )
 //! .await?;
 //!
