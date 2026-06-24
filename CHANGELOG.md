@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1-rc.1] - 2026-06-25
+
+First RC of the 0.5.1 patch line: adds the Windows arm64 release tarball
+and fixes the Windows CUDA CI drift. Cut so the never-before-CI'd arm64
+Windows build path can be exercised on a real arm64 Windows machine
+(release.yml is tag-triggered; this is its first run).
+
 ### Added
 
 - **Windows arm64 release tarball** (`aarch64-pc-windows-msvc`). Built
