@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — v0.5.0-rc.1 tarball validation green (2026-06-24):**
+  SHA256 verified. `inferd-daemon 0.5.0-rc.1` + `inferdctl 0.5.0-rc.1`.
+  TCP-removal confirmed (`--tcp` rejected: "unexpected argument"). Installed
+  via `install-launchagent.sh` → `status=ready`, `wire_version=1`,
+  `accelerator=metal`, `device=MTL0 vram=11.8 GiB`. Real embed (256-dim).
+  Grammar tests (`grammar_llamacpp`, `llamacpp-integration`):
+  `response_format_constrains_output_to_json` → `{"city":"Paris","population":2141000}` ✅;
+  `malformed_schema_errors_does_not_crash` → clean error, daemon survives ✅.
+  Both in 12.71s. No panic, no abort. See issue #40.
+
 ## [0.5.0-rc.1] - 2026-06-24
 
 **Breaking: the daemon binds no inbound network listener.** Inbound
