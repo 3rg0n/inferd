@@ -55,22 +55,15 @@ func srvWriteJSONFrame(w net.Conn, v any) {
 // done out. Proves the Go client's wire bytes match what the daemon
 // expects, without needing the daemon binary (issue #31, #34).
 func TestV2MultimodalRoundTrip(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
+	// Use net.Pipe for an in-memory connection (no real socket).
+	srvConn, clientConn := net.Pipe()
+	defer srvConn.Close()
+	defer clientConn.Close()
 
 	srvDone := make(chan struct{})
 	go func() {
 		defer close(srvDone)
-		conn, err := ln.Accept()
-		if err != nil {
-			t.Logf("accept: %v", err)
-			return
-		}
-		defer conn.Close()
-		br := bufio.NewReader(conn)
+		br := bufio.NewReader(srvConn)
 
 		// 1. Request JSON frame.
 		ftype, payload := srvReadFrame(t, br)
@@ -136,11 +129,11 @@ func TestV2MultimodalRoundTrip(t *testing.T) {
 		}
 
 		// Reply with one text frame and one done.
-		srvWriteJSONFrame(conn, inferd.ResponseV2{
+		srvWriteJSONFrame(srvConn, inferd.ResponseV2{
 			ID: "v2-1", Type: inferd.ResponseV2Frame,
 			Block: &inferd.ResponseBlockV2{Type: inferd.BlockText, Delta: "a red"},
 		})
-		srvWriteJSONFrame(conn, inferd.ResponseV2{
+		srvWriteJSONFrame(srvConn, inferd.ResponseV2{
 			ID: "v2-1", Type: inferd.ResponseV2Done,
 			Usage:      &inferd.UsageV2{InputTokens: 276, OutputTokens: 2},
 			StopReason: inferd.StopEndTurn,
@@ -148,19 +141,16 @@ func TestV2MultimodalRoundTrip(t *testing.T) {
 		})
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	client, err := inferd.DialTCP(ctx, ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer client.Close()
+	// Construct a client from the client half of the pipe.
+	client := inferd.New(clientConn)
 
 	// 2x2 RGB: a tiny image. Consumer-decoded raw bytes per ADR 0016.
 	rgb := []byte{
 		220, 30, 30, 255, 255, 255,
 		255, 255, 255, 220, 30, 30,
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	stream, err := client.GenerateV2(ctx, inferd.RequestV2{
 		ID: "v2-1",
 		Messages: []inferd.MessageV2{{

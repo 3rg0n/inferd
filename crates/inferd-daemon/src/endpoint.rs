@@ -350,6 +350,7 @@ mod tests {
     #[tokio::test]
     async fn bind_uds_creates_socket_and_accepts() {
         use tempfile::tempdir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.sock");
         let listener = bind_uds(&path, None).await.unwrap();

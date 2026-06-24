@@ -26,7 +26,7 @@ implementation choices aren't.
 | [0019](0019-runtime-accelerator-detection-via-ggml-backend-dl.md) | Runtime accelerator detection via `GGML_BACKEND_DL` (Metal / CUDA / ROCm / Vulkan / CPU cascade, no NPU) | Accepted |
 | [0020](0020-inferd-http-bridge-is-a-separate-process.md) | The HTTP/OpenAI-compat bridge is a separate process, not in the daemon (two surfaces: OpenAI-compat + native-over-network) | Accepted; open question (TCP home) resolved by 0022 |
 | [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) | Unify on one generation API; length-prefixed type-tagged framing, raw BLOB media, in-band `wire_version` (v0.4) | Accepted |
-| [0022](0022-no-inbound-network-listener-deprecate-loopback-tcp.md) | No inbound network listener in the daemon — deprecate loopback TCP (v0.4.0), remove in v0.4.1 | Accepted |
+| [0022](0022-no-inbound-network-listener-deprecate-loopback-tcp.md) | No inbound network listener in the daemon — deprecate loopback TCP (v0.4.0), remove in v0.5.0 | Accepted |
 
 ## Writing a new ADR
 

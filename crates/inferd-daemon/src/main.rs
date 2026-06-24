@@ -199,7 +199,6 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let accept_ctx = AcceptContext {
-        expected_api_key: None,
         admission: Some(admission),
     };
 

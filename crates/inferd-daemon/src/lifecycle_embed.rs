@@ -271,7 +271,7 @@ pub async fn serve_uds_embed(
                         warn!(error = %e, "embed SO_PEERCRED failed; recording empty unix identity");
                         crate::peercred::PeerIdentity {
                             uid: None, gid: None, pid: None,
-                            sid: None, remote_addr: None,
+                            sid: None,
                             transport: "unix",
                         }
                     });

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
+**Breaking: the daemon binds no inbound network listener.** Inbound
+loopback TCP — deprecated in 0.4.0 ([ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md))
+— is removed. The daemon is reachable only over its local Unix domain
+socket (Unix) / named pipe (Windows), authenticated by kernel-attested
+peer credentials (THREAT_MODEL F-7). Anything needing network access
+goes through the separate `inferd-http` bridge ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md),
+Surface B). Cut as 0.5.0 (not 0.4.1) because removing the published
+client TCP constructors is a breaking API change and Cargo treats
+0.4.x as compatible. (ADR 0022's body says "v0.4.1"; superseded by this
+release's actual versioning — the ADR is immutable so its text stands as
+the decision-time record.)
+
+### Removed
+
+- **Daemon:** `--tcp` / `INFERD_TCP`, `--embed-tcp` / `INFERD_EMBED_TCP`,
+  and `--api-key` / `INFERD_API_KEY` flags; the `endpoint::bind_tcp`
+  listener + `DEFAULT_TCP_ADDR`; the `serve_tcp_v2` / `serve_tcp_embed`
+  loops; the first-frame `{"type":"auth","key":...}` TCP auth path and
+  the entire `auth.rs` module (AuthFrame + constant-time key compare);
+  the `tcp`/`tcp_embed`/`api_key_env` `ListenConfig` fields;
+  `PeerIdentity::from_tcp` + its `remote_addr` field;
+  `AcceptContext::expected_api_key`.
+- **Rust client (`inferd-client`):** `ClientV2::dial_tcp` and
+  `EmbedClient::dial_tcp` (breaking — the reason for the minor bump).
+- **Go client:** `DialTCP` (breaking).
+
+### Changed
+
+- Daemon transport selection is now UDS (Unix) / named pipe (Windows)
+  only; `require_one_transport` and the platform error messages no
+  longer mention `--tcp`.
+- Integration tests re-homed off the TCP harness onto UDS
+  (`serve_uds_v2`) — `v2_stub` (incl. the W2 `wire_version`-mismatch
+  gate), `stress`, `queue_full`, `logx` (incl. the secret-redaction
+  security test), `echo_llamacpp`; the Go end-to-end test now dials the
+  per-test named pipe (Windows) / UDS (Unix). No test coverage was
+  dropped — only the harness transport changed.
+
 ## [0.4.0] - 2026-06-23
 
 The v0.4 line: a **unified IPC wire format** ([ADR 0021](docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)).

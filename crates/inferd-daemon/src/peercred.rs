@@ -31,7 +31,7 @@ pub struct PeerIdentity {
     pub pid: Option<u32>,
     /// User SID on Windows; `None` elsewhere.
     pub sid: Option<String>,
-    /// Stable transport name: `"unix"` / `"pipe"` / `"tcp"`.
+    /// Stable transport name: `"unix"` / `"pipe"`.
     pub transport: &'static str,
 }
 
@@ -85,7 +85,6 @@ pub mod unix {
                 gid: Some(cred.gid()),
                 pid: Some(cred.pid() as u32),
                 sid: None,
-                remote_addr: None,
                 transport: "unix",
             })
         }
@@ -106,7 +105,6 @@ pub mod unix {
                 gid: Some(gid),
                 pid: Some(pid as u32),
                 sid: None,
-                remote_addr: None,
                 transport: "unix",
             })
         }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,7 +77,7 @@ func TestEndToEndAgainstDaemon(t *testing.T) {
 	var client *inferd.Client
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		c, dialErr := inferd.DialInfer(ctx)
+		c, dialErr := dialTestInfer(ctx, inferSock)
 		if dialErr == nil {
 			client = c
 			break
