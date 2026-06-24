@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
+- **Windows x86_64 CUDA (RTX 5080) — v0.5.0-rc.1 tarball validation green
+  (2026-06-24):** SHA256 verified. `inferd-daemon 0.5.0-rc.1` +
+  `inferdctl 0.5.0-rc.1` (backends flattened next to the exe).
+  TCP-removal confirmed (`--tcp` → "unexpected argument", rejected). Real
+  `llamacpp` backend on CUDA, model ready ~7s → real generate
+  (`answer="Paris"`, `backend=llamacpp`, `stop=end_turn`) + grammar
+  (`response_format` JSON Schema → `{"city":"Paris","population":2141000}`,
+  valid JSON matching schema). Windows CUDA build clean under the new
+  CUDA v13.3 toolkit (did not reopen #162).
+- **Linux x86_64 / WSL Ubuntu — v0.5.0-rc.1 tarball validation green
+  (2026-06-24):** SHA256 verified. Versions `0.5.0-rc.1`. `--tcp`
+  rejected. Real `llamacpp` backend (CPU) over UDS → real generate
+  (`"Paris"`, `backend=llamacpp`, `end_turn`) + grammar
+  (`{"city":"Paris","population":2141000}`, valid JSON). Config
+  validation correctly rejected a non-`https` `source_url` along the way
+  (expected hardening).
 - **macOS arm64 Metal — v0.5.0-rc.1 tarball validation green (2026-06-24):**
   SHA256 verified. `inferd-daemon 0.5.0-rc.1` + `inferdctl 0.5.0-rc.1`.
   TCP-removal confirmed (`--tcp` rejected: "unexpected argument"). Installed
