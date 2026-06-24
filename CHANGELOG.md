@@ -21,6 +21,23 @@ client TCP constructors is a breaking API change and Cargo treats
 release's actual versioning — the ADR is immutable so its text stands as
 the decision-time record.)
 
+### Added
+
+- **Structured output (`response_format`)** — a `RequestV2` may carry an
+  optional `response_format: { type: "json_schema", schema: {...} }`
+  (additive; no `wire_version` bump). The daemon shapes this
+  model-agnostic JSON Schema to the engine (ADR 0013 gateway): the
+  llamacpp backend compiles it to GBNF (`json_schema_to_grammar`) and
+  installs a grammar sampler, so generated output is guaranteed to be
+  valid JSON conforming to the schema. The grammar sampler is kept
+  separate from the sampler chain and applied per-token
+  (apply-grammar → apply-chain → accept), mirroring llama.cpp's
+  `common_sampler` — chaining it would throw across FFI. A malformed
+  schema fails closed (error frame), never crashes the daemon. Verified
+  on a real model: `{"city":"Paris","population":2141000}` from a
+  city/population schema. Cloud-backend pass-through (openai/bedrock
+  `response_format`) is a follow-up; 0.5.0 ships the llamacpp path.
+
 ### Removed
 
 - **Daemon:** `--tcp` / `INFERD_TCP`, `--embed-tcp` / `INFERD_EMBED_TCP`,

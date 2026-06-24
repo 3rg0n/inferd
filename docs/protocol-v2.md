@@ -192,8 +192,26 @@ responsibility.
 | top_k          | `top_k`         | uint32                   | no       | "" |
 | max_tokens     | `max_tokens`    | uint32                   | no       | "" |
 | stream         | `stream`        | bool                     | no       | Defaults to streaming. |
+| response_format | `response_format` | `ResponseFormat` object | no       | Structured output constraint (e.g. JSON Schema). Backends that don't support it ignore this field. |
 
 A parser **MUST ignore unknown top-level fields** (forward-compat).
+
+### 3.2a `ResponseFormat` (tagged by `type`, snake_case)
+
+Specifies a structured output format constraint on the model's generation.
+The daemon translates the semantic format to engine-specific constraints
+(e.g. GBNF grammar for llamacpp).
+
+```
+{ "type": "json_schema", "schema": <JSON Schema object> }
+```
+
+- `type` — exactly `"json_schema"` (enum; future values may be added).
+- `schema` — a JSON Schema object. The model output will be constrained
+  to match this schema. Backends that don't support structured output
+  (or don't support JSON Schema specifically) ignore this field and return
+  unconstrained output; there is **no error** — the request succeeds as if
+  `response_format` were absent.
 
 ### 3.3 `MessageV2`
 
