@@ -138,7 +138,11 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         uses: KyleMayes/install-llvm-action@a7a1a882e2d06ebe05d5bb97c3e1f8c984ae96fc  # v2.0.7
         with:
-          version: '18.1.8'
+          # LLVM 19+ required: the runner's VS 2022 v14.44 MSVC STL headers
+          # static-assert `Clang >= 19.0.0` when compiled with clang-cl
+          # (yvals_core.h STL1000). 18.1.8 tripped that assert; 19.1.7 is
+          # the newest 19.x the action ships and satisfies it.
+          version: '19.1.7'
           arch: arm64
           env: true   # exports LLVM_PATH + LIBCLANG_PATH for bindgen
 
