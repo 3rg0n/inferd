@@ -117,8 +117,36 @@ fn build_llamacpp() {
     // CUDA build needs this; the non-CUDA Windows path keeps the default
     // generator (no nvcc, no MSBuild-integration dependency).
     let win_cuda = cfg!(all(target_os = "windows", feature = "cuda"));
-    if win_cuda {
+
+    // Windows + arm64: ggml's CPU backend hard-refuses MSVC on ARM
+    // (`ggml-cpu/CMakeLists.txt`: "MSVC is not supported for ARM, use
+    // clang" — it guards on `MSVC AND NOT CMAKE_C_COMPILER_ID == Clang`).
+    // The default VS generator drives `cl.exe`, which trips that guard
+    // and fails configure. Fix: Ninja generator + `clang-cl` for C/C++.
+    // clang-cl is LLVM's MSVC-compatible driver, so it satisfies ggml's
+    // "use clang" requirement (CMAKE_C_COMPILER_ID == Clang) while staying
+    // MSVC-ABI-compatible — it links cleanly against the MSVC runtime that
+    // Rust's *-pc-windows-msvc target uses. release.yml installs a native
+    // arm64 LLVM (clang-cl on PATH) for this target. There is no CUDA on
+    // Windows arm64, so this path never overlaps with win_cuda.
+    let win_arm64 = cfg!(all(target_os = "windows", target_arch = "aarch64"));
+    if win_cuda || win_arm64 {
         config.generator("Ninja");
+    }
+    if win_arm64 {
+        // Force clang-cl for both the CMake define AND the CC/CXX env.
+        // The LLVM-install action exports CC=clang / CXX=clang++ (plain
+        // clang, GNU-style driver) with `env: true`, and cmake-rs
+        // forwards CC/CXX into the CMake invocation — which would fight
+        // the CMAKE_*_COMPILER define and/or pick plain clang (wrong
+        // driver for the MSVC target). Setting both here makes clang-cl
+        // unambiguous: the define wins for CMake's own compiler ID probe,
+        // and overriding the env stops cmake-rs from re-injecting clang.
+        config
+            .define("CMAKE_C_COMPILER", "clang-cl")
+            .define("CMAKE_CXX_COMPILER", "clang-cl")
+            .env("CC", "clang-cl")
+            .env("CXX", "clang-cl");
     }
 
     config

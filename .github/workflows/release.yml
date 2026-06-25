@@ -142,6 +142,20 @@ jobs:
           arch: arm64
           env: true   # exports LLVM_PATH + LIBCLANG_PATH for bindgen
 
+      # Windows arm64 builds ggml with the Ninja generator + clang-cl
+      # (build.rs): ggml's CPU backend refuses MSVC on ARM ("use clang").
+      # That needs (a) the MSVC dev environment on PATH so clang-cl finds
+      # the Windows SDK headers/libs and links the MSVC runtime Rust uses,
+      # and (b) `ninja`. msvc-dev-cmd (arch arm64) provides the env; ninja
+      # ships with the VS C++ workload on the runner image and lands on
+      # PATH via the dev environment. (The x64+CUDA row has its own
+      # msvc-dev-cmd step with arch x64; this one is arm64-gated.)
+      - name: Set up MSVC dev environment (Windows arm64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: arm64
+
       # CUDA toolkit for x86_64-linux only — needed because that target's
       # `features:` includes inferd-daemon/cuda, which flips
       # GGML_CUDA=ON and asks build.rs to compile libggml-cuda.so via
