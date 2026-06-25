@@ -147,6 +147,12 @@ fn build_llamacpp() {
             .define("CMAKE_CXX_COMPILER", "clang-cl")
             .env("CC", "clang-cl")
             .env("CXX", "clang-cl");
+        // clang-cl on arm64 does not enable C++ exceptions by default the
+        // way cl.exe does, but ggml's gguf.cpp uses try/throw ("cannot use
+        // 'try' with exceptions disabled"). Pass /EHsc explicitly so the
+        // clang-cl driver enables the standard MSVC exception model.
+        // cmake-rs appends these to CMAKE_CXX_FLAGS for the configure.
+        config.cxxflag("/EHsc");
     }
 
     config
