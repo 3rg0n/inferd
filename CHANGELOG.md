@@ -28,18 +28,20 @@ Windows build path can be exercised on a real arm64 Windows machine
 ### Changed
 
 - **CI: Windows CUDA release build switched to the Ninja CMake generator**
-  (`inferd-engine/build.rs`), decoupling the `.cu` compile from MSBuild +
-  CUDA's `visual_studio_integration` props. `nvcc` now invokes `cl.exe`
-  directly, so the build no longer depends on a CUDA-toolkit ↔ VS-version
-  pairing — fixing the drift (#162) that forced the `windows-2022` pin
-  after CUDA 12.6's VS-2022-only integration broke on `windows-2025`/VS
-  2026 (rc.1). `release.yml` now runs the Windows CUDA job on
-  `windows-latest`, sets up the MSVC dev environment (cl.exe + ninja on
-  PATH) via `ilammas/msvc-dev-cmd`, and drops the now-unneeded
-  `visual_studio_integration` CUDA sub-package. Verified locally:
-  Ninja-driven `dl-backends,cuda` build produces a real `ggml-cuda.dll`
-  (CUDA 13.3 + VS 2022 BuildTools). The runner image no longer has to be
-  pinned to match the toolkit.
+  (`inferd-engine/build.rs`) AND kept pinned to `windows-2022` (#162).
+  Two separate VS↔CUDA couplings break this build; Ninja fixes only one:
+  (1) MSBuild + CUDA's `visual_studio_integration` props are
+  version-matched to a VS release → "No CUDA toolset found" — Ninja
+  sidesteps MSBuild and fixes this, dropping the `visual_studio_integration`
+  sub-package; (2) `nvcc`'s `crt/host_config.h` hard-`#error`s on any MSVC
+  outside 2017–2022, and Ninja does NOT help (nvcc still shells out to
+  cl.exe and checks its version). When `windows-latest` rolled to VS 2026
+  (MSVC 14.51), coupling (2) fired ("unsupported Microsoft Visual Studio
+  version"). So the image stays pinned to `windows-2022` (VS 2022, which
+  CUDA 12.6 accepts); the Ninja generator + `ilammy/msvc-dev-cmd` dev-env
+  remain (correct for coupling #1, harmless on the pin). Revisit the pin
+  when moving to a CUDA version that supports the current
+  `windows-latest` VS.
 
 ## [0.5.0] - 2026-06-24
 

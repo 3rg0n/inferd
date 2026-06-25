@@ -79,19 +79,29 @@ jobs:
           # CUDA redist DLLs are bundled next to the exe by the Windows
           # bundling step. Hosts without an NVIDIA driver fall through to
           # CPU at the runtime probe (ADR 0019).
-          # windows-latest (NOT pinned). The CUDA build uses the **Ninja**
-          # CMake generator (set in inferd-engine/build.rs for
-          # windows+cuda), so `nvcc` invokes `cl.exe` directly instead of
-          # going through MSBuild + CUDA's `visual_studio_integration`
-          # props. Those props are version-matched to a specific VS
-          # release, and that coupling was the #162 drift: CUDA 12.6 only
-          # ships VS 2022 integration, so the default VS generator broke
-          # "No CUDA toolset found" the moment windows-latest rolled to
-          # VS 2026 (rc.1). Ninja is VS-version-agnostic, so the image no
-          # longer has to be pinned to match the toolkit. Requires the
-          # MSVC dev environment on PATH (cl.exe + ninja) — the
-          # msvc-dev-cmd step below provides it.
-          - os: windows-latest
+          # PINNED to windows-2022 (#162). Two independent VS↔CUDA
+          # couplings bite this build, and the Ninja generator only fixes
+          # ONE of them:
+          #   1. MSBuild + CUDA's `visual_studio_integration` props
+          #      (version-matched to a VS release) → "No CUDA toolset
+          #      found". The Ninja generator (build.rs, windows+cuda)
+          #      sidesteps MSBuild entirely, fixing this.
+          #   2. `nvcc` itself hard-rejects the host compiler: CUDA 12.6's
+          #      crt/host_config.h `#error`s on any MSVC outside
+          #      2017–2022. Ninja does NOT help here — nvcc still shells
+          #      out to cl.exe and checks its version. When windows-latest
+          #      rolled to VS 2026 (MSVC 14.51), this fired:
+          #      "unsupported Microsoft Visual Studio version! Only
+          #      2017–2022 are supported."
+          # So the image must still be pinned to one CUDA 12.6 accepts.
+          # windows-2022 ships VS 2022. (Alternative: pass nvcc
+          # `-allow-unsupported-compiler`, but that's "may cause
+          # compilation failure" roulette on every VS bump — a known-good
+          # pin is the safer contract.) Revisit when we move to a CUDA
+          # version that supports the current windows-latest VS.
+          # Still uses Ninja + msvc-dev-cmd below (fixes coupling #1 and
+          # is harmless on the pinned image).
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             archive: zip
             features: inferd-daemon/dl-backends,inferd-daemon/cuda
