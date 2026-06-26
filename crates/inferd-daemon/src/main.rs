@@ -968,6 +968,7 @@ async fn build_llamacpp_entry(
         model_sha256: Some(model_sha256_bytes),
         mmproj_path,
         mmproj_sha256: mmproj_sha256_bytes,
+        mmproj_image_max_tokens: entry.mmproj_image_max_tokens,
         n_ctx,
         n_gpu_layers,
         embed: entry.embed,

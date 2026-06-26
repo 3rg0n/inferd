@@ -256,6 +256,30 @@ daemon links no image/audio codec (ADR 0016).
 
 `id` MUST be unique within a request.
 
+#### Image resolution / OCR fidelity (operator-controlled)
+
+The daemon owns image preprocessing (ADR 0013): for a dynamic-resolution
+vision model (the default Gemma 4 is one), the projector downscales /
+tiles the decoded RGB toward a token budget before encoding. Dense
+paragraph text survives this, but **small or sparsely-spaced text — OCR
+of fine print, or title lines with dotted leaders — can drop below
+legibility at the downscale**, even when the consumer sends ample
+resolution (issue #42). The loss is in daemon-side encoding, not the
+wire: sending a larger image does not by itself help once it exceeds the
+projector's budget.
+
+There is **no per-request resolution knob** on the wire, by design — image
+shaping is the daemon's job, not the consumer's, and the budget is a
+model/context property fixed at load time (re-tuning it per request would
+mean re-initialising the projector). Instead it's an **operator config**:
+the llamacpp backend entry accepts `mmproj_image_max_tokens` (maps to
+libmtmd's `image_max_tokens`). Raising it reduces downscaling so sparse /
+small text survives, at the cost of more image tokens and slower encode;
+`null`/omitted (the default) reads the model's metadata default and is
+unchanged behaviour. A consumer that needs higher OCR fidelity than the
+deployment's configured budget should pre-segment or upscale the region
+of interest before sending, or ask the operator to raise the budget.
+
 ### 3.6 `Tool`
 
 ```

@@ -111,6 +111,21 @@ pub struct MtmdConfig {
     /// `true` to run a warmup encode after init. Catches setup
     /// errors at startup rather than first-request.
     pub warmup: bool,
+    /// Maximum number of image tokens the projector may emit per image,
+    /// for **dynamic-resolution** vision models (Gemma 4 is one). The
+    /// projector downscales/tiles the input toward this budget before
+    /// encoding; a higher cap means less downscaling, so small or
+    /// sparsely-spaced text (OCR of leader-dotted lines, fine print)
+    /// survives, at the cost of more tokens and slower encode. `None`
+    /// reads the model's metadata default. Maps to
+    /// `mtmd_context_params::image_max_tokens`. Set at init time (it's a
+    /// context property, not per-request) — see issue #42.
+    pub image_max_tokens: Option<i32>,
+    /// Minimum image tokens per image (dynamic-resolution models). `None`
+    /// reads the metadata default. Maps to
+    /// `mtmd_context_params::image_min_tokens`. Rarely needed; exposed for
+    /// symmetry with `image_max_tokens`.
+    pub image_min_tokens: Option<i32>,
 }
 
 impl Default for MtmdConfig {
@@ -120,6 +135,8 @@ impl Default for MtmdConfig {
             print_timings: false,
             n_threads: None,
             warmup: true,
+            image_max_tokens: None,
+            image_min_tokens: None,
         }
     }
 }
@@ -149,6 +166,16 @@ impl Mtmd {
             params.n_threads = n;
         }
         params.warmup = config.warmup;
+        // Dynamic-resolution image-token budget (issue #42). Only set
+        // when the operator overrode the metadata default; otherwise
+        // leave the value `mtmd_context_params_default()` read from the
+        // model so behaviour is unchanged.
+        if let Some(n) = config.image_max_tokens {
+            params.image_max_tokens = n;
+        }
+        if let Some(n) = config.image_min_tokens {
+            params.image_min_tokens = n;
+        }
 
         // SAFETY: `cpath` outlives the call. `text_model` outlives
         // the returned context per the function's documented
