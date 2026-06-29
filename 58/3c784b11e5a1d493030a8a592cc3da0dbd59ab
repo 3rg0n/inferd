@@ -1,0 +1,23 @@
+crates/inferd-engine/src/llamacpp/tool_parser.rs
+  s_126aec4081f728::t_0a135db5a8bcaf 39-42,62-66
+  s_126aec4081f728::t_3061b0e0b6202a 67-74,301-305,307,315-321,462,590-592,598,620-621,625-632,648-668
+CHANGELOG.md
+  s_126aec4081f728::t_6ac48ae77fca5e 10-16
+  s_126aec4081f728::t_5d5923af0cd5da 17-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "583c784b11e5a1d493030a8a592cc3da0dbd59ab",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
