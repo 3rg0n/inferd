@@ -219,8 +219,9 @@ pub struct LlamacppEntry {
     /// models (Gemma 4). Higher = less downscaling, so small / sparsely
     /// spaced text (OCR of fine print, leader-dotted lines) survives, at
     /// the cost of more tokens and slower encode. `None` (default) reads
-    /// the projector's metadata default — behaviour unchanged. Only
-    /// meaningful when `mmproj` is set. Issue #42.
+    /// the projector's metadata default — behaviour unchanged. Must be
+    /// `> 0` when set (validated at load). Only meaningful when `mmproj`
+    /// is set. Issue #42.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmproj_image_max_tokens: Option<i32>,
 
@@ -657,6 +658,17 @@ impl ConfigFile {
                                 "backends[{name:?}].n_ctx must be > 0"
                             )));
                         }
+                        // Catch a bad image-token budget here with an
+                        // actionable message, rather than letting <= 0
+                        // reach libmtmd and fail mtmd_init_from_file with
+                        // an opaque "returned null" (issue #42).
+                        if let Some(t) = e.mmproj_image_max_tokens
+                            && t <= 0
+                        {
+                            return Err(ConfigError::Invalid(format!(
+                                "backends[{name:?}].mmproj_image_max_tokens must be > 0 (got {t})"
+                            )));
+                        }
                     }
                     BackendEntry::OpenaiCompat(e) => {
                         if e.base_url.trim().is_empty() {
@@ -1002,6 +1014,37 @@ mod tests {
                 assert_eq!(e.mmproj_image_max_tokens, Some(2048));
             }
             other => panic!("expected llamacpp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_nonpositive_mmproj_image_max_tokens() {
+        // Issue #42: a <= 0 budget must be caught at load with an
+        // actionable message, not passed through to libmtmd.
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "llamacpp",
+                    "name": "vision-gemma",
+                    "model": {
+                        "name": "gemma-4-e4b",
+                        "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                        "source_url": "https://example.com/gemma.gguf"
+                    },
+                    "mmproj_image_max_tokens": 0
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let err = ConfigFile::load(f.path()).unwrap_err();
+        match err {
+            ConfigError::Invalid(msg) => {
+                assert!(
+                    msg.contains("mmproj_image_max_tokens"),
+                    "error should name the field, got: {msg}"
+                );
+            }
+            other => panic!("expected Invalid, got {other:?}"),
         }
     }
 
