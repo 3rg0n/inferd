@@ -1,0 +1,19 @@
+crates/inferd-daemon/src/config_file.rs
+  s_5811b7f24eccc0::t_3ae14a23523e5f 222-224,661-671,1020-1050
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "45e304651bfca25810207a3ae95687131f0324b6",
+  "prompts": {},
+  "sessions": {
+    "s_5811b7f24eccc0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a5ac7310-ca40-41b4-86cf-fc36cc2e2474",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
