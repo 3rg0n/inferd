@@ -100,6 +100,13 @@ pub struct LlamaCppConfig {
     /// Optional expected SHA-256 of the mmproj file. Same shape as
     /// `model_sha256`; verified before mtmd_init_from_file.
     pub mmproj_sha256: Option<[u8; 32]>,
+    /// Maximum image tokens per image for dynamic-resolution vision
+    /// models (Gemma 4). A higher cap means less downscaling, so small
+    /// or sparsely-spaced text (OCR of fine print, leader-dotted lines)
+    /// survives — at the cost of more tokens and slower encode. `None`
+    /// reads the model metadata default. Sets
+    /// `MtmdConfig::image_max_tokens` at mtmd init (issue #42).
+    pub mmproj_image_max_tokens: Option<i32>,
     /// Enable the embedding pathway (per ADR 0017). When `true` the
     /// adapter allocates a second `llama_context` configured with
     /// `embeddings = true` + `pooling_type = MEAN`, advertises
@@ -128,6 +135,7 @@ impl Default for LlamaCppConfig {
             seed: 0xDEADBEEF,
             mmproj_path: None,
             mmproj_sha256: None,
+            mmproj_image_max_tokens: None,
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
@@ -351,7 +359,11 @@ impl LlamaCpp {
                 // SAFETY: caller (this fn) holds `model` for the
                 // entirety of `State`'s lifetime; `Mtmd` lives inside
                 // the same `State` struct so its borrow is satisfied.
-                let mtmd_ctx = unsafe { Mtmd::new(mmproj, model.as_ptr(), MtmdConfig::default())? };
+                let mtmd_config = MtmdConfig {
+                    image_max_tokens: config.mmproj_image_max_tokens,
+                    ..MtmdConfig::default()
+                };
+                let mtmd_ctx = unsafe { Mtmd::new(mmproj, model.as_ptr(), mtmd_config)? };
                 let caps = BackendCapabilitiesV2 {
                     vision: mtmd_ctx.supports_vision(),
                     audio: mtmd_ctx.supports_audio(),

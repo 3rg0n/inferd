@@ -215,6 +215,16 @@ pub struct LlamacppEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmproj: Option<ModelConfig>,
 
+    /// Maximum image tokens per image for dynamic-resolution vision
+    /// models (Gemma 4). Higher = less downscaling, so small / sparsely
+    /// spaced text (OCR of fine print, leader-dotted lines) survives, at
+    /// the cost of more tokens and slower encode. `None` (default) reads
+    /// the projector's metadata default — behaviour unchanged. Must be
+    /// `> 0` when set (validated at load). Only meaningful when `mmproj`
+    /// is set. Issue #42.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj_image_max_tokens: Option<i32>,
+
     /// Llama.cpp context window in tokens. Default: 8192.
     #[serde(default = "default_n_ctx")]
     pub n_ctx: u32,
@@ -462,6 +472,9 @@ pub fn default_first_boot_config() -> ConfigFile {
                         .into(),
                     license: Some("gemma".into()),
                 }),
+                // Metadata default; raise (e.g. config edit) for sharper
+                // OCR of small / sparse text. Issue #42.
+                mmproj_image_max_tokens: None,
                 n_ctx: default_n_ctx(),
                 n_gpu_layers: default_gpu_layers,
                 embed: false,
@@ -483,6 +496,7 @@ pub fn default_first_boot_config() -> ConfigFile {
                 },
                 // Embedding model — no projector.
                 mmproj: None,
+                mmproj_image_max_tokens: None,
                 n_ctx: default_embed_n_ctx(),
                 n_gpu_layers: default_gpu_layers,
                 embed: true,
@@ -644,6 +658,17 @@ impl ConfigFile {
                                 "backends[{name:?}].n_ctx must be > 0"
                             )));
                         }
+                        // Catch a bad image-token budget here with an
+                        // actionable message, rather than letting <= 0
+                        // reach libmtmd and fail mtmd_init_from_file with
+                        // an opaque "returned null" (issue #42).
+                        if let Some(t) = e.mmproj_image_max_tokens
+                            && t <= 0
+                        {
+                            return Err(ConfigError::Invalid(format!(
+                                "backends[{name:?}].mmproj_image_max_tokens must be > 0 (got {t})"
+                            )));
+                        }
                     }
                     BackendEntry::OpenaiCompat(e) => {
                         if e.base_url.trim().is_empty() {
@@ -717,6 +742,7 @@ impl ConfigFile {
             // the multi-backend `backends:` shape with an `mmproj` block
             // (issue #30).
             mmproj: None,
+            mmproj_image_max_tokens: None,
             n_ctx: self.n_ctx,
             n_gpu_layers: self.n_gpu_layers,
             // Legacy single-model configs predate ADR 0017's embed
@@ -938,6 +964,8 @@ mod tests {
                 assert_eq!(e.model.name, "gemma-4-e4b");
                 assert_eq!(e.n_ctx, 8192);
                 assert_eq!(e.n_gpu_layers, 35);
+                // Omitted in the JSON → metadata default (issue #42).
+                assert_eq!(e.mmproj_image_max_tokens, None);
             }
             other => panic!("expected llamacpp, got {other:?}"),
         }
@@ -950,6 +978,73 @@ mod tests {
                 assert_eq!(e.timeout_secs, 300);
             }
             other => panic!("expected openai-compat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_mmproj_image_max_tokens() {
+        // Issue #42: operators raise the dynamic-resolution image-token
+        // budget for sharper OCR of small/sparse text. Confirm it
+        // deserializes onto the llamacpp entry.
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "llamacpp",
+                    "name": "vision-gemma",
+                    "model": {
+                        "name": "gemma-4-e4b",
+                        "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                        "source_url": "https://example.com/gemma.gguf"
+                    },
+                    "mmproj": {
+                        "name": "gemma-4-e4b-mmproj",
+                        "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
+                        "source_url": "https://example.com/mmproj.gguf"
+                    },
+                    "mmproj_image_max_tokens": 2048
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).unwrap();
+        let list = cfg.backends.as_ref().expect("backends present");
+        match &list[0] {
+            BackendEntry::Llamacpp(e) => {
+                assert!(e.mmproj.is_some());
+                assert_eq!(e.mmproj_image_max_tokens, Some(2048));
+            }
+            other => panic!("expected llamacpp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_nonpositive_mmproj_image_max_tokens() {
+        // Issue #42: a <= 0 budget must be caught at load with an
+        // actionable message, not passed through to libmtmd.
+        let json = r#"{
+            "backends": [
+                {
+                    "kind": "llamacpp",
+                    "name": "vision-gemma",
+                    "model": {
+                        "name": "gemma-4-e4b",
+                        "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                        "source_url": "https://example.com/gemma.gguf"
+                    },
+                    "mmproj_image_max_tokens": 0
+                }
+            ]
+        }"#;
+        let f = write_config(json);
+        let err = ConfigFile::load(f.path()).unwrap_err();
+        match err {
+            ConfigError::Invalid(msg) => {
+                assert!(
+                    msg.contains("mmproj_image_max_tokens"),
+                    "error should name the field, got: {msg}"
+                );
+            }
+            other => panic!("expected Invalid, got {other:?}"),
         }
     }
 

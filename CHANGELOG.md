@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mmproj_image_max_tokens` config knob** for llamacpp backends
+  (issue #42). Caps image tokens per image for dynamic-resolution vision
+  models (Gemma 4); a higher value reduces the projector's downscaling so
+  small / sparsely-spaced text (OCR of fine print, leader-dotted lines)
+  survives, at the cost of more tokens and slower encode. Maps to
+  libmtmd's `image_max_tokens`; set at mtmd init (a context property, not
+  per-request). Omitted/`null` reads the model metadata default —
+  behaviour unchanged. Documented in `docs/protocol-v2.md` §3.5 (image
+  preprocessing is daemon-owned per ADR 0013, so there is deliberately no
+  per-request wire knob; operators tune the budget, consumers
+  pre-segment/upscale for higher fidelity).
+
 ## [0.5.1-rc.1] - 2026-06-25
 
 First RC of the 0.5.1 patch line: adds the Windows arm64 release tarball
