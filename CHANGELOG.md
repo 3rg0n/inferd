@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gemma 4 GA thinking-token parsing.** The tool/thinking parser
+  detected reasoning output with `<|think|>` … `<|/think|>`, but Gemma 4
+  GA emits it as `<|channel>thought` … `<channel|>` (verified against the
+  released Gemma-4-E4B-It GGUF `chat_template`). `<|think|>` is only the
+  *system-turn activation* token, never an output wrapper, and `<|/think|>`
+  does not exist. Against the real model the old openers never matched, so
+  the reasoning trace **leaked into the user-visible `text` block** instead
+  of the separate `thinking` block. The parser now keys off the GA tokens
+  (and treats a stray `<|think|>` in output as plain text). Tool-call
+  output parsing (`<|tool_call>call:NAME{…}` with `<|"|>` string delimiters)
+  was already correct and is unchanged. (Thinking *activation* — emitting
+  `<|think|>` in the system turn — is a separate gap, tracked for a
+  follow-up; this fixes the output-separation bug.)
+
 ### Added
 
 - **`mmproj_image_max_tokens` config knob** for llamacpp backends

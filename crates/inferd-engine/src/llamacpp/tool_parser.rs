@@ -36,9 +36,10 @@ use serde_json::Value;
 pub enum Output {
     /// Pass-through user-visible text. Stream straight to the wire.
     Text(String),
-    /// Reasoning-trace text emitted between `<|think|>...<|/think|>`
-    /// (per `docs/thinking.mode.in.gemma.md`). The wire emits this
-    /// as `ResponseBlock::Thinking { delta }`.
+    /// Reasoning-trace text emitted between `<|channel>thought` and
+    /// `<channel|>` (Gemma 4 GA; verified against the released GGUF
+    /// chat_template). The wire emits this as
+    /// `ResponseBlock::Thinking { delta }`.
     Thinking(String),
     /// A complete parsed tool-call sequence.
     ToolUse {
@@ -58,8 +59,19 @@ pub enum Output {
 
 const TOOL_OPEN: &str = "<|tool_call>";
 const TOOL_CLOSE: &str = "<tool_call|>";
-const THINK_OPEN: &str = "<|think|>";
-const THINK_CLOSE: &str = "<|/think|>";
+// Gemma 4 GA thinking tokens (verified against the released
+// Gemma-4-E4B-It GGUF chat_template). The model emits its reasoning as
+// `<|channel>thought\n...\n<channel|>`. `<|channel>` is *always*
+// followed by the literal word `thought` when thinking mode is active
+// (per the Gemma 4 prompt-format spec), so we match the full
+// `<|channel>thought` opener — that's specific to the reasoning channel
+// and won't false-match other uses of `<|channel>`. The closer is
+// `<channel|>`. NOTE: `<|think|>` is NOT an output wrapper — it's the
+// system-turn *activation* token (the renderer puts it in the system
+// block to turn thinking on); it never appears in model output, so it
+// is not a parser sentinel.
+const THINK_OPEN: &str = "<|channel>thought";
+const THINK_CLOSE: &str = "<channel|>";
 
 /// State of the parser.
 #[derive(Debug, Clone, PartialEq)]
@@ -286,8 +298,13 @@ impl ToolCallParser {
             self.pending.drain(..idx + THINK_CLOSE.len());
             let body = std::mem::take(&mut self.body);
             self.state = State::Plain;
+            // The rendered shape is `<|channel>thought\n{text}\n<channel|>`,
+            // so after dropping the opener the body carries a leading
+            // newline (and usually a trailing one). Trim surrounding
+            // whitespace so the Thinking delta is just the reasoning text.
+            let body = body.trim();
             if !body.is_empty() {
-                out.push(Output::Thinking(body));
+                out.push(Output::Thinking(body.to_string()));
             }
             true
         } else {
@@ -295,6 +312,13 @@ impl ToolCallParser {
             let max_len = THINK_CLOSE.len();
             let mut hold = 0;
             for k in 1..=n.min(max_len) {
+                // Guard against slicing inside a multi-byte char — the
+                // reasoning text may contain Unicode at the buffer
+                // boundary. THINK_CLOSE is ASCII, so a non-boundary
+                // suffix can never be its prefix; skip those k.
+                if !self.pending.is_char_boundary(n - k) {
+                    continue;
+                }
                 let suffix = &self.pending[n - k..];
                 if THINK_CLOSE.starts_with(suffix) {
                     hold = k;
@@ -435,7 +459,7 @@ mod tests {
         // The trailing piece doesn't end in a sentinel-prefix so it
         // should flush. With the prefix-hold logic, the last bytes
         // could be held — but neither "h", "he", ... nor "w", "wo",
-        // ... is a prefix of `<|tool_call>` or `<|think|>`, so
+        // ... is a prefix of `<|tool_call>` or `<|channel>thought`, so
         // everything flushes.
         let final_out = p.finish();
         let mut joined = String::new();
@@ -563,12 +587,15 @@ mod tests {
 
     #[test]
     fn thinking_block_emits_thinking() {
+        // Gemma 4 GA shape: `<|channel>thought\n{text}\n<channel|>`.
+        // The leading/trailing newlines must be trimmed out of the
+        // Thinking delta.
         let mut p = ToolCallParser::new();
         let out = collect(
             &mut p,
             &[
                 "Let me ",
-                "<|think|>this is hidden<|/think|>",
+                "<|channel>thought\nthis is hidden\n<channel|>",
                 " here's the result.",
             ],
         );
@@ -590,10 +617,19 @@ mod tests {
 
     #[test]
     fn thinking_split_across_pieces() {
+        // The `<|channel>thought` opener and `<channel|>` closer split
+        // across token boundaries must still be detected.
         let mut p = ToolCallParser::new();
         let out = collect(
             &mut p,
-            &["<|", "think|>", "secret", "<|/", "think|>", "visible"],
+            &[
+                "<|chan",
+                "nel>thought\n",
+                "secret",
+                "\n<chan",
+                "nel|>",
+                "visible",
+            ],
         );
         let final_out = p.finish();
         let mut thinking = String::new();
@@ -607,6 +643,27 @@ mod tests {
         }
         assert_eq!(thinking, "secret");
         assert_eq!(texts, "visible");
+    }
+
+    #[test]
+    fn bare_think_token_is_not_a_thinking_opener() {
+        // `<|think|>` is the system-turn activation token, NOT an output
+        // wrapper — if it ever appears in model output it must pass
+        // through as plain text, not open a thinking block.
+        let mut p = ToolCallParser::new();
+        let out = collect(&mut p, &["hello <|think|> world"]);
+        let final_out = p.finish();
+        let mut thinking = String::new();
+        let mut texts = String::new();
+        for o in out.iter().chain(final_out.iter()) {
+            match o {
+                Output::Thinking(t) => thinking.push_str(t),
+                Output::Text(t) => texts.push_str(t),
+                _ => {}
+            }
+        }
+        assert_eq!(thinking, "", "<|think|> must not open a thinking block");
+        assert_eq!(texts, "hello <|think|> world");
     }
 
     #[test]
