@@ -433,7 +433,11 @@ fn build_llamacpp() {
         .blocklist_type("ggml_.*")
         .blocklist_function("llama_.*")
         .blocklist_function("ggml_.*")
-        .raw_line("use crate::ffi::{llama_context, llama_model, llama_pos, llama_seq_id, llama_token, llama_flash_attn_type, ggml_log_callback, ggml_backend_sched_eval_callback};")
+        // These llama_*/ggml_* types are blocklisted above (they come from
+        // llama_bindings.rs) but mtmd.h references them in fn signatures, so
+        // import them from crate::ffi. `llama_batch` was added in the b9850
+        // bump — mtmd.h's new callback type takes a `llama_batch`.
+        .raw_line("use crate::ffi::{llama_batch, llama_context, llama_model, llama_pos, llama_seq_id, llama_token, llama_flash_attn_type, ggml_log_callback, ggml_backend_sched_eval_callback};")
         .prepend_enum_name(false)
         .derive_default(true)
         .layout_tests(false)

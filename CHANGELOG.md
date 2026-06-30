@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bumped vendored llama.cpp `b9159` → `b9850`** (`5c0e94683` →
+  `4f31eedb0`; 2026-05-14 → 2026-06-30, ~691 commits). Primarily to gain
+  **Gemma 4 12B / "unified" variant** support (the dense
+  `Gemma4UnifiedForConditionalGeneration` arch, distinct from the
+  E2B/E4B variant we already ran; upstream PRs #24077/#24082/#24088,
+  floor commit `94a220cd674`), plus a large body of bug fixes including
+  several Gemma 4 correctness fixes. Two build-side reconciliations were
+  needed for the jump: the hand-maintained mtmd model-source list in
+  `cpp/CMakeLists.txt` was replaced with a `models/*.cpp` glob (it had
+  drifted — `hunyuanocr.cpp` was renamed and the new `gemma4ua/gemma4uv`
+  encoders were missing), and `llama_batch` was added to the mtmd
+  bindgen import (b9850's `mtmd.h` references it in a callback type).
+  Validated against the real `gemma-4-e4b` model on CUDA: all five
+  `llamacpp-integration` tests pass (grammar, thinking activation,
+  malformed-schema-no-crash, text+image multimodal round-trips). The
+  v0.5.x maintenance line (`release/0.5`) stays on `b9159`.
+
 ## [0.5.1] - 2026-06-30
 
 GA promotion of [0.5.1-rc.2] (below) — the Gemma 4 GA thinking feature

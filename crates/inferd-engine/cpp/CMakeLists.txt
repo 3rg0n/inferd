@@ -89,40 +89,23 @@ add_subdirectory("${LLAMA_CPP_DIR}" llama.cpp EXCLUDE_FROM_ALL)
 if (INFERD_BUILD_MTMD)
     set(MTMD_DIR "${LLAMA_CPP_DIR}/tools/mtmd")
 
+    # Per-model encoder sources live in tools/mtmd/models/ and churn on
+    # almost every upstream bump (Gemma 4 12B "unified" added gemma4ua/
+    # gemma4uv; hunyuanocr was renamed hunyuanvl; etc.). Globbing them
+    # means a pin bump auto-tracks the set instead of failing with
+    # "Cannot find source file" on a hand-maintained list. The usual
+    # CMake-glob staleness caveat doesn't bite here: build.rs sets
+    # rerun-if-changed on the submodule, so any pin bump re-runs CMake
+    # configure. The stable top-level mtmd sources stay explicit.
+    file(GLOB MTMD_MODEL_SOURCES CONFIGURE_DEPENDS "${MTMD_DIR}/models/*.cpp")
+
     add_library(mtmd STATIC
         ${MTMD_DIR}/mtmd.cpp
         ${MTMD_DIR}/mtmd-audio.cpp
         ${MTMD_DIR}/mtmd-image.cpp
         ${MTMD_DIR}/mtmd-helper.cpp
         ${MTMD_DIR}/clip.cpp
-        ${MTMD_DIR}/models/cogvlm.cpp
-        ${MTMD_DIR}/models/conformer.cpp
-        ${MTMD_DIR}/models/dotsocr.cpp
-        ${MTMD_DIR}/models/gemma4a.cpp
-        ${MTMD_DIR}/models/gemma4v.cpp
-        ${MTMD_DIR}/models/glm4v.cpp
-        ${MTMD_DIR}/models/granite-speech.cpp
-        ${MTMD_DIR}/models/hunyuanocr.cpp
-        ${MTMD_DIR}/models/internvl.cpp
-        ${MTMD_DIR}/models/kimivl.cpp
-        ${MTMD_DIR}/models/kimik25.cpp
-        ${MTMD_DIR}/models/nemotron-v2-vl.cpp
-        ${MTMD_DIR}/models/llama4.cpp
-        ${MTMD_DIR}/models/llava.cpp
-        ${MTMD_DIR}/models/minicpmv.cpp
-        ${MTMD_DIR}/models/paddleocr.cpp
-        ${MTMD_DIR}/models/pixtral.cpp
-        ${MTMD_DIR}/models/qwen2vl.cpp
-        ${MTMD_DIR}/models/qwen3vl.cpp
-        ${MTMD_DIR}/models/mimovl.cpp
-        ${MTMD_DIR}/models/qwen3a.cpp
-        ${MTMD_DIR}/models/step3vl.cpp
-        ${MTMD_DIR}/models/siglip.cpp
-        ${MTMD_DIR}/models/whisper-enc.cpp
-        ${MTMD_DIR}/models/deepseekocr.cpp
-        ${MTMD_DIR}/models/mobilenetv5.cpp
-        ${MTMD_DIR}/models/youtuvl.cpp
-        ${MTMD_DIR}/models/yasa2.cpp
+        ${MTMD_MODEL_SOURCES}
     )
 
     target_include_directories(mtmd PUBLIC  ${MTMD_DIR})

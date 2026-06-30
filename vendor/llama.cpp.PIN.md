@@ -6,15 +6,28 @@ the bump procedure.
 
 ## Current pin
 
-- **Tag**: `b9159`
-- **Commit**: `5c0e94683` (verify with
+- **Tag**: `b9850`
+- **Commit**: `4f31eedb0` (verify with
   `git -C vendor/llama.cpp describe --tags HEAD`)
-- **Date pinned**: 2026-05-15
-- **Repo**: <https://github.com/ggerganov/llama.cpp>
-- **Reason for this pin**: most recent tagged build at the
-  time inferd M0 closed. llama.cpp tags daily build artefacts;
-  picking the most recent tag at decision time is the default
-  unless a specific feature dictates otherwise.
+- **Date pinned**: 2026-06-30
+- **Repo**: <https://github.com/ggml-org/llama.cpp> (formerly
+  `ggerganov/llama.cpp`; GitHub redirects the old URL)
+- **Reason for this pin**: bump from `b9159` (2026-05-14) to pick up
+  **Gemma 4 12B / "unified" variant** support (the dense
+  `Gemma4UnifiedForConditionalGeneration` arch — distinct from the
+  E2B/E4B `Gemma4ForConditionalGeneration` we already ran) plus ~691
+  commits of bug fixes, including several Gemma 4 correctness fixes
+  (channel-prefix-after-tool-response, tokenizer quirks, E4B MTP
+  FlashAttention). The 12B loader floor is upstream `94a220cd674`
+  (PRs #24077/#24082/#24088, 2026-06-03); `b9850` is well past it.
+  Landed on `main` for the v0.6.0 line — the v0.5.x maintenance line
+  (`release/0.5`) stays on the previous pin.
+
+### Previous pins
+
+- `b9159` / `5c0e94683` (2026-05-15 → 2026-06-30): most recent tagged
+  build at M0 close; shipped v0.1–v0.5.1. Supports Gemma 4 E2B/E4B,
+  not the 12B unified variant.
 
 **Status**: live. Submodule added in M2a. After cloning, run
 `git submodule update --init --recursive` to populate the
