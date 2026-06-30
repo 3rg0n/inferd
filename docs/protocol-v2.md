@@ -193,6 +193,7 @@ responsibility.
 | max_tokens     | `max_tokens`    | uint32                   | no       | "" |
 | stream         | `stream`        | bool                     | no       | Defaults to streaming. |
 | response_format | `response_format` | `ResponseFormat` object | no       | Structured output constraint (e.g. JSON Schema). Backends that don't support it ignore this field. |
+| thinking       | `thinking`      | bool                     | no       | Request reasoning mode. `true` asks the model to produce an internal reasoning trace, returned as `thinking` response blocks (§4.1) separate from user-visible `text`. Omitted/`false` = no thinking (default). The daemon shapes activation per engine (Gemma 4: injects `<|think|>` into the system turn); backends without reasoning support ignore it. |
 
 A parser **MUST ignore unknown top-level fields** (forward-compat).
 

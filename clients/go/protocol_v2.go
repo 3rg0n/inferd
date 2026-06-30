@@ -191,6 +191,13 @@ type RequestV2 struct {
 	MaxTokens    *uint32          `json:"max_tokens,omitempty"`
 	Stream       *bool            `json:"stream,omitempty"`
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	// Thinking requests reasoning mode: when *true, the daemon asks the
+	// model to produce an internal reasoning trace, separated onto
+	// `thinking` response blocks (not leaked into user-visible text).
+	// nil/false = no thinking (default). Backends without reasoning
+	// support ignore it. (Gemma 4: daemon injects <|think|> into the
+	// system turn.)
+	Thinking *bool `json:"thinking,omitempty"`
 }
 
 // ResponseV2Type discriminates v2 response frames on the wire.

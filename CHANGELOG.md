@@ -19,12 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the separate `thinking` block. The parser now keys off the GA tokens
   (and treats a stray `<|think|>` in output as plain text). Tool-call
   output parsing (`<|tool_call>call:NAME{…}` with `<|"|>` string delimiters)
-  was already correct and is unchanged. (Thinking *activation* — emitting
-  `<|think|>` in the system turn — is a separate gap, tracked for a
-  follow-up; this fixes the output-separation bug.)
+  was already correct and is unchanged. (The matching *activation* side
+  — emitting `<|think|>` to turn thinking on — is the new `thinking`
+  request field below.)
 
 ### Added
 
+- **Thinking (reasoning) activation** — `RequestV2.thinking` (optional
+  bool). When `true`, the daemon turns on the model's reasoning mode; for
+  Gemma 4 the renderer injects the `<|think|>` activation token into the
+  system turn (synthesising an empty system turn if the request has none),
+  per the GA prompt-format spec + the released GGUF `chat_template`. The
+  reasoning trace comes back on `thinking` response blocks (separated by
+  the parser fix above), not user-visible `text`. Omitted/`false` is
+  behaviour-preserving; additive — no `wire_version` bump. Backends
+  without reasoning support ignore it. Plumbed through proto
+  (`RequestV2`/`ResolvedV2`), the Gemma 4 renderer, and the Go client
+  (`Thinking *bool`). Documented in `protocol-v2.md` §3.2.
 - **`mmproj_image_max_tokens` config knob** for llamacpp backends
   (issue #42). Caps image tokens per image for dynamic-resolution vision
   models (Gemma 4); a higher value reduces the projector's downscaling so

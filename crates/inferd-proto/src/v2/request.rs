@@ -174,6 +174,17 @@ pub struct RequestV2 {
     /// Optional structured output constraint; daemon ignores if backend doesn't support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+
+    /// Request reasoning ("thinking") mode. When `Some(true)`, the daemon
+    /// asks the model to produce an internal reasoning trace before its
+    /// answer; that trace is separated onto `thinking` response blocks
+    /// (it does not leak into user-visible `text`). `None`/`Some(false)`
+    /// = no thinking (default, behaviour-preserving). The daemon shapes
+    /// this per engine (for llamacpp/Gemma 4 it injects the `<|think|>`
+    /// activation token into the system turn, ADR 0013); backends that
+    /// don't support reasoning ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
 }
 
 /// `RequestV2` with semantic validation completed.
@@ -210,6 +221,8 @@ pub struct ResolvedV2 {
     pub stream: Option<bool>,
     /// Structured output constraint, if set.
     pub response_format: Option<ResponseFormat>,
+    /// Reasoning ("thinking") mode request, if set.
+    pub thinking: Option<bool>,
 }
 
 impl RequestV2 {
@@ -285,6 +298,7 @@ impl RequestV2 {
             max_tokens: self.max_tokens,
             stream: self.stream,
             response_format: self.response_format,
+            thinking: self.thinking,
         })
     }
 }

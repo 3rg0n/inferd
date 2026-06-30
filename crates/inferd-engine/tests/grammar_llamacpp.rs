@@ -11,6 +11,67 @@ fn model_path() -> Option<std::path::PathBuf> {
     std::env::var_os("INFERD_TEST_MODEL_PATH").map(Into::into)
 }
 
+/// Thinking activation (#173) end-to-end on a real model: `thinking:true`
+/// must make the model emit a reasoning trace that the parser separates
+/// onto `Thinking` events — NOT leaked into user-visible `Text`. Proves
+/// the renderer `<|think|>` activation + the GA `<|channel>thought…
+/// <channel|>` parse fix work together against the real model.
+#[tokio::test]
+async fn thinking_activation_yields_thinking_events() {
+    let Some(path) = model_path() else {
+        eprintln!("[skip] INFERD_TEST_MODEL_PATH not set");
+        return;
+    };
+    let backend = LlamaCpp::new(LlamaCppConfig {
+        model_path: path,
+        n_ctx: 4096,
+        ..Default::default()
+    })
+    .expect("construct LlamaCpp");
+
+    // A small problem so the reasoning trace fits well within the token
+    // budget and the `<channel|>` closer is reached (a prompt that
+    // overflows max_tokens mid-thought would leave the block unclosed —
+    // a different, valid path, but not what this test asserts).
+    let req = RequestV2 {
+        wire_version: 1,
+        id: "think-1".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text {
+                text: "What is 6 times 7? Reason briefly, then give the answer.".into(),
+            }],
+        }],
+        max_tokens: Some(384),
+        thinking: Some(true),
+        ..Default::default()
+    };
+
+    let resolved = req.resolve().expect("resolve");
+    let mut stream = backend.generate_v2(resolved).await.expect("generate_v2");
+    let mut thinking = String::new();
+    let mut text = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev {
+            TokenEventV2::Thinking(t) => thinking.push_str(&t),
+            TokenEventV2::Text(t) => text.push_str(&t),
+            _ => {}
+        }
+    }
+    eprintln!("=== thinking ===\n{thinking}\n=== text ===\n{text}\n===");
+    // The model should have produced a separated reasoning trace, and
+    // the trace must NOT have leaked into the user-visible text (no raw
+    // channel tokens there).
+    assert!(
+        !thinking.trim().is_empty(),
+        "thinking=true should yield a separated reasoning trace; got none"
+    );
+    assert!(
+        !text.contains("<|channel>") && !text.contains("<channel|>"),
+        "raw channel tokens leaked into user-visible text: {text:?}"
+    );
+}
+
 #[tokio::test]
 async fn response_format_constrains_output_to_json() {
     let Some(path) = model_path() else {
