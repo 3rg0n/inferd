@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1-rc.2] - 2026-06-30
+
+Second RC of the 0.5.1 patch line. Adds the Gemma 4 thinking feature
+(parse + activation), the OCR image-token knob, and (from rc.1) the
+Windows arm64 tarball + CUDA-CI Ninja fix. Cut for cross-platform
+install=work + real-model verification before GA.
+
 ### Fixed
 
 - **Gemma 4 GA thinking-token parsing.** The tool/thinking parser
