@@ -1,0 +1,44 @@
+CHANGELOG.md
+  s_126aec4081f728::t_0652e9db1b6622 10-19
+  s_a1c7fc31273869::t_9019a22f54a45f 20-28
+crates/inferd-engine/cpp/CMakeLists.txt
+  s_3f706e3f4b4643::t_34fc890be2f1e0 92-101,108
+vendor/llama.cpp
+  s_126aec4081f728::t_8d65ca2a8aef04 1
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_3fe44bebe814ed 436-440
+vendor/llama.cpp.PIN.md
+  s_126aec4081f728::t_6e1e29eae56cea 9-10,12-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "1aabf5a58d18094cdd485ff6c99811e94da5a3f3",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_a1c7fc31273869": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06496eab-6822-4785-a1fe-7645d91834da",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
