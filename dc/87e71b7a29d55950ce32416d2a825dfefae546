@@ -1,0 +1,21 @@
+crates/inferd-client/README.md
+  s_3f706e3f4b4643::t_8a2c7a94190c1a 138-140
+crates/inferd-proto/README.md
+  s_3f706e3f4b4643::t_abba828480cdbf 18-22,44-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "dc87e71b7a29d55950ce32416d2a825dfefae546",
+  "prompts": {},
+  "sessions": {
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
