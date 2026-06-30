@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cargo audit` advisory RUSTSEC-2026-0185** (quinn-proto remote memory
+  exhaustion, high/7.5). Lockfile-only bump `quinn-proto 0.11.14 → 0.11.15`.
+  `quinn-proto` is locked only because `reqwest` lists it behind its `http3`
+  feature, which inferd does not enable (`default-features = false`,
+  `rustls-tls`/`json`/`stream` only) — it never compiled into any shipped
+  binary, so the rc.2 tarballs are unaffected. This clears the CI `cargo
+  audit` gate on `main` and ships a clean lockfile into the GA tag. No code
+  or feature change.
+
 ## [0.5.1-rc.2] - 2026-06-30
 
 Second RC of the 0.5.1 patch line. Adds the Gemma 4 thinking feature
