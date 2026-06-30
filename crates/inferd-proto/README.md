@@ -15,9 +15,11 @@ frame codecs with the 64 MiB per-frame cap (THREAT_MODEL F-5).
 
 - `v2::{RequestV2, ResolvedV2, MessageV2, RoleV2, ContentBlock,
   ResponseV2, ResponseBlock, Attachment, BlobDescriptor, Tool,
-  StopReasonV2, UsageV2, ErrorCodeV2, WIRE_VERSION}` — the single
-  generation surface (typed content blocks, attachments, tools,
-  in-band `wire_version`).
+  ResponseFormat, StopReasonV2, UsageV2, ErrorCodeV2, WIRE_VERSION}` —
+  the single generation surface (typed content blocks, attachments,
+  tools, in-band `wire_version`). `RequestV2.response_format`
+  (`json_schema`, v0.5.0) and `RequestV2.thinking` (reasoning
+  activation, v0.5.1) are optional, backwards-additive fields.
 - `embed::{EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask,
   EmbedUsage, EmbedErrorCode}` — the embeddings surface (ADR 0017).
 - `frame.rs`: `read_lp_frame` / `write_lp_json` / `write_lp_blob` +
@@ -39,7 +41,8 @@ embeddings as of ADR 0017. Backwards-additive changes are acceptable
 generation wire bumps the in-band `WIRE_VERSION` so a mismatch fails
 loudly rather than negotiating silently.
 
-`inferd-proto 0.4` matches `inferd-daemon 0.4` and `inferd-client 0.4`.
+`inferd-proto 0.5.x` matches `inferd-daemon 0.5.x` and
+`inferd-client 0.5.x`; the published patch versions move in lockstep.
 
 ## Usage
 
