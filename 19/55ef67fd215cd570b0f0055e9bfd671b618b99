@@ -1,0 +1,29 @@
+crates/inferd-engine/src/openai_compat/mapper.rs
+  s_9f7bfbbd9dcecb::t_d58d14fc070757 504
+crates/inferd-engine/src/bedrock_invoke/body.rs
+  s_126aec4081f728::t_f5b66b1bf7dc5a 660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "1955ef67fd215cd570b0f0055e9bfd671b618b99",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "unknown"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_9f7bfbbd9dcecb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3fc41a58-7c53-45ac-8d18-3b1a424dbe10",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
