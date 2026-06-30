@@ -1,0 +1,49 @@
+crates/inferd-engine/tests/grammar_llamacpp.rs
+  s_126aec4081f728::t_cc91593b6179ce 14-18,23-28,30-31,33-61
+  s_126aec4081f728::t_bd960e1114586d 19-22,29,32
+  s_b3196b1b1ee731::t_05c9e27e1c0dc6 62-74
+crates/inferd-engine/src/llamacpp/chat_template/gemma4.rs
+  s_126aec4081f728::t_83b3e6bcb00516 152-170,172-177,179-181,194-197,214,223,231-236
+crates/inferd-engine/tests/chat_template_gemma4.rs
+  s_126aec4081f728::t_83b3e6bcb00516 45-116
+CHANGELOG.md
+  s_3f706e3f4b4643::t_1cfe6a1b308345 22-24,28-38
+docs/protocol-v2.md
+  s_3f706e3f4b4643::t_c64c0d1c252477 196
+clients/go/protocol_v2.go
+  s_126aec4081f728::t_9d171c3443f2a4 194-200
+crates/inferd-proto/src/v2/request.rs
+  s_126aec4081f728::t_e3247c886cbd8e 177-187,224-225,301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "f9be3a1005f72c36c8c17ea81dc9f03aa1baa7e9",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_b3196b1b1ee731": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "092924b3-4b81-465f-b922-be6fbf0e6579",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
