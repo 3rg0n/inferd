@@ -19,8 +19,8 @@ path = "src/main.rs"
 # into the same CAS store the daemon reads from, and `inferdctl
 # status` consumes the admin protocol the daemon publishes.
 # Sharing the type definitions avoids drift.
-inferd-client = { path = "../inferd-client", version = "=0.5.1-rc.2" }
-inferd-daemon = { path = "../inferd-daemon", version = "=0.5.1-rc.2" }
+inferd-client = { path = "../inferd-client", version = "=0.5.1" }
+inferd-daemon = { path = "../inferd-daemon", version = "=0.5.1" }
 tokio              = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }

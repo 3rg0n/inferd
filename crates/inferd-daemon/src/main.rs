@@ -523,6 +523,12 @@ async fn build_backends(
     if cli.backend.is_none() {
         #[cfg(any(feature = "llamacpp", feature = "openai", feature = "bedrock"))]
         if let Some(cfg) = config {
+            // `mut` is only used under `feature = "llamacpp"` (the
+            // `entries.first_mut()` legacy-embed override below). With only
+            // openai/bedrock enabled the binding is read-only — silence the
+            // unused_mut warning on that feature combo without losing -D
+            // warnings elsewhere.
+            #[cfg_attr(not(feature = "llamacpp"), allow(unused_mut))]
             let mut entries = cfg.resolved_backends();
             // Issue #16: when the config is the legacy single-model
             // shape (`model:` at top level, not `backends:`),

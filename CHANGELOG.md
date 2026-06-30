@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-30
+
+GA promotion of [0.5.1-rc.2] (below) — the Gemma 4 GA thinking feature
+(parse + activation), the `mmproj_image_max_tokens` OCR knob, and the
+Windows arm64 tarball. No code changes beyond rc.2; this tag adds the
+quinn-proto lockfile bump and records cross-platform validation.
+
 ### Fixed
 
 - **`cargo audit` advisory RUSTSEC-2026-0185** (quinn-proto remote memory
@@ -17,6 +24,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary, so the rc.2 tarballs are unaffected. This clears the CI `cargo
   audit` gate on `main` and ships a clean lockfile into the GA tag. No code
   or feature change.
+
+### Validation
+
+install=work + real-model feature gates from the **signed rc.2 tarballs**
+(SHA-verified, no mock). Full matrix in `docs/v0.5-validation.md`. All
+three shipped accelerator targets green:
+
+- **Windows x64 CUDA** (RTX 5080, 2026-06-30): bundled `install.ps1`
+  upgrade-over-running 0.5.0→rc.2 → `status=ready`, `accelerator=cuda`,
+  `wire_version=1`, `thinking=true`. Text / thinking (no channel-token
+  leak) / grammar / OCR all green. Proved the `mmproj_image_max_tokens`
+  knob is wired into libmtmd (sub-floor value shifts the pixel budget →
+  loud mtmd failure; valid values work).
+- **Linux x64 CUDA** (WSL Ubuntu, RTX 5080, 2026-06-30): stage + flatten
+  `backends/*` → daemon on UDS → same four gates byte-identical green.
+- **macOS arm64 Metal** (Apple Si, 2026-06-30, #46): `install-launchagent.sh`
+  → `accelerator=metal`, `device=MTL0 vram=11.8 GiB`. Thinking (no leak),
+  grammar, malformed-schema-no-crash, and `v2_image_attachment_round_trips`
+  multimodal all green (~161s, no panic). Real embed 256-dim.
+
+A background-mode log-visibility rough edge for sub-floor
+`mmproj_image_max_tokens` values is tracked in #47 (non-blocker — fails
+loudly to stderr; no realistic operator config hits it).
 
 ## [0.5.1-rc.2] - 2026-06-30
 
