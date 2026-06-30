@@ -43,6 +43,78 @@ What's the temperature in London?<turn|>\n\
 }
 
 #[test]
+fn thinking_injects_think_token_into_existing_system_turn() {
+    // thinking=true with a system message: `<|think|>` leads the system
+    // turn, before the system text (GA activation, ADR 0013).
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![
+            MessageV2 {
+                role: RoleV2::System,
+                content: vec![ContentBlock::Text {
+                    text: "You are a helpful assistant.".into(),
+                }],
+            },
+            MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text { text: "hi".into() }],
+            },
+        ],
+        thinking: Some(true),
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    let expected = "<bos>\
+<|turn>system\n\
+<|think|>You are a helpful assistant.<turn|>\n\
+<|turn>user\n\
+hi<turn|>\n\
+<|turn>model\n";
+    assert_eq!(out, expected, "got:\n{out}");
+}
+
+#[test]
+fn thinking_synthesizes_system_turn_when_none_present() {
+    // thinking=true with NO system message: synthesise an empty system
+    // turn carrying just `<|think|>` before the first message.
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
+        }],
+        thinking: Some(true),
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    let expected = "<bos>\
+<|turn>system\n\
+<|think|><turn|>\n\
+<|turn>user\n\
+hi<turn|>\n\
+<|turn>model\n";
+    assert_eq!(out, expected, "got:\n{out}");
+}
+
+#[test]
+fn no_thinking_is_unchanged() {
+    // thinking unset → no `<|think|>` anywhere (behaviour-preserving).
+    let req = RequestV2 {
+        id: "x".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
+        }],
+        ..Default::default()
+    };
+    let (out, _) = render(req);
+    assert!(
+        !out.contains("<|think|>"),
+        "no thinking requested; got:\n{out}"
+    );
+}
+
+#[test]
 fn system_user_assistant_three_turn() {
     let req = RequestV2 {
         id: "x".into(),

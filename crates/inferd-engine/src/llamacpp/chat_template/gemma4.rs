@@ -149,18 +149,36 @@ impl Gemma4Renderer {
         // BOS token at tokenize time; we emit the literal string.
         prompt.push_str("<bos>");
 
+        // Thinking ("reasoning") activation (ADR 0013): when the request
+        // asks for it, Gemma 4 is turned on by placing the `<|think|>`
+        // token in the system turn, consolidated with any other system
+        // instructions / tool declarations (per the GA prompt-format spec
+        // + the released GGUF chat_template). The model then emits its
+        // reasoning as `<|channel>thought…<channel|>`, which the parser
+        // separates onto `thinking` response blocks.
+        let thinking = resolved.thinking.unwrap_or(false);
+
+        // Does the conversation already open with a system message? If so
+        // `<|think|>` is injected into it (render_message). If not — but
+        // thinking and/or tools need a system turn — we synthesise one
+        // before the first message.
+        let has_leading_system = resolved
+            .messages
+            .first()
+            .is_some_and(|m| m.role == RoleV2::System);
+        let needs_synth_system = !has_leading_system && (thinking || !resolved.tools.is_empty());
+
         for (mi, msg) in resolved.messages.iter().enumerate() {
-            // First system message is the natural place to embed
-            // tool declarations — matches the reference output
-            // verbatim. If the request has tools[] but no system
-            // message, we synthesise an empty-content system turn
-            // *before* the first message so the tool block has a
-            // home; this is what the upstream chat template does
-            // (see line 121 of `text.function.calling.with.gemma.4.md`
-            // — tool declarations appear inside an empty system turn
-            // when the user didn't supply one).
-            if mi == 0 && !resolved.tools.is_empty() && msg.role != RoleV2::System {
+            // Synthesise a system turn before the first message when the
+            // caller supplied none but we need one for `<|think|>` and/or
+            // tool declarations. This mirrors the upstream chat template
+            // (tool declarations live in an empty system turn when the
+            // user didn't supply one); `<|think|>` joins it at the front.
+            if mi == 0 && needs_synth_system {
                 prompt.push_str("<|turn>system\n");
+                if thinking {
+                    prompt.push_str("<|think|>");
+                }
                 render_tool_declarations(&mut prompt, &resolved.tools);
                 prompt.push_str("<turn|>\n");
             }
@@ -173,6 +191,10 @@ impl Gemma4Renderer {
                 &mut attachments,
                 &resolved.tools,
                 &tool_name_by_call_id,
+                // Inject `<|think|>` into the FIRST message only when it's
+                // the system turn (otherwise it was handled by the
+                // synthesised turn above).
+                thinking && mi == 0 && msg.role == RoleV2::System,
             )?;
         }
 
@@ -189,6 +211,7 @@ impl Gemma4Renderer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_message<'a>(
     out: &mut String,
     mi: usize,
@@ -197,12 +220,19 @@ fn render_message<'a>(
     attachments: &mut Vec<&'a Attachment>,
     tools: &[Tool],
     tool_name_by_call_id: &std::collections::HashMap<&'a ToolCallId, &'a str>,
+    inject_think: bool,
 ) -> Result<(), Gemma4RenderError> {
     out.push_str(role_open_tag(msg.role));
     out.push('\n');
 
     // System turn embeds tool declarations after any content.
     let is_system = msg.role == RoleV2::System;
+
+    // Thinking activation: `<|think|>` leads the system turn, before any
+    // system text or tool declarations (matches the GA chat_template).
+    if inject_think && is_system {
+        out.push_str("<|think|>");
+    }
 
     for (bi, block) in msg.content.iter().enumerate() {
         match block {
