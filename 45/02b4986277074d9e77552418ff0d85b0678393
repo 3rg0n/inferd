@@ -1,0 +1,21 @@
+docs/benchmarks/gemma4-e4b-vs-12b.md
+  s_126aec4081f728::t_7e38fb19b5e561 19-74,76
+  s_126aec4081f728::t_2e28250bc7b48b 1-18
+  s_126aec4081f728::t_d027a0290dff91 75,77-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4502b4986277074d9e77552418ff0d85b0678393",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
