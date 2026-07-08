@@ -16,20 +16,34 @@ both runs — the **only variable is the model**.
   warmup discarded, decode tok/s measured over tokens-after-first.
   Harness: `C:/dev/tmp/inferd-12b-bench` (Go, v2 wire, `DialPipe`).
 
-## Results (RTX 5080, 16302 MiB VRAM)
+## Results (RTX 5080, 16302 MiB VRAM; Ryzen host, 63.6 GiB RAM)
 
-| Metric | **E4B** @8k | **12B** @8k | **12B** @32k |
-|---|---|---|---|
-| Decode throughput (steady) | **~156–160 tok/s** | **~91–94 tok/s** | **~53–54 tok/s** |
-| TTFT (warm) | ~16–27 ms | ~67–80 ms | ~690 ms |
-| VRAM used (incl. ~2.8 GB idle floor) | **8630 MiB** | **14577 MiB** | **15630 MiB** |
-| Free VRAM after load | 7348 MiB | 1401 MiB | **348 MiB** |
-| Daemon host RSS (working set) | 4386 MiB | 8324 MiB | — |
-| Daemon private mem | 7701 MiB | 13001 MiB | — |
+| Metric | **E4B** @8k CUDA | **12B** @8k CUDA | **12B** @32k CUDA | **12B** @8k **CPU** |
+|---|---|---|---|---|
+| Decode throughput (steady) | **~158 tok/s** | **~92 tok/s** | **~53 tok/s** | **~5.5 tok/s** |
+| TTFT (warm) | ~20 ms | ~75 ms | ~690 ms | **~3300 ms** |
+| VRAM used (incl. ~2.3 GB idle floor) | 8630 MiB | 14577 MiB | 15630 MiB | ~4133 MiB* |
+| Free VRAM after load | 7348 MiB | 1401 MiB | 348 MiB | ~11.8 GB |
+| Daemon host RSS (working set) | 4386 MiB | 8324 MiB | — | **10215 MiB** |
+| Weights reside in | VRAM | VRAM | VRAM | **host RAM** |
 
-Note: 12B @32k VRAM/tok-s measured with a **12B-only** config (see the
-embed regression below); E4B and 12B@8k configs also had the
-`embeddinggemma-300m` backend loaded.
+\* CPU run: `INFERD_FORCE_BACKEND=cpu` — all layers on CPU (verified in
+`load_tensors: layer N assigned to device CPU`). The ~4 GB VRAM is just
+CUDA-context init overhead from the loaded module; **no model weights on
+GPU**. The memory cost moves entirely to host RAM (10.2 GB RSS).
+
+Note: 12B @32k CUDA and 12B CPU measured with a **12B-only** config;
+E4B and 12B@8k CUDA also had `embeddinggemma-300m` co-resident.
+
+### The accelerator axis (12B, same n_ctx=8192, same b9850 build)
+
+| Accelerator | tok/s | vs CUDA | TTFT | memory |
+|---|---|---|---|---|
+| CUDA (RTX 5080) | ~92 | 1× | ~75 ms | 14.6 GB VRAM |
+| CPU | ~5.5 | **~17× slower** | ~3300 ms | 10.2 GB host RAM |
+
+CPU 12B is ~29× slower than E4B-on-CUDA. Usable for batch / non-
+interactive work; not for interactive latency.
 
 ### Per-case detail (b9850, CUDA)
 
@@ -61,15 +75,30 @@ sufficient; `n_ctx` cap ~32k (per-backend configurable — already is).
    compute buffers). So "bigger is better" isn't free — 12B@32k is
    ~3× slower per token than E4B@8k.
 
-3. **Suggested refined rule (for the future auto-select ADR):**
-   - Pick the model+context that **fits available accelerator memory
-     with headroom** (leave ≥1 GB VRAM free for compute buffers +
-     any co-resident backend), not by host RAM alone.
-   - On a 16 GB discrete GPU: E4B (any ctx up to ~32k) or 12B@≤8k with
-     an embed backend co-resident; 12B@32k only if 12B is the *sole*
-     backend on that GPU.
-   - Mac unified memory sidesteps the discrete-VRAM ceiling (model +
-     KV share the whole pool) — 12B@32k viable on a 32 GB Mac.
+3. **CPU is a viable *capacity* fallback but not a *latency* one.**
+   12B on CPU runs (~5.5 tok/s) and costs ~10 GB **host RAM** instead of
+   VRAM — so a no-GPU / small-GPU box with plenty of RAM *can* serve 12B,
+   just ~17× slower than CUDA and ~29× slower than E4B-on-CUDA, with
+   multi-second TTFT. This is the tier the ">31 GB host RAM" rule
+   actually maps to: when there's no accelerator that fits the model,
+   host RAM decides feasibility and the user accepts CPU-speed latency.
+   For interactive use on such a box, E4B-on-CPU would be the saner pick
+   (proportionally ~3× faster than 12B-on-CPU by the E4B/12B CUDA ratio).
+
+4. **Suggested refined rule (for the future auto-select ADR):**
+   - **First** pick the accelerator (ADR 0019 cascade). **Then** pick the
+     largest model+context that **fits that accelerator's memory with
+     headroom** (≥1 GB free for compute buffers + co-resident backends).
+   - GPU memory (VRAM), not host RAM, gates the GPU tiers. Host RAM gates
+     only the CPU-fallback tier.
+   - On a 16 GB discrete GPU: E4B (any ctx up to ~32k) or 12B@≤8k with an
+     embed backend co-resident; 12B@32k only if 12B is the *sole* backend
+     on that GPU.
+   - No/small GPU + ample host RAM: 12B-on-CPU is *possible* (capacity),
+     but prefer E4B for interactive latency; expose the tradeoff.
+   - Mac unified memory sidesteps the discrete-VRAM ceiling (model + KV
+     share the whole pool) — 12B@32k viable on a 32 GB Mac, at Metal
+     speed not CPU speed.
    - Keep `n_ctx` a first-class input to the decision, not fixed.
 
 ## Note: misleading OOM error (NOT a b9850 embed regression)
