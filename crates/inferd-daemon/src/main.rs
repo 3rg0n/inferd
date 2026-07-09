@@ -105,6 +105,15 @@ async fn main() -> anyhow::Result<()> {
     // permitted: the daemon runs CLI-only against the mock backend.
     let config = load_config_file(cli.config.as_deref());
 
+    // ADR 0023: boot-time model auto-selection. When the config opts in
+    // (`model_autoselect: "auto"`) and has not pinned a generation
+    // backend, pick the Gemma 4 variant by the chosen accelerator's
+    // total memory and rewrite the (in-memory) backend list. No-op
+    // otherwise. Requires the dl-backends runtime accelerator probe;
+    // without it there is no memory query, so auto-select degrades to
+    // E4B (the safe default) via `apply(None, None)`.
+    let config = apply_model_autoselect(config);
+
     // Resolve the generation transport (ADR 0021: one generation
     // socket). CLI flags win; else the platform-default socket/pipe
     // so a stock install needs no flag. TCP is no longer supported
@@ -450,6 +459,58 @@ fn load_config_file(cli_path: Option<&std::path::Path>) -> Option<ConfigFile> {
             None
         }
     }
+}
+
+/// Apply ADR 0023 boot-time model auto-selection to the loaded config.
+///
+/// When `model_autoselect: "auto"` and no generation backend is pinned,
+/// picks the Gemma 4 variant from the chosen accelerator's *total*
+/// memory (`>= model_autoselect_min_vram_gib` GiB → 12B, else E4B) and
+/// decides embed placement (GPU, or CPU under memory pressure) from
+/// *free* memory. No-op when auto-select is off or a generation backend
+/// is explicitly configured.
+///
+/// The accelerator memory query needs the `dl-backends` runtime probe.
+/// Without that feature (static single-accelerator builds) there is no
+/// query, so selection falls to E4B — the safe default — via `None`
+/// memory inputs.
+fn apply_model_autoselect(config: Option<ConfigFile>) -> Option<ConfigFile> {
+    let mut cfg = config?;
+
+    // Query accelerator memory (dl-backends only). Probe first so the
+    // ggml backends are loaded before the memory read; the probe is
+    // cached and re-run harmlessly by backend construction later.
+    #[cfg(feature = "dl-backends")]
+    let (total, free) = {
+        use inferd_engine::llamacpp::{probe_accelerator, query_device_memory_for_kind};
+        let kind = probe_accelerator();
+        match query_device_memory_for_kind(kind) {
+            Some(mem) => (Some(mem.total), mem.free),
+            None => (None, None),
+        }
+    };
+    #[cfg(not(feature = "dl-backends"))]
+    let (total, free): (Option<u64>, Option<u64>) = (None, None);
+
+    match inferd_daemon::autoselect::apply(&mut cfg, total, free) {
+        Some(outcome) => {
+            info!(
+                tier = outcome.tier.as_str(),
+                embed_on_cpu = outcome.embed_forced_cpu,
+                total_vram_bytes = ?total,
+                free_vram_bytes = ?free,
+                "ADR 0023 model auto-select: warming {} ({}); embed on {}",
+                outcome.tier.as_str(),
+                if total.is_some() { "accelerator memory probed" } else { "no accelerator memory — default tier" },
+                if outcome.embed_forced_cpu { "CPU (insufficient accelerator memory for gen+embed)" } else { "accelerator" },
+            );
+        }
+        None => {
+            // Off, or an explicit generation backend is pinned — nothing
+            // to do. Silent to avoid noise on the common (off) path.
+        }
+    }
+    Some(cfg)
 }
 
 /// Resolved generation transport. CLI flags win; absent both, the
@@ -959,6 +1020,57 @@ async fn build_llamacpp_entry(
     } else {
         (None, None)
     };
+
+    // ADR 0023 pre-load fit check: if this entry offloads to a GPU,
+    // compare a conservative VRAM estimate against the accelerator's
+    // *free* memory now and fail with a CLEAR, actionable message rather
+    // than letting libllama surface a cryptic GPU-OOM (it reports
+    // out-of-VRAM as `invalid vector subscript` /
+    // `llama_model_load_from_file returned null`). CPU entries
+    // (`n_gpu_layers == 0`) and static builds are exempt.
+    #[cfg(feature = "dl-backends")]
+    if n_gpu_layers != 0 {
+        use inferd_daemon::autoselect::{Tier, estimate_embed_vram_bytes, estimate_gen_vram_bytes};
+        use inferd_engine::llamacpp::{probe_accelerator, query_device_memory_for_kind};
+
+        let kind = probe_accelerator();
+        // Estimate by model size class + whether this entry is embed.
+        // 12B if the pinned model is the 7 GB+ variant.
+        let est = if entry.embed {
+            estimate_embed_vram_bytes()
+        } else {
+            let big = entry
+                .model
+                .size_bytes
+                .map(|b| b >= 7_000_000_000)
+                .unwrap_or(false);
+            let tier = if big { Tier::B12 } else { Tier::E4b };
+            estimate_gen_vram_bytes(tier, n_ctx, mmproj_path.is_some())
+        };
+        const FIT_HEADROOM: u64 = 512 * 1024 * 1024; // 0.5 GiB
+        if let Some(mem) = query_device_memory_for_kind(kind)
+            && let Some(free) = mem.free
+            && free < est.saturating_add(FIT_HEADROOM)
+        {
+            let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
+            let suggested_ctx = if n_ctx > 8192 { 8192 } else { 4096 };
+            anyhow::bail!(
+                "insufficient accelerator memory for backend '{}': needs ~{:.1} GiB \
+                 on {} but only {:.1} GiB is free right now. Remedies: reduce \
+                 `n_ctx` (e.g. {} → {}), use the smaller Gemma 4 E4B model, disable \
+                 embed on this backend, close other GPU apps, or run \
+                 `INFERD_FORCE_BACKEND=cpu` (slower). \
+                 (inferd checks this before load so you don't get a cryptic \
+                 llama.cpp out-of-memory error.)",
+                entry.name,
+                gib(est),
+                kind.as_str(),
+                gib(free),
+                n_ctx,
+                suggested_ctx,
+            );
+        }
+    }
 
     broadcaster.publish(StatusEvent::LoadingModel {
         phase: LoadPhase::Mmap {

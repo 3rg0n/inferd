@@ -13,6 +13,7 @@
 #![warn(missing_docs, rust_2018_idioms)]
 
 pub mod admin;
+pub mod autoselect;
 pub mod config;
 pub mod config_file;
 pub mod endpoint;
