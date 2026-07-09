@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Boot-time model auto-selection by accelerator memory**
+  ([ADR 0023](docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md)).
+  Opt in with `model_autoselect: "auto"` in `~/.inferd/config.json`: at
+  boot the daemon picks the Gemma 4 generation variant from the chosen
+  accelerator's **total** memory — `>= model_autoselect_min_vram_gib`
+  (default 20 GiB) → 12B, else E4B (4B). With no `backends:` listed it
+  synthesises the generation + embed backends from pinned defaults
+  (zero-config); an explicit `backends:` generation entry always
+  overrides. **Free** memory gates a pre-load fit check that emits a
+  clear "insufficient accelerator memory" error (with remedies) instead
+  of llama.cpp's cryptic GPU-OOM. The embed model co-locates on the
+  accelerator unless memory is tight, then falls back to CPU
+  (`n_gpu_layers = 0`) rather than failing to load. Default is `"off"` —
+  fully backwards-compatible; existing pinned configs are unchanged. No
+  wire change; one-warm-model (ADR 0012) preserved. Threshold backed by
+  `docs/benchmarks/gemma4-e4b-vs-12b.md`.
+
 ### Changed
 
 - **Bumped vendored llama.cpp `b9159` → `b9850`** (`5c0e94683` →
