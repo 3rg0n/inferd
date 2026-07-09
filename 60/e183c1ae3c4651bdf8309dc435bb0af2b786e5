@@ -1,0 +1,19 @@
+crates/inferd-daemon/src/autoselect.rs
+  s_126aec4081f728::t_eac28b1d9dca60 399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "60e183c1ae3c4651bdf8309dc435bb0af2b786e5",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "unknown"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
