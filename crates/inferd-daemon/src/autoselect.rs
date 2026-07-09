@@ -396,7 +396,7 @@ mod tests {
         let b12 = estimate_gen_vram_bytes(Tier::B12, 8192, true);
         assert!(b12 > e4b);
         // 12B@8k should land in the ~12-13 GB range (11.8 base + 1 mmproj).
-        assert!(b12 >= 12 * GIB && b12 <= 14 * GIB, "12b@8k est = {b12}");
+        assert!((12 * GIB..=14 * GIB).contains(&b12), "12b@8k est = {b12}");
     }
 
     #[test]
