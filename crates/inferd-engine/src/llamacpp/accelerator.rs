@@ -34,6 +34,12 @@ use std::sync::OnceLock;
 pub(super) struct DeviceDetails {
     pub name: Option<String>,
     pub total_bytes: Option<u64>,
+    /// Free device memory at probe time. Unlike `total_bytes` (stable,
+    /// used for the admin surface + the ADR 0023 model-tier gate), this
+    /// fluctuates second-to-second, so it is used only for the
+    /// pre-load fit check (ADR 0023) and never cached on the admin
+    /// surface. `None` when the backend reports 0 (unknown).
+    pub free_bytes: Option<u64>,
 }
 
 /// Cached probe result. Probing is idempotent and `ggml_backend_load_all`
@@ -46,7 +52,7 @@ static PROBE: OnceLock<AcceleratorKind> = OnceLock::new();
 /// enumeration; subsequent callers get the cached value without
 /// re-probing. Honors `INFERD_FORCE_BACKEND` for operator-driven
 /// override.
-pub(super) fn probe_accelerator() -> AcceleratorKind {
+pub fn probe_accelerator() -> AcceleratorKind {
     *PROBE.get_or_init(probe_accelerator_uncached)
 }
 
@@ -191,10 +197,39 @@ pub(super) fn probe_device_for_kind(kind: AcceleratorKind) -> DeviceDetails {
         // Matching device. Read name + VRAM. Either may be missing on
         // a given backend; treat null/empty as None.
         let name = read_dev_name(dev);
-        let total_bytes = read_dev_total_memory(dev);
-        return DeviceDetails { name, total_bytes };
+        let (total_bytes, free_bytes) = read_dev_memory(dev);
+        return DeviceDetails {
+            name,
+            total_bytes,
+            free_bytes,
+        };
     }
     DeviceDetails::default()
+}
+
+/// Query total + free memory for the strongest device matching `kind`.
+///
+/// Public entry point for the ADR 0023 model-tier selection: the daemon
+/// gates the tier on `total` (stable) and the pre-load fit check on
+/// `free` (current headroom). Returns `None` for `Cpu` (its "device"
+/// reports host RAM, not accelerator memory) or when no matching device
+/// exposes memory. Must be called after `probe_accelerator()` so the
+/// ggml backends are loaded.
+pub fn query_device_memory_for_kind(kind: AcceleratorKind) -> Option<DeviceMemory> {
+    let details = probe_device_for_kind(kind);
+    match (details.total_bytes, details.free_bytes) {
+        (Some(total), free) => Some(DeviceMemory { total, free }),
+        _ => None,
+    }
+}
+
+/// Total + free device memory in bytes, for ADR 0023 selection.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceMemory {
+    /// Total device memory in bytes (stable; gates the ADR 0023 tier).
+    pub total: u64,
+    /// Free at probe time; fluctuates. `None` if the backend reports 0.
+    pub free: Option<u64>,
 }
 
 /// Read `ggml_backend_dev_name`, returning `None` for null / empty /
@@ -216,19 +251,23 @@ fn read_dev_name(dev: *mut ffi::ggml_backend_device) -> Option<String> {
     }
 }
 
-/// Read `ggml_backend_dev_memory(dev, &free, &total)` and return the
-/// `total` value. Drops the free value — it changes second-to-second
-/// and reporting it would force the admin surface to either lie or
-/// re-probe on every emit (see [`crate::backend::AcceleratorInfo`]).
-/// Returns `None` if the backend reports zero (some backends use 0 to
-/// mean "unknown").
-fn read_dev_total_memory(dev: *mut ffi::ggml_backend_device) -> Option<u64> {
+/// Read `ggml_backend_dev_memory(dev, &free, &total)` and return
+/// `(total, free)`, each `None` if the backend reports 0 ("unknown").
+///
+/// `total` is stable and feeds the admin surface + the ADR 0023 tier
+/// gate. `free` fluctuates second-to-second, so it is NOT surfaced on
+/// the admin status (which would force a lie-or-re-probe on every emit,
+/// see [`crate::backend::AcceleratorInfo`]); it is used only for the
+/// ADR 0023 pre-load fit check, read fresh at that moment.
+fn read_dev_memory(dev: *mut ffi::ggml_backend_device) -> (Option<u64>, Option<u64>) {
     let mut free: usize = 0;
     let mut total: usize = 0;
     // SAFETY: FFI; dev validated by caller; both out pointers are
     // local stack slots valid for the call.
     unsafe { ffi::ggml_backend_dev_memory(dev, &mut free, &mut total) };
-    if total == 0 { None } else { Some(total as u64) }
+    let total = if total == 0 { None } else { Some(total as u64) };
+    let free = if free == 0 { None } else { Some(free as u64) };
+    (total, free)
 }
 
 /// Map a `ggml_backend_reg_name` string to the matching

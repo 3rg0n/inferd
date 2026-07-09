@@ -138,6 +138,25 @@ pub struct ConfigFile {
     #[serde(default)]
     pub backends: Option<Vec<BackendEntry>>,
 
+    /// Boot-time model auto-selection (ADR 0023). When `"auto"`, the
+    /// daemon picks which Gemma 4 generation variant to warm based on
+    /// the chosen accelerator's total memory: `>= model_autoselect_min_vram_gib`
+    /// → 12B, else E4B. Requires no `backends:` (defaults are
+    /// synthesised) or is a no-op when `backends:` explicitly pins a
+    /// generation model. Default `"off"` — behaviour-preserving.
+    #[serde(default)]
+    pub model_autoselect: ModelAutoselect,
+
+    /// Total accelerator-memory threshold (GiB) at or above which
+    /// auto-select warms the 12B model instead of E4B (ADR 0023).
+    /// Default 20 — above 12B's raw ~14.6 GB @ n_ctx=8192 need, leaving
+    /// headroom for desktop overhead + a co-resident embed model, so
+    /// 16 GB cards get E4B and 20/24 GB cards get 12B. Gates on *total*
+    /// (stable), not *free* (fluctuates). Only consulted when
+    /// `model_autoselect = "auto"`.
+    #[serde(default = "default_autoselect_min_vram_gib")]
+    pub model_autoselect_min_vram_gib: u32,
+
     /// Optional listener overrides. Default behaviour is unchanged:
     /// the operator picks a transport via `--tcp` / `--uds` /
     /// `--pipe` on the CLI. When `listen:` is present **and** the
@@ -376,6 +395,25 @@ fn default_embed_n_ctx() -> u32 {
     2048
 }
 
+fn default_autoselect_min_vram_gib() -> u32 {
+    20
+}
+
+/// Boot-time model auto-selection mode (ADR 0023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelAutoselect {
+    /// No auto-selection — `backends:` is used verbatim (legacy
+    /// behaviour). Default.
+    #[default]
+    Off,
+    /// Pick the Gemma 4 generation variant by accelerator total memory
+    /// (>= `model_autoselect_min_vram_gib` GiB → 12B, else E4B),
+    /// synthesising default model pins when the generation backend is
+    /// not explicitly listed.
+    Auto,
+}
+
 fn default_openai_timeout_secs() -> u64 {
     300
 }
@@ -440,6 +478,12 @@ pub fn default_first_boot_config() -> ConfigFile {
         n_ctx: default_n_ctx(),
         n_gpu_layers: default_gpu_layers,
         admin_addr: None,
+        // First-boot default keeps the explicit two-backend list and
+        // auto-select off — behaviour-preserving. Operators opt into
+        // ADR 0023 by setting model_autoselect: "auto" (and removing
+        // the pinned generation backend).
+        model_autoselect: ModelAutoselect::Off,
+        model_autoselect_min_vram_gib: default_autoselect_min_vram_gib(),
         backends: Some(vec![
             BackendEntry::Llamacpp(LlamacppEntry {
                 name: "gemma-4-e4b".into(),
@@ -610,10 +654,12 @@ impl ConfigFile {
                         .into(),
                 ));
             }
-            (None, None) => {
+            (None, None) if self.model_autoselect != ModelAutoselect::Auto => {
                 return Err(ConfigError::Invalid(
                     "config: must specify either `model` (legacy single-backend) \
-                     or `backends` (multi-backend list)"
+                     or `backends` (multi-backend list) — unless \
+                     `model_autoselect: \"auto\"` is set, which synthesises the \
+                     generation + embed backends at boot (ADR 0023)"
                         .into(),
                 ));
             }
@@ -626,9 +672,11 @@ impl ConfigFile {
             validate_model_config(m)?;
         }
         if let Some(list) = &self.backends {
-            if list.is_empty() {
+            // An empty list is allowed only under model_autoselect: auto,
+            // which synthesises the backends at boot (ADR 0023).
+            if list.is_empty() && self.model_autoselect != ModelAutoselect::Auto {
                 return Err(ConfigError::Invalid(
-                    "backends list must not be empty".into(),
+                    "backends list must not be empty (unless model_autoselect: \"auto\")".into(),
                 ));
             }
             let mut seen = std::collections::HashSet::with_capacity(list.len());
@@ -1093,6 +1141,39 @@ mod tests {
             ConfigError::Invalid(msg) => assert!(msg.contains("must not be empty")),
             other => panic!("expected Invalid, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn autoselect_allows_empty_backends_list() {
+        // ADR 0023: model_autoselect:"auto" synthesises backends at
+        // boot, so an empty list must parse (validation would otherwise
+        // reject it before auto-select runs).
+        let json = r#"{ "model_autoselect": "auto", "backends": [] }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).expect("auto + empty backends must be valid");
+        assert_eq!(cfg.model_autoselect, ModelAutoselect::Auto);
+    }
+
+    #[test]
+    fn autoselect_allows_neither_model_nor_backends() {
+        // ADR 0023: auto with no backends field at all is also valid —
+        // fully zero-config.
+        let json = r#"{ "model_autoselect": "auto" }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).expect("auto with no backends must be valid");
+        assert_eq!(cfg.model_autoselect, ModelAutoselect::Auto);
+    }
+
+    #[test]
+    fn autoselect_defaults_off_when_absent() {
+        // Backwards-compat: a config without the field is Off.
+        let json = r#"{ "backends": [ { "kind": "llamacpp", "name": "g",
+            "model": { "name": "g",
+                "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
+                "source_url": "https://x/y.gguf" } } ] }"#;
+        let f = write_config(json);
+        let cfg = ConfigFile::load(f.path()).expect("valid");
+        assert_eq!(cfg.model_autoselect, ModelAutoselect::Off);
     }
 
     #[test]

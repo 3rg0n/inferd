@@ -27,6 +27,7 @@ implementation choices aren't.
 | [0020](0020-inferd-http-bridge-is-a-separate-process.md) | The HTTP/OpenAI-compat bridge is a separate process, not in the daemon (two surfaces: OpenAI-compat + native-over-network) | Accepted; open question (TCP home) resolved by 0022 |
 | [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) | Unify on one generation API; length-prefixed type-tagged framing, raw BLOB media, in-band `wire_version` (v0.4) | Accepted |
 | [0022](0022-no-inbound-network-listener-deprecate-loopback-tcp.md) | No inbound network listener in the daemon — deprecate loopback TCP (v0.4.0), remove in v0.5.0 | Accepted |
+| [0023](0023-boot-time-model-auto-selection-by-accelerator-memory.md) | Boot-time model auto-selection by accelerator memory (total VRAM ≥20 GiB → Gemma 4 12B, else E4B; embed falls back to CPU under memory pressure) | Accepted |
 
 ## Writing a new ADR
 
