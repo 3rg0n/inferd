@@ -1,0 +1,41 @@
+crates/inferd-daemon/src/autoselect.rs
+  s_126aec4081f728::t_1ab5e9ca6ea66c 308-310,354-357,359-362,370
+  s_126aec4081f728::t_db7de15db3f8de 1-21,23,25-28,30-81,83-189,193-207,209-212,214-307,311-353,358,363-369,371-408
+  s_126aec4081f728::t_9737887d268a78 82
+  s_126aec4081f728::t_e7dff1eabdd6eb 190-192
+  s_126aec4081f728::t_e3d5f8d32345b5 22,24,29
+  s_126aec4081f728::t_c2bd060f31803f 208
+  s_126aec4081f728::t_c8fcc9884ac381 213
+crates/inferd-engine/src/llamacpp/accelerator.rs
+  s_126aec4081f728::t_32929a4130c19e 37-38
+  s_126aec4081f728::t_fd6d5871a63d90 39-42
+  s_126aec4081f728::t_f9ae2d8c812b36 55,200-205,210-234,254-262,268-270
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_1ab5e9ca6ea66c 108-116,464-515,1024-1074
+docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md
+  s_126aec4081f728::t_c9cdbd5d398493 1-128
+crates/inferd-daemon/src/lib.rs
+  s_126aec4081f728::t_9962a9345feb59 16
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_126aec4081f728::t_074875097fe966 13,21-22
+docs/adr/README.md
+  s_126aec4081f728::t_31f8fb43d9c864 30
+crates/inferd-daemon/src/config_file.rs
+  s_126aec4081f728::t_9f210762d3ac43 141-159,398-416,481-486,657,660-662,675-677,679,1146-1178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f2da7472f7772ea0a876792b03f4b0869ce5c041",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
