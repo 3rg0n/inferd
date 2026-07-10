@@ -28,7 +28,7 @@ implementation choices aren't.
 | [0021](0021-unified-v2-wire-length-prefixed-blob-framing.md) | Unify on one generation API; length-prefixed type-tagged framing, raw BLOB media, in-band `wire_version` (v0.4) | Accepted |
 | [0022](0022-no-inbound-network-listener-deprecate-loopback-tcp.md) | No inbound network listener in the daemon — deprecate loopback TCP (v0.4.0), remove in v0.5.0 | Accepted |
 | [0023](0023-boot-time-model-auto-selection-by-accelerator-memory.md) | Boot-time model auto-selection by accelerator memory (total VRAM ≥20 GiB → Gemma 4 12B, else E4B; embed falls back to CPU under memory pressure) | Accepted |
-| [0024](0024-wsl-relay-for-containerized-middleware.md) | WSL relay: containerized middleware reaches a Windows-host daemon over a Unix socket (first-party pipe↔UDS relay, same-user DACL trust, no duplicate daemon, no TCP) | Accepted |
+| [0024](0024-wsl-relay-for-containerized-middleware.md) | Crossing a VM/container boundary is the consumer's concern — inferd ships no cross-VM bridge (consumer-owned bridging preserves app-mapping fidelity; no supported no-TCP cross-VM transport exists on WSL2; recommend daemon-per-memory-domain) | Accepted |
 
 ## Writing a new ADR
 

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Consuming inferd across a VM/container boundary**
+  (`docs/consuming-across-a-boundary.md`, [ADR 0024](docs/adr/0024-wsl-relay-for-containerized-middleware.md)).
+  inferd ships no cross-VM bridge: reaching the daemon's IPC endpoint from
+  another memory domain (e.g. WSL2/container middleware → Windows-host
+  daemon) is the consumer's concern. Consumer-owned bridging preserves
+  per-app identity/mapping fidelity (a shared relay would collapse every
+  caller to one identity at the daemon's peer-cred boundary). Documents the
+  validated options (co-locate the daemon — recommended, zero compromise;
+  `inferd-http` bridge; localhost-forwarding relay) and the proven dead
+  ends (interop-stdio ~512 KiB bulk cap, third-party Hyper-V sockets are
+  privilege-walled on WSL2). Records that no supported + no-TCP + cross-VM
+  bulk transport exists on WSL2.
+
 ### Added
 
 - **Boot-time model auto-selection by accelerator memory**
