@@ -1,0 +1,75 @@
+crates/inferd-http/src/error.rs
+  s_126aec4081f728::t_d727daa4e52726 5
+  s_126aec4081f728::t_b50ff527d29f36 1-4,6-71
+crates/inferd-http/README.md
+  s_126aec4081f728::t_3988fd985f9360 1-71
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_f9ca69ebcdcd16 57-58
+  s_126aec4081f728::t_aa4e4fc690b094 47
+crates/inferd-http/src/translate.rs
+  s_126aec4081f728::t_d727daa4e52726 376-378
+  s_126aec4081f728::t_e33f269f1dc972 32-34
+  s_126aec4081f728::t_cb3df6703c3b93 13-14
+  s_126aec4081f728::t_1158ad75a08f89 626-627
+  s_126aec4081f728::t_36bc031797d5c0 262-273,277-282,294-302,305-320,325,333,344-368,370
+  s_126aec4081f728::t_970b385840fbb8 19
+  s_126aec4081f728::t_2aa961b2e394f0 1-12,15-18,20-31,35-62,76-78,83-261,274-276,283-293,303-304,321-324,326-332,334-343,369,371-375,379-583,585-595,597,599-611,614-618,642-644,646-648,656-659,664-665
+  s_126aec4081f728::t_964e5cc7acd7f0 63-75,79-82
+  s_126aec4081f728::t_c911813369e96d 584,596,598,612-613,619-625,628-641,645,649-655,660-663
+crates/inferd-engine/src/openai_compat/client.rs
+  s_126aec4081f728::t_ce59c6abc29835 10-11
+  s_126aec4081f728::t_bd5901ee8ca57f 3-9,12
+crates/inferd-http/src/handlers.rs
+  s_126aec4081f728::t_d727daa4e52726 27,66-71,110,315-317,328-330,367-369
+  s_126aec4081f728::t_2bbe8728682658 275,289-294
+  s_126aec4081f728::t_231cc79ed0944b 1-26,28-65,72-109,111-274,276-288,295-314,318-327,331-366,370-377
+Cargo.toml
+  s_126aec4081f728::t_b59aa699feb603 8-9
+crates/inferd-http/src/main.rs
+  s_126aec4081f728::t_3882c0efd534df 1-113
+crates/inferd-openai-wire/Cargo.toml
+  s_126aec4081f728::t_55e59cd7d9a490 1-16
+CHANGELOG.md
+  s_126aec4081f728::t_31711537f967c3 10-18
+  s_126aec4081f728::t_1983f21d775747 19-21
+  s_126aec4081f728::t_78b21e76fd74d0 22-27
+crates/inferd-openai-wire/src/lib.rs
+  s_126aec4081f728::t_da69b3dacb846b 1-31,33-40,45-269,287-318
+  s_126aec4081f728::t_69220e1cdc76b9 41-44
+  s_126aec4081f728::t_26ab87fe4339c1 270-286
+  s_126aec4081f728::t_8a6bf0cfb0b6d7 32
+crates/inferd-http/Cargo.toml
+  s_126aec4081f728::t_85c52035915c69 1-36
+crates/inferd-http/src/config.rs
+  s_126aec4081f728::t_6d1d7322f167ef 10
+  s_126aec4081f728::t_1aaa28242b7f6e 1-9,11-84,88-94
+  s_126aec4081f728::t_d727daa4e52726 85-87
+Cargo.lock
+  s_126aec4081f728::t_7d91d813978635 140-194,1066,1082-1109,1245-1250,1266-1271,1842-1852,2140,2179
+crates/inferd-engine/src/openai_compat/mapper.rs
+  s_3f706e3f4b4643::t_f687f4febfb0f7 103,359,517,520,523,540,545,547,575,581,584,587,597,603,606,609,619,625,628,631,638,643,645
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2ad0adef94717a6995be1cab37cc0d6f793cd83d",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
