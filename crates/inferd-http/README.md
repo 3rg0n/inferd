@@ -49,6 +49,26 @@ client.chat.completions.create(
 - Auth terminates **at the bridge**, not the daemon: a network hop drops
   the peer-credential identity the daemon's IPC relies on, so the bridge
   owns inbound auth.
+- The bearer token is compared in **constant time** (`subtle`) to avoid a
+  timing side-channel.
+- Inbound request bodies are capped at **8 MiB** (the daemon separately
+  enforces its 64 MiB frame cap).
+
+### Accepted posture for the localhost default
+
+The following are deliberate for a user-launched, loopback-default dev
+tool (the same posture as Ollama's local server). They are **not**
+hardened by default and matter only if you expose the bridge on a
+network (which requires `--token`); put it behind a reverse proxy for
+non-loopback use:
+
+- **No per-connection / concurrency cap or SSE idle timeout.** A flood of
+  slow streams could tie up resources. The daemon's admission queue still
+  bounds *active* generations (`queue_full` → HTTP 429).
+- **No CORS headers / CSRF protection.** A local malicious page could POST
+  to `127.0.0.1` — inherent to any no-auth localhost service.
+- **Daemon errors are surfaced verbatim** (e.g. socket path in a connect
+  error) to aid local debugging; harden/scrub if exposing non-loopback.
 
 ## Compatibility notes
 

@@ -29,6 +29,9 @@ tracing-subscriber = { workspace = true }
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }
 clap               = { workspace = true }
+# Constant-time bearer-token compare (same crate the daemon uses for
+# SHA compares) — avoids a timing side-channel on the token.
+subtle             = { workspace = true }
 # HTTP server. axum has first-class SSE support for streaming chat.
 axum               = { version = "0.7", features = ["json"] }
 

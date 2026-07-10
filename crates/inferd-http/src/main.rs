@@ -89,7 +89,14 @@ async fn main() -> anyhow::Result<()> {
     // Localhost is the no-auth default; exposing the bridge on the network
     // requires an explicit bearer token (ADR 0020 — auth terminates at the
     // bridge, and we don't silently expose an unauthenticated surface).
-    if !cfg.listen.ip().is_loopback() && cfg.token.is_none() {
+    //
+    // `IpAddr::is_loopback()` returns false for an IPv4-mapped IPv6
+    // loopback (`::ffff:127.0.0.1`), which is semantically loopback — so
+    // classify that as loopback too. This is fail-safe either way (the
+    // raw check already *requires* a token for the mapped form, erring
+    // safe), but treating it as loopback keeps the "localhost = no auth"
+    // intent correct for that address form.
+    if !is_loopback_addr(cfg.listen.ip()) && cfg.token.is_none() {
         anyhow::bail!(
             "refusing to bind non-loopback address {} without --token: an \
              unauthenticated network-exposed bridge is a footgun. Pass \
@@ -110,4 +117,35 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("http server error")?;
     Ok(())
+}
+
+/// True for loopback, including an IPv4-mapped IPv6 loopback
+/// (`::ffff:127.0.0.1`) which `IpAddr::is_loopback` does not recognise.
+fn is_loopback_addr(ip: std::net::IpAddr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+    matches!(ip, std::net::IpAddr::V6(v6)
+        if v6.to_ipv4().map(|v4| v4.is_loopback()).unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_addr;
+
+    #[test]
+    fn loopback_classification() {
+        let cases = [
+            ("127.0.0.1", true),
+            ("::1", true),
+            ("::ffff:127.0.0.1", true), // IPv4-mapped loopback
+            ("0.0.0.0", false),
+            ("192.168.1.5", false),
+            ("::ffff:192.168.1.5", false),
+        ];
+        for (s, want) in cases {
+            let ip: std::net::IpAddr = s.parse().unwrap();
+            assert_eq!(is_loopback_addr(ip), want, "{s}");
+        }
+    }
 }

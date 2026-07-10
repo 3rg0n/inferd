@@ -1092,6 +1092,7 @@ dependencies = [
  "inferd-proto",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",

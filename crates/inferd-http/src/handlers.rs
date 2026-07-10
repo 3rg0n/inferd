@@ -28,24 +28,31 @@ use crate::AppState;
 use crate::error::HttpError;
 use crate::translate::{self, ChunkBuilder};
 
-/// Build the router. When `token` is `Some`, all routes require a
-/// matching `Authorization: Bearer <token>` header.
+/// Build the router. When `token` is `Some`, the `/v1/*` API routes
+/// require a matching `Authorization: Bearer <token>` header. `/health`
+/// is always unauthenticated — it's a liveness probe that exposes
+/// nothing sensitive, so monitoring doesn't need the token.
 pub fn router(state: AppState, token: Option<String>) -> Router {
-    let api = Router::new()
+    let mut api = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(models))
-        .route("/health", get(health))
+        // Explicit inbound body cap (don't rely on axum's implicit
+        // default). Bounds pre-daemon memory for a giant messages[]/
+        // input[] payload; the daemon separately enforces the 64 MiB
+        // frame cap. 8 MiB comfortably covers real chat/embed requests.
+        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024))
         .with_state(state);
 
     if let Some(tok) = token {
-        api.layer(axum::middleware::from_fn(move |headers, req, next| {
+        api = api.layer(axum::middleware::from_fn(move |headers, req, next| {
             let tok = tok.clone();
             async move { require_bearer(&tok, headers, req, next).await }
-        }))
-    } else {
-        api
+        }));
     }
+
+    // /health stays outside the auth layer (unauthenticated liveness).
+    api.route("/health", get(health))
 }
 
 async fn require_bearer(
@@ -58,7 +65,15 @@ async fn require_bearer(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| t == expected)
+        // Constant-time compare so token verification doesn't leak the
+        // token via response timing (`subtle::ConstantTimeEq`). Equal
+        // lengths required for ct_eq; unequal lengths are a definite
+        // mismatch, so short-circuit there without a timing signal about
+        // the content.
+        .map(|t| {
+            use subtle::ConstantTimeEq;
+            t.len() == expected.len() && bool::from(t.as_bytes().ct_eq(expected.as_bytes()))
+        })
         .unwrap_or(false);
     if ok {
         next.run(req).await
@@ -153,8 +168,8 @@ fn chat_stream_response(
         let mut builder = ChunkBuilder::new(id, model, created);
         while let Some(item) = frames.next().await {
             match item {
-                Ok(ResponseV2::Frame { .. }) => {
-                    if let Some(chunk) = builder.ingest(item.as_ref().unwrap()) {
+                Ok(frame @ ResponseV2::Frame { .. }) => {
+                    if let Some(chunk) = builder.ingest(&frame) {
                         let data = serde_json::to_string(&chunk).unwrap_or_default();
                         if tx.send(Ok(Event::default().data(data))).await.is_err() {
                             return; // client hung up → drop client → daemon cancels
