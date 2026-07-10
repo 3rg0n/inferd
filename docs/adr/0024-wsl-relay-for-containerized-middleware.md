@@ -45,7 +45,10 @@ relay is a consumer-side transport shim, not a daemon feature.
 Windows host:  inferd daemon  →  \\.\pipe\inferd     (DACL: launching user only)
                                        ▲
                                   inferd-wsl-relay.exe  (Windows proc; WSL interop
-                                       ▲ stdio            runs it AS the launching user)
+                                       │                  LAUNCHES it AS the launching
+                                       │ bytes over        user — interop carries NO
+                                       │ AF_VSOCK /        payload, only the launch)
+                                       │ loopback, NOT stdio
 WSL2 distro:   inferd-wsl-relay (linux) → $XDG_RUNTIME_DIR/inferd/inferd.sock
                                        ▲ bind-mount
 Podman/Docker: middleware → inferd-client UDS path → native frames
@@ -57,6 +60,15 @@ Podman/Docker: middleware → inferd-client UDS path → native frames
   activity surface. It is a byte-faithful stream shuttle — it does **not**
   parse or reshape frames (that would make it a second wire
   implementation to freeze; it must stay a dumb pipe).
+- **Interop LAUNCHES the Windows connector; it does NOT carry the bytes.**
+  A de-risk spike (2026-07-09, see "Spike findings" below) proved WSL
+  `.exe` interop stdio silently **truncates output past ~512 KiB** — fine
+  for interactive generation/embed frames (small), fatal for multi-MB
+  image attachments. So the Windows-side connector must exchange payload
+  with the Linux-side listener over a **real socket** (AF_VSOCK/hvsocket,
+  or the connector dialing back a loopback endpoint the Linux side hosts)
+  — interop is used only to spawn the connector as the right user. Bytes
+  never ride interop stdio.
 - **Trust model — no new auth needed on this path.** WSL interop launches
   the Windows-side relay as the **same Windows user** who owns the daemon,
   so it satisfies the pipe's same-user DACL legitimately. Any container
@@ -113,6 +125,39 @@ Podman/Docker: middleware → inferd-client UDS path → native frames
   native frames and lives in WSL beside a Windows-host daemon. ADR 0020
   Surface B (native frames over localhost TCP) stays available as the
   portable fallback where a relay isn't wanted.
+
+## Spike findings (2026-07-09)
+
+A throwaway spike (standalone crate, single-binary two-mode relay + a
+Windows named-pipe echo server + Linux UDS pump) validated the design on
+Windows 11 + WSL2 Ubuntu against the real b9850 daemon:
+
+- **Interop stdio is byte-clean** — all 256 byte values (incl. `\n`,
+  `\r`, `\0`, `0x1a`) round-tripped exactly through a WSL-launched Windows
+  `.exe`. No text translation. ✓
+- **Real generation round-trips end to end** — probe → UDS → interop-
+  launched connector → `\\.\pipe\inferd` → daemon returned
+  `answer="Paris", backend=llamacpp` with **dial=1 ms, total=778 ms**
+  (overwhelmingly model time; relay/interop overhead negligible). ✓
+- **Same-user-DACL trust holds** — interop ran the connector as the
+  launching Windows user; it opened the same-user-only pipe with no auth,
+  no error. ✓
+- **HARD LIMIT: WSL `.exe` interop stdout silently truncates past
+  ~512 KiB.** Reproduced with a size sweep: 300 KB / 400 KB / 450 KB /
+  500 KB round-trip exact; **600 KB → truncated to ~299 KB**; 10 MB →
+  ~0.5 MB. Isolated to interop's stdio transport itself (file→file echo,
+  no relay/pipe/backpressure involved) — not fixable in relay code, and
+  unaffected by `copy_bidirectional` vs. hand-rolled pumps.
+
+**Consequence for the design (folded into Decision above):** interop is
+for **launch only**; payload must cross the WSL↔Windows boundary over a
+real socket (AF_VSOCK/hvsocket or a loopback endpoint the Linux side
+hosts and the connector dials back), never over interop stdio. Small
+interactive traffic (generation/embed) would have worked over stdio, but
+multi-MB image attachments would silently corrupt — so the socket-carry
+channel is mandatory for a correct implementation, not an optimisation.
+The full `inferd-wsl-relay` build is deferred pending selection of that
+carry channel (task #181).
 
 ## References
 
