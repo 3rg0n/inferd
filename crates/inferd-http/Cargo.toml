@@ -1,0 +1,36 @@
+[package]
+name = "inferd-http"
+description = "OpenAI-compatible HTTP server for inferd (ADR 0020 Surface A). A user-launched, separate process that exposes /v1/chat/completions and /v1/embeddings over localhost and translates them to the daemon's native v2/embed IPC wire via inferd-client. The daemon itself never serves HTTP (ADR 0006/0022); this is a consumer, not a privileged surface (ADR 0014)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[[bin]]
+name = "inferd-http"
+path = "src/main.rs"
+
+[dependencies]
+# Consumes the daemon over IPC like any other middleware (ADR 0014).
+inferd-client      = { path = "../inferd-client", version = "=0.5.1" }
+inferd-proto       = { path = "../inferd-proto", version = "=0.5.1" }
+# One canonical OpenAI wire definition, shared with the outbound adapter.
+inferd-openai-wire = { path = "../inferd-openai-wire", version = "=0.5.1" }
+tokio              = { workspace = true }
+tokio-stream       = "0.1"
+futures-util       = "0.3"
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+clap               = { workspace = true }
+# HTTP server. axum has first-class SSE support for streaming chat.
+axum               = { version = "0.7", features = ["json"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

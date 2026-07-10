@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`inferd-http` — OpenAI-compatible HTTP bridge** ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md)
+  Surface A). A new, separate, user-launched binary crate that exposes
+  `/v1/chat/completions` (streaming + non-streaming), `/v1/embeddings`
+  (`float` + `base64`), `/v1/models`, and `/health` over localhost, and
+  translates them to the daemon's native v2/embed IPC via `inferd-client`.
+  Point OpenCode or any OpenAI-SDK client at it. The daemon is unchanged
+  and serves no HTTP (ADR 0006/0022); the bridge is a consumer (ADR 0014).
+  Localhost + no-auth by default; a non-loopback bind requires `--token`
+  (bearer). Each request dials a fresh daemon connection so the admission
+  queue multiplexes and client-disconnect cancels the job. Verified
+  end-to-end with the real `openai` Python SDK (chat stream + non-stream,
+  embeddings string + batch, models). The OpenAI Chat/Embeddings wire
+  structs were extracted to a new shared **`inferd-openai-wire`** crate so
+  the outbound `openai-compat` adapter and this inbound bridge share one
+  canonical definition and cannot drift.
+
 ### Documentation
 
 - **Consuming inferd across a VM/container boundary**

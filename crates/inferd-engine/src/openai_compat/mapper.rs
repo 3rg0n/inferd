@@ -100,6 +100,7 @@ pub(super) fn request_from_resolved(
         temperature: resolved.temperature,
         top_p: resolved.top_p,
         max_tokens: resolved.max_tokens,
+        n: None,
         tools,
         stream_options: Some(StreamOptions {
             include_usage: true,
@@ -355,7 +356,7 @@ impl ChunkAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openai_compat::client::{
+    use inferd_openai_wire::{
         ChunkChoice, ChunkDelta, ChunkToolCallDelta, ChunkToolCallFunctionDelta, ChunkUsage,
     };
     use inferd_proto::v2::{ContentBlock, MessageV2, RequestV2, RoleV2, Tool};
@@ -513,10 +514,13 @@ mod tests {
                 delta: ChunkDelta {
                     content: Some(text.to_string()),
                     tool_calls: Vec::new(),
+                    ..Default::default()
                 },
                 finish_reason: None,
+                ..Default::default()
             }],
             usage: None,
+            ..Default::default()
         }
     }
 
@@ -533,11 +537,14 @@ mod tests {
             choices: vec![ChunkChoice {
                 delta: ChunkDelta::default(),
                 finish_reason: Some("stop".into()),
+                ..Default::default()
             }],
             usage: Some(ChunkUsage {
                 prompt_tokens: 7,
                 completion_tokens: 3,
+                ..Default::default()
             }),
+            ..Default::default()
         };
         let evs = acc.ingest(last);
         assert!(evs.is_empty());
@@ -565,15 +572,19 @@ mod tests {
                     tool_calls: vec![ChunkToolCallDelta {
                         index: 0,
                         id: Some("call_42".into()),
+                        kind: None,
                         function: Some(ChunkToolCallFunctionDelta {
                             name: Some("lookup".into()),
                             arguments: None,
                         }),
                     }],
+                    ..Default::default()
                 },
                 finish_reason: None,
+                ..Default::default()
             }],
             usage: None,
+            ..Default::default()
         });
         // Chunk 2: arguments first half.
         acc.ingest(ChatChunk {
@@ -583,15 +594,19 @@ mod tests {
                     tool_calls: vec![ChunkToolCallDelta {
                         index: 0,
                         id: None,
+                        kind: None,
                         function: Some(ChunkToolCallFunctionDelta {
                             name: None,
                             arguments: Some(r#"{"q":"x"#.into()),
                         }),
                     }],
+                    ..Default::default()
                 },
                 finish_reason: None,
+                ..Default::default()
             }],
             usage: None,
+            ..Default::default()
         });
         // Chunk 3: arguments second half.
         acc.ingest(ChatChunk {
@@ -601,26 +616,33 @@ mod tests {
                     tool_calls: vec![ChunkToolCallDelta {
                         index: 0,
                         id: None,
+                        kind: None,
                         function: Some(ChunkToolCallFunctionDelta {
                             name: None,
                             arguments: Some(r#"y"}"#.into()),
                         }),
                     }],
+                    ..Default::default()
                 },
                 finish_reason: None,
+                ..Default::default()
             }],
             usage: None,
+            ..Default::default()
         });
         // Chunk 4: terminal.
         acc.ingest(ChatChunk {
             choices: vec![ChunkChoice {
                 delta: ChunkDelta::default(),
                 finish_reason: Some("tool_calls".into()),
+                ..Default::default()
             }],
             usage: Some(ChunkUsage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
+                ..Default::default()
             }),
+            ..Default::default()
         });
 
         let evs = acc.finalize();

@@ -1,0 +1,16 @@
+[package]
+name = "inferd-openai-wire"
+description = "OpenAI Chat Completions + Embeddings wire types (serde structs, no logic). Shared by inferd-engine's outbound openai-compat adapter and the inbound inferd-http bridge so the OpenAI wire has ONE canonical definition and cannot drift between the two directions."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[lib]
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }

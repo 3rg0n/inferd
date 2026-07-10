@@ -5,6 +5,8 @@ members = [
     "crates/inferd-engine",
     "crates/inferd-daemon",
     "crates/inferd-client",
+    "crates/inferd-openai-wire",
+    "crates/inferd-http",
     "crates/inferd",
 ]
 # fuzz harnesses are intentionally NOT workspace members — they require

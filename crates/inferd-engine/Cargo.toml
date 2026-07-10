@@ -44,7 +44,7 @@ rocm                 = ["llamacpp"]
 # eventsource_stream. The daemon never *serves* HTTP — this is the
 # narrow outbound carve-out wrapped behind the Backend trait
 # (ADR 0006 §"cloud backends").
-openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util"]
+openai               = ["dep:reqwest", "dep:eventsource-stream", "dep:futures-util", "dep:inferd-openai-wire"]
 # AWS Bedrock-runtime InvokeModelWithResponseStream backend (Phase
 # 6B-5). Anthropic-on-Bedrock body shape only in v0.2.0; SigV4 +
 # AWS_BEARER_TOKEN_BEDROCK auth; AWS event-stream framing parser.
@@ -54,6 +54,8 @@ bedrock              = ["dep:reqwest", "dep:futures-util", "dep:hmac", "dep:hex"
 
 [dependencies]
 inferd-proto = { path = "../inferd-proto", version = "=0.5.1" }
+# OpenAI wire types shared with the inferd-http bridge (openai feature only).
+inferd-openai-wire = { path = "../inferd-openai-wire", version = "=0.5.1", optional = true }
 async-trait  = { workspace = true }
 tokio        = { workspace = true }
 tokio-stream = "0.1"
