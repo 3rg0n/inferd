@@ -1,0 +1,29 @@
+docs/consuming-across-a-boundary.md
+  s_126aec4081f728::t_7c276c3c8be039 1-26,37-157
+  s_126aec4081f728::t_db18e734fbc33c 27-36
+docs/adr/0024-wsl-relay-for-containerized-middleware.md
+  s_126aec4081f728::t_cd92f16ea40c5d 1,4,8-30,34-39,52-101,106-113,116-120,122-124,128-134
+  s_126aec4081f728::t_e9ab8b024f913b 40-51
+CHANGELOG.md
+  s_126aec4081f728::t_5822f691a3d94f 10-15
+  s_126aec4081f728::t_e017be6e6c40fd 16-18
+  s_126aec4081f728::t_881a3ebde7d502 19-24
+docs/adr/README.md
+  s_126aec4081f728::t_eca2196f48c111 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "509db2c29c88db7c815b3cc7c55492e4051f3e1b",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>"
+    }
+  }
+}
