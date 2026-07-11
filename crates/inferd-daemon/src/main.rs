@@ -127,6 +127,12 @@ async fn main() -> anyhow::Result<()> {
         match build_backends(&cli, config.as_ref(), Arc::clone(&broadcaster)).await {
             Ok(b) => b,
             Err(e) => {
+                // Log to the NDJSON activity log before shutting down so
+                // `inferdctl doctor` and log tailing see the real cause.
+                // In background-service mode (systemd/launchd) stderr may
+                // not be visible; this is the only diagnostic surface that
+                // survives a failed start (issue #47).
+                error!(error = %e, "backend init failed — daemon is shutting down");
                 let _ = admin_shutdown_tx.send(());
                 let _ = tokio::time::timeout(Duration::from_secs(1), admin_handle).await;
                 return Err(e);

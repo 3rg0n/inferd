@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Backend init failures now log to the NDJSON activity log before the
+  daemon exits** (issue #47). Previously, a failed backend/model load
+  (e.g. `mmproj_image_max_tokens` below the model's vision floor, or any
+  other `LlamaCpp::new()` failure) only wrote the error to stderr.
+  In background-service mode (systemd / launchd) stderr is invisible;
+  `inferdctl doctor` reported only "daemon not running" with no
+  actionable cause. The error is now emitted via `error!()` through the
+  tracing stack — landing in `~/.inferd/logs/inferd.ndjson` — before the
+  daemon shuts down admin and exits.
+
 ## [0.6.0-rc.3] - 2026-07-11
 
 ### Changed
