@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0-rc.2] - 2026-07-11
+
+### Fixed
+
+- **Windows arm64 daemon crashed at load (`0xC0000135`).** llama.cpp
+  b9850 moved OpenMP linkage into `ggml-base` (the core lib in the startup
+  import chain); the arm64 clang-cl build's OpenMP runtime is LLVM's
+  `libomp.dll`, which — unlike x64's system `vcomp140.dll` — was never
+  staged next to the binary. `build.rs` now stages `libomp.dll` into
+  `backends/` for the windows-aarch64 target (mirroring the Linux
+  CUDA-runtime bundling pattern), and `release.yml` verifies its presence.
+  This failed the v0.6.0-rc.1 release build's arm64 leg; rc.1 published no
+  artifacts.
+
 ## [0.6.0-rc.1] - 2026-07-11
 
 ### Added

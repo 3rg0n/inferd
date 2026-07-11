@@ -15,7 +15,7 @@ members = [
 exclude = ["crates/inferd-proto/fuzz"]
 
 [workspace.package]
-version = "0.6.0-rc.1"
+version = "0.6.0-rc.2"
 edition = "2024"
 # Edition 2024 (stable since Rust 1.85) requires rust-version >= 1.85.
 # 1.89 is the floor we already need for std::fs::File::try_lock used
