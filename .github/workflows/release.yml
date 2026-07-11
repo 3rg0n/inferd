@@ -957,6 +957,35 @@ jobs:
           generate_release_notes: ${{ steps.changelog.outputs.no-section == 'true' }}
           fail_on_unmatched_files: true
 
+      # Go module tag for the nested `clients/go` module. Go resolves a
+      # subdirectory module's versions from **path-prefixed** tags
+      # (`clients/go/vX.Y.Z`), NOT the root `vX.Y.Z` tag — with only root
+      # tags, `go get github.com/3rg0n/inferd/clients/go@vX.Y.Z` fails with
+      # "unknown revision clients/go/vX.Y.Z" and consumers are stuck on
+      # `v0.0.0-<pseudo>` versions. Mirror every release tag with a
+      # matching `clients/go/<version>` tag so the Go client is pinnable at
+      # the same version as the daemon (lockstep — the client tracks the
+      # wire it speaks; it's stdlib-only, no transitive module deps). Runs
+      # only after the release published green. Idempotent: skips if the
+      # tag already exists (e.g. a re-run).
+      - name: Tag clients/go module (path-prefixed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME}"            # e.g. v0.6.0-rc.3
+          gotag="clients/go/${ver}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --tags origin "refs/tags/${gotag}" >/dev/null 2>&1; then
+            echo "::notice::${gotag} already exists on origin; skipping."
+            exit 0
+          fi
+          # Annotate at the SAME commit the release tag points to, so the
+          # Go module and the release are byte-identical.
+          git tag -a "${gotag}" "${GITHUB_SHA}" -m "clients/go ${ver}"
+          git push origin "${gotag}"
+          echo "::notice::pushed Go module tag ${gotag}"
+
   # Publish the two library crates to crates.io. Runs from CI rather
   # than a developer laptop on purpose: the maintainer's corp network
   # (Cisco Secure Access) 403s the crates.io upload API, and GitHub's

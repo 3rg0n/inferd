@@ -8,7 +8,23 @@ import inferd "github.com/3rg0n/inferd/clients/go"
 ```
 
 Single flat package — same shape as `lib/pq` / `pgx`. No
-`proto/v1` + `client` subdivision.
+`proto/v1` + `client` subdivision. Stdlib-only: no third-party
+dependencies.
+
+## Versioning
+
+This is a **nested Go module** in a monorepo subdirectory, so its
+versions are published as **path-prefixed tags** (`clients/go/vX.Y.Z`),
+not the repo's root `vX.Y.Z` tags. Pin it the normal way:
+
+```sh
+go get github.com/3rg0n/inferd/clients/go@v0.6.0-rc.3
+```
+
+Go maps that to the `clients/go/v0.6.0-rc.3` tag automatically. The
+client versions in **lockstep** with the daemon — `clients/go/<v>` is
+cut at the same commit as the root `<v>` release, so the client version
+you pin is the wire/daemon version it was built against.
 
 Covers both frozen wire surfaces: generation (`Client.GenerateV2` —
 typed content blocks / attachments / tools, ADR 0015) and the admin
