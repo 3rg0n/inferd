@@ -76,10 +76,11 @@ pub struct StreamOptions {
 pub struct ChatMessage {
     /// `system` | `user` | `assistant` | `tool`.
     pub role: String,
-    /// Text content. String-only today; the wire stays generic so
-    /// future multimodal arrays can drop in without a break.
+    /// Message content: either a plain string or an array of typed
+    /// parts (text + `image_url`), per the OpenAI Chat API. Absent for
+    /// an assistant turn that carries only `tool_calls`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     /// Assistant tool-call requests being replayed as history.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCallReplay>,
@@ -89,6 +90,76 @@ pub struct ChatMessage {
     /// Optional tool name (some providers key results by name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// A message's `content` field. The OpenAI wire allows it to be *either*
+/// a bare string *or* an array of typed content parts (text +
+/// `image_url`). This untagged enum matches both forms and serializes
+/// back to whichever shape it holds — a plain string round-trips as a
+/// JSON string (so the outbound adapter's text-only messages are byte
+/// -identical to before), an array round-trips as an array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// The common case: one text string.
+    Text(String),
+    /// Multimodal: an ordered list of text / image parts.
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// Borrow the string form when this content is a bare string.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            MessageContent::Text(s) => Some(s),
+            MessageContent::Parts(_) => None,
+        }
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+/// One element of a multimodal `content` array. Tagged by `type`; only
+/// `text` and `image_url` are recognised (the two the OpenAI SDK emits
+/// for chat). Unknown types deserialize into [`ContentPart::Unknown`]
+/// so a newer client field doesn't hard-fail the parse — the caller
+/// decides how to treat it (the bridge rejects it explicitly rather
+/// than silently dropping content).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// A text span.
+    Text {
+        /// The text.
+        text: String,
+    },
+    /// An image, carried as a URL (data: URL or remote URL).
+    ImageUrl {
+        /// The `image_url` object.
+        image_url: ImageUrl,
+    },
+    /// Any part type the bridge does not recognise.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The `image_url` object inside an `image_url` content part.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// Either a `data:<mime>;base64,<payload>` URL or a remote
+    /// `http(s)://` URL. inferd's bridge accepts only `data:` URLs (a
+    /// server-side fetch of an arbitrary remote URL is an SSRF vector);
+    /// remote URLs are rejected with a clear 400.
+    pub url: String,
+    /// OpenAI's fidelity hint (`auto` | `low` | `high`). Accepted and
+    /// ignored — inferd's image budget is an operator/model property
+    /// (`mmproj_image_max_tokens`), not a per-request knob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// An assistant tool call, as replayed in message history.

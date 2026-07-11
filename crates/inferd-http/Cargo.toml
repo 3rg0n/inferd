@@ -34,6 +34,12 @@ clap               = { workspace = true }
 subtle             = { workspace = true }
 # HTTP server. axum has first-class SSE support for streaming chat.
 axum               = { version = "0.7", features = ["json"] }
+# Decode OpenAI `image_url` (data: URL) PNG/JPEG payloads to raw RGB for
+# an inferd image attachment — the daemon links no image codec (ADR 0016),
+# so the bridge (as the consumer) decodes. png/jpeg only; no default codecs.
+image              = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# base64-decode data: URL image payloads. Standard alphabet.
+base64             = "0.22"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

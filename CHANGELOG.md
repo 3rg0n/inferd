@@ -24,6 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structs were extracted to a new shared **`inferd-openai-wire`** crate so
   the outbound `openai-compat` adapter and this inbound bridge share one
   canonical definition and cannot drift.
+- **Vision through the `inferd-http` bridge.** The bridge now accepts
+  OpenAI multimodal chat content — a `user` message whose `content` is an
+  array of `text` / `image_url` parts. It decodes the image (base64
+  `data:` URL, PNG/JPEG) to raw interleaved RGB and forwards it as an
+  inferd image attachment over the BLOB-frame wire (the daemon links no
+  image codec — ADR 0016 — so the consumer decodes). Verified end-to-end
+  with the real `openai` SDK against a live vision daemon: a known-text
+  image round-trips and Gemma 4 transcribes it (stream + non-stream).
+  **Security:** only `data:` URLs are accepted — a remote `http(s)://`
+  image URL is refused with a 400 (no server-side fetch → no SSRF); decode
+  is bomb-guarded (8 MiB encoded cap, 4096²/48 MiB per-image, 64 MiB max
+  decoder allocation) and a request is bounded to 8 images / 128 MiB
+  aggregate decoded RGB. `MessageContent` (the message `content` field) is
+  now a string-or-parts type shared with the outbound adapter; text-only
+  requests are byte-identical to before.
 
 ### Documentation
 

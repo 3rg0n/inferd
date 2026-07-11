@@ -1085,8 +1085,10 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "clap",
  "futures-util",
+ "image",
  "inferd-client",
  "inferd-openai-wire",
  "inferd-proto",

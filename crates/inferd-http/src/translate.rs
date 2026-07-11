@@ -10,15 +10,17 @@
 
 use inferd_openai_wire::{
     ChatChunk, ChatRequest, ChunkChoice, ChunkDelta, ChunkToolCallDelta,
-    ChunkToolCallFunctionDelta, ChunkUsage, EmbeddingData, EmbeddingVector, EmbeddingsRequest,
-    EmbeddingsResponse, EmbeddingsUsage,
+    ChunkToolCallFunctionDelta, ChunkUsage, ContentPart, EmbeddingData, EmbeddingVector,
+    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, MessageContent,
 };
 use inferd_proto::embed::EmbedRequest;
 use inferd_proto::v2::{
-    ContentBlock, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2, StopReasonV2, Tool,
-    ToolCallId, UsageV2,
+    Attachment, ContentBlock, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
+    StopReasonV2, Tool, ToolCallId, UsageV2,
 };
 use thiserror::Error;
+
+use crate::image_decode::{self, ImageDecodeError};
 
 /// Request-translation failures → HTTP 400.
 #[derive(Debug, Error)]
@@ -38,9 +40,46 @@ pub enum TranslateError {
     /// A tool-call's `arguments` string wasn't valid JSON.
     #[error("tool_call arguments were not valid JSON: {0}")]
     BadToolArgs(String),
+    /// An `image_url` content part could not be decoded to RGB.
+    #[error("image content: {0}")]
+    Image(#[from] ImageDecodeError),
+    /// An `image_url` part appeared on a non-user message. Only user
+    /// turns carry images (the model produces text, and system prompts
+    /// are text); an image on system/assistant/tool is a client error.
+    #[error("image content is only allowed on `user` messages, not `{0}`")]
+    ImageOnNonUser(String),
+    /// The request carried more than [`MAX_IMAGES_PER_REQUEST`] images.
+    #[error("too many images in one request (max {0})")]
+    TooManyImages(usize),
+    /// The decoded images exceeded the aggregate byte budget. Bounds the
+    /// bridge's peak RGB memory: many small-compressed / large-decoded
+    /// images (each individually legal) can otherwise sum to gigabytes.
+    #[error("decoded image bytes exceed the {0}-byte per-request budget")]
+    ImageBudgetExceeded(usize),
 }
 
+/// Max number of image parts accepted in one chat request. A single
+/// visual question rarely needs more than a handful of frames; a large
+/// count is almost always abuse, and each image is a full RGB buffer the
+/// bridge holds until it forwards the request.
+pub const MAX_IMAGES_PER_REQUEST: usize = 8;
+
+/// Aggregate decoded-RGB budget across all images in one request. Caps
+/// the bridge's peak memory regardless of how the (compressed) images
+/// packed into the 8 MiB HTTP body — a decompression-amplification guard
+/// the per-image limit alone does not provide. 128 MiB comfortably fits
+/// several full-resolution images while refusing a bomb.
+pub const MAX_TOTAL_DECODED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+
 // ===================== Chat request → RequestV2 =====================
+
+/// Push a text content block, skipping empty strings (an empty text
+/// block is noise the daemon would otherwise have to filter).
+fn push_text(content: &mut Vec<ContentBlock>, text: String) {
+    if !text.is_empty() {
+        content.push(ContentBlock::Text { text });
+    }
+}
 
 /// Translate an inbound OpenAI chat request into an inferd `RequestV2`.
 pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, TranslateError> {
@@ -49,6 +88,13 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
     }
 
     let mut messages = Vec::with_capacity(req.messages.len());
+    // Image bytes ride out-of-band as attachments referenced by id; the
+    // daemon reassembles them into BLOB frames. Ids are unique across the
+    // whole request (`img-<n>`), assigned as images are encountered.
+    let mut attachments: Vec<Attachment> = Vec::new();
+    // Running total of decoded RGB bytes across all images in the
+    // request, checked against the aggregate budget after each decode.
+    let mut total_image_bytes: usize = 0;
     for m in req.messages {
         let role = match m.role.as_str() {
             "system" => RoleV2::System,
@@ -59,14 +105,34 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
 
         let mut content: Vec<ContentBlock> = Vec::new();
 
-        // A `role: "tool"` message is a tool RESULT addressed by id.
+        // A `role: "tool"` message is a tool RESULT addressed by id. Its
+        // content is text only (tool outputs are text on the OpenAI wire).
         if m.role == "tool"
             && let Some(id) = m.tool_call_id
         {
-            let inner = m
-                .content
-                .map(|t| vec![ContentBlock::Text { text: t }])
-                .unwrap_or_default();
+            let inner = match m.content {
+                Some(MessageContent::Text(t)) => vec![ContentBlock::Text { text: t }],
+                Some(MessageContent::Parts(parts)) => {
+                    // Concatenate any text parts; a tool result should not
+                    // carry an image, so reject one rather than drop it.
+                    let mut text = String::new();
+                    for p in parts {
+                        match p {
+                            ContentPart::Text { text: t } => text.push_str(&t),
+                            ContentPart::ImageUrl { .. } => {
+                                return Err(TranslateError::ImageOnNonUser("tool".into()));
+                            }
+                            ContentPart::Unknown => {}
+                        }
+                    }
+                    if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ContentBlock::Text { text }]
+                    }
+                }
+                None => Vec::new(),
+            };
             content.push(ContentBlock::ToolResult {
                 tool_call_id: ToolCallId::from(id),
                 content: inner,
@@ -75,11 +141,55 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
             continue;
         }
 
-        // Text content.
-        if let Some(text) = m.content
-            && !text.is_empty()
-        {
-            content.push(ContentBlock::Text { text });
+        // Primary content: string or an array of typed parts.
+        match m.content {
+            Some(MessageContent::Text(text)) => push_text(&mut content, text),
+            Some(MessageContent::Parts(parts)) => {
+                for part in parts {
+                    match part {
+                        ContentPart::Text { text } => push_text(&mut content, text),
+                        ContentPart::ImageUrl { image_url } => {
+                            // Images are only meaningful on a user turn.
+                            if role != RoleV2::User {
+                                return Err(TranslateError::ImageOnNonUser(m.role.clone()));
+                            }
+                            // Bound the image COUNT before decoding the next
+                            // one — refuse abuse without doing its work.
+                            if attachments.len() >= MAX_IMAGES_PER_REQUEST {
+                                return Err(TranslateError::TooManyImages(MAX_IMAGES_PER_REQUEST));
+                            }
+                            let decoded = image_decode::decode_image_url(&image_url.url)?;
+                            // Aggregate-byte guard: many individually-legal
+                            // images can still sum to gigabytes of retained
+                            // RGB (a compression-amplification DoS). Cap the
+                            // running total.
+                            total_image_bytes = total_image_bytes.saturating_add(decoded.rgb.len());
+                            if total_image_bytes > MAX_TOTAL_DECODED_IMAGE_BYTES {
+                                return Err(TranslateError::ImageBudgetExceeded(
+                                    MAX_TOTAL_DECODED_IMAGE_BYTES,
+                                ));
+                            }
+                            let id = format!("img-{}", attachments.len());
+                            content.push(ContentBlock::Image {
+                                attachment_id: id.clone(),
+                            });
+                            let mut att = Attachment::Image {
+                                id,
+                                width: decoded.width,
+                                height: decoded.height,
+                                bytes: Vec::new(),
+                            };
+                            att.set_bytes(decoded.rgb);
+                            attachments.push(att);
+                        }
+                        ContentPart::Unknown => {
+                            // Ignore an unrecognised part type rather than
+                            // fail — forward-compat with newer client fields.
+                        }
+                    }
+                }
+            }
+            None => {}
         }
 
         // Assistant tool calls being replayed as history.
@@ -114,6 +224,7 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
     Ok(RequestV2 {
         id,
         messages,
+        attachments,
         tools,
         temperature: req.temperature,
         top_p: req.top_p,
@@ -380,7 +491,7 @@ mod tests {
     fn msg(role: &str, text: &str) -> ChatMessage {
         ChatMessage {
             role: role.into(),
-            content: Some(text.into()),
+            content: Some(MessageContent::Text(text.into())),
             tool_calls: vec![],
             tool_call_id: None,
             name: None,
@@ -433,7 +544,7 @@ mod tests {
             model: "m".into(),
             messages: vec![ChatMessage {
                 role: "tool".into(),
-                content: Some("42".into()),
+                content: Some(MessageContent::Text("42".into())),
                 tool_calls: vec![],
                 tool_call_id: Some("call_1".into()),
                 name: None,
@@ -643,6 +754,216 @@ mod tests {
             "i".into(),
         );
         assert!(matches!(e, Err(TranslateError::BadEncodingFormat(_))));
+    }
+
+    // A 1x1 red PNG, base64 (same fixture as image_decode tests).
+    const RED_1X1_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+    fn parts_msg(role: &str, parts: Vec<ContentPart>) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: Some(MessageContent::Parts(parts)),
+            tool_calls: vec![],
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    fn image_part(b64: &str) -> ContentPart {
+        ContentPart::ImageUrl {
+            image_url: inferd_openai_wire::ImageUrl {
+                url: format!("data:image/png;base64,{b64}"),
+                detail: None,
+            },
+        }
+    }
+
+    #[test]
+    fn user_message_with_text_and_image_maps_to_blocks_and_attachment() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg(
+                "user",
+                vec![
+                    ContentPart::Text {
+                        text: "what is this?".into(),
+                    },
+                    image_part(RED_1X1_PNG_B64),
+                ],
+            )],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        let v2 = chat_request_to_v2(req, "id".into()).unwrap();
+        // One message, two content blocks (text + image ref).
+        assert_eq!(v2.messages.len(), 1);
+        assert_eq!(v2.messages[0].content.len(), 2);
+        assert!(matches!(
+            &v2.messages[0].content[0],
+            ContentBlock::Text { text } if text == "what is this?"
+        ));
+        let att_id = match &v2.messages[0].content[1] {
+            ContentBlock::Image { attachment_id } => attachment_id.clone(),
+            other => panic!("expected Image block, got {other:?}"),
+        };
+        // One attachment, id-correlated, carrying raw RGB (1*1*3 = 3 bytes).
+        assert_eq!(v2.attachments.len(), 1);
+        match &v2.attachments[0] {
+            Attachment::Image {
+                id, width, height, ..
+            } => {
+                assert_eq!(id, &att_id);
+                assert_eq!(*width, 1);
+                assert_eq!(*height, 1);
+            }
+            other => panic!("expected Image attachment, got {other:?}"),
+        }
+        assert_eq!(v2.attachments[0].bytes().len(), 3);
+    }
+
+    #[test]
+    fn two_images_get_distinct_ids() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg(
+                "user",
+                vec![image_part(RED_1X1_PNG_B64), image_part(RED_1X1_PNG_B64)],
+            )],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        let v2 = chat_request_to_v2(req, "id".into()).unwrap();
+        assert_eq!(v2.attachments.len(), 2);
+        assert_ne!(v2.attachments[0].id(), v2.attachments[1].id());
+        // The request must resolve (every image block's id maps to an
+        // attachment) — this is the invariant the daemon enforces.
+        assert!(v2.resolve().is_ok());
+    }
+
+    #[test]
+    fn image_on_system_message_rejected() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg("system", vec![image_part(RED_1X1_PNG_B64)])],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into()),
+            Err(TranslateError::ImageOnNonUser(_))
+        ));
+    }
+
+    #[test]
+    fn remote_image_url_rejected() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg(
+                "user",
+                vec![ContentPart::ImageUrl {
+                    image_url: inferd_openai_wire::ImageUrl {
+                        url: "https://evil.example/x.png".into(),
+                        detail: None,
+                    },
+                }],
+            )],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into()),
+            Err(TranslateError::Image(_))
+        ));
+    }
+
+    #[test]
+    fn too_many_images_rejected() {
+        // One more than the cap → refused before the (n+1)th decode.
+        let parts: Vec<ContentPart> = (0..=MAX_IMAGES_PER_REQUEST)
+            .map(|_| image_part(RED_1X1_PNG_B64))
+            .collect();
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg("user", parts)],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into()),
+            Err(TranslateError::TooManyImages(_))
+        ));
+    }
+
+    #[test]
+    fn images_at_the_cap_are_allowed() {
+        // Exactly the cap succeeds (1x1 images are tiny; no budget issue).
+        let parts: Vec<ContentPart> = (0..MAX_IMAGES_PER_REQUEST)
+            .map(|_| image_part(RED_1X1_PNG_B64))
+            .collect();
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg("user", parts)],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        assert_eq!(v2.attachments.len(), MAX_IMAGES_PER_REQUEST);
+    }
+
+    #[test]
+    fn text_only_parts_array_still_works() {
+        // A parts array with only text (no image) — common when a client
+        // always uses the array form. Should map identically to a string.
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg(
+                "user",
+                vec![ContentPart::Text {
+                    text: "hello".into(),
+                }],
+            )],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+        };
+        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        assert_eq!(v2.messages.len(), 1);
+        assert_eq!(v2.messages[0].content.len(), 1);
+        assert!(v2.attachments.is_empty());
     }
 
     #[test]

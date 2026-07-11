@@ -175,7 +175,7 @@ fn flatten_message(msg: &MessageV2, out: &mut Vec<ChatMessage>) -> Result<(), Ma
             content: if text_buf.is_empty() {
                 None
             } else {
-                Some(text_buf)
+                Some(text_buf.into())
             },
             tool_calls,
             tool_call_id: None,
@@ -187,7 +187,7 @@ fn flatten_message(msg: &MessageV2, out: &mut Vec<ChatMessage>) -> Result<(), Ma
     for (id, body) in tool_results {
         out.push(ChatMessage {
             role: "tool".to_string(),
-            content: Some(body),
+            content: Some(body.into()),
             tool_calls: Vec::new(),
             tool_call_id: Some(id.as_str().to_string()),
             name: None,
@@ -393,9 +393,15 @@ mod tests {
         assert!(req.stream);
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, "system");
-        assert_eq!(req.messages[0].content.as_deref(), Some("be terse"));
+        assert_eq!(
+            req.messages[0].content.as_ref().and_then(|c| c.as_text()),
+            Some("be terse")
+        );
         assert_eq!(req.messages[1].role, "user");
-        assert_eq!(req.messages[1].content.as_deref(), Some("hello"));
+        assert_eq!(
+            req.messages[1].content.as_ref().and_then(|c| c.as_text()),
+            Some("hello")
+        );
         assert!(req.tools.is_empty());
     }
 
@@ -477,7 +483,10 @@ mod tests {
         let tool_msg = &req.messages[2];
         assert_eq!(tool_msg.role, "tool");
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_1"));
-        assert_eq!(tool_msg.content.as_deref(), Some("the answer is 42"));
+        assert_eq!(
+            tool_msg.content.as_ref().and_then(|c| c.as_text()),
+            Some("the answer is 42")
+        );
     }
 
     #[test]

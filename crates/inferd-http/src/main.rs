@@ -18,6 +18,7 @@
 mod config;
 mod error;
 mod handlers;
+mod image_decode;
 mod translate;
 
 use std::sync::Arc;

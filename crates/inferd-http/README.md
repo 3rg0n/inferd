@@ -13,11 +13,47 @@ serves HTTP ([ADR 0006](../../docs/adr/0006-lean-core-ecosystem-extensions.md)/[
 
 ## Endpoints
 
-- `POST /v1/chat/completions` — streaming (SSE) and non-streaming.
+- `POST /v1/chat/completions` — streaming (SSE) and non-streaming;
+  text **and** vision (`image_url` content parts, see below).
 - `POST /v1/embeddings` — `float` and `base64` encodings (the OpenAI SDK
   defaults to `base64`).
 - `GET /v1/models` — advertises the single warm model.
 - `GET /health` — liveness.
+
+## Vision (image input)
+
+The bridge accepts OpenAI multimodal chat content — a `user` message
+whose `content` is an array of parts, mixing `text` and `image_url`:
+
+```python
+client.chat.completions.create(
+    model="anything",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What does this say?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,<...>"}},
+        ],
+    }],
+)
+```
+
+The daemon links no image codec (ADR 0016): the bridge decodes the
+PNG/JPEG to raw RGB and sends it as an inferd image attachment over the
+BLOB-frame wire. Requires the daemon to have a vision-capable model warm
+(the default Gemma 4 E4B is); a non-vision model returns the daemon's
+`attachment_unsupported` error.
+
+- **`data:` URLs only.** A remote `http(s)://` image URL is rejected with
+  a 400 — a server-side fetch of an arbitrary URL is an SSRF vector, so
+  the bridge does not fetch. Inline the image as a base64 `data:` URL
+  (which is what the OpenAI SDK does when you pass image bytes).
+- **Bomb-guarded.** The encoded payload is capped (8 MiB) and decode is
+  bounded by max dimensions (8192²) and a max-allocation limit, so a
+  small hostile image can't exhaust memory.
+- Images are accepted only on `user` messages. The `detail` hint is
+  accepted and ignored (inferd's image budget is an operator/model
+  property — `mmproj_image_max_tokens` — not a per-request knob).
 
 ## Run
 
@@ -75,8 +111,8 @@ non-loopback use:
 - inferd serves **one warm model**; the request `model` field is accepted
   and echoed, not validated.
 - **Unsupported OpenAI params:** `n > 1` → 400; `logprobs`,
-  `presence_penalty`, `frequency_penalty` are ignored; multimodal message
-  content (image/audio) is not accepted in this version (text only).
+  `presence_penalty`, `frequency_penalty` are ignored. Image input **is**
+  supported (see Vision above); audio content parts are not.
 - **Thinking traces** from the model are not surfaced (no OpenAI public
   channel); the answer text streams as normal `content`.
 - `finish_reason` maps from inferd's stop reason (`end_turn`→`stop`,

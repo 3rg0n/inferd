@@ -58,3 +58,6 @@ secrets.yaml
 
 # transient spec-validation harness (not shipped)
 tmp-spec-validation/
+
+# Local scratch (vision proof harnesses, ad-hoc daemon logs) — not committed
+.tmp-vision/
