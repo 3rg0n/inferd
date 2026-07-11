@@ -1,0 +1,23 @@
+clients/go/README.md
+  s_126aec4081f728::t_e71773f1b55ea7 11-17
+  s_126aec4081f728::t_769b3eaea403a1 18-20
+  s_126aec4081f728::t_3f62a8b19612d8 21-27
+.github/workflows/release.yml
+  s_126aec4081f728::t_4566daf990aaa3 960-988
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "29d496a7451b738cec1cf2045c68561678c13150",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
