@@ -568,6 +568,34 @@ fn stage_backends_dir(cmake_dst: &std::path::Path, manifest_dir: &std::path::Pat
         }
     }
 
+    // Windows arm64 only: stage LLVM's OpenMP runtime (`libomp.dll`)
+    // next to the ggml/llama DLLs.
+    //
+    // As of llama.cpp b9850 (commit 826539ce5, "ggml: Parallelize quant
+    // LUT init") OpenMP is linked into **ggml-base** — the core lib every
+    // backend loads — not just the CPU backend. `GGML_OPENMP` defaults ON.
+    // On x86_64 Windows the build uses MSVC (`cl.exe`), so OpenMP resolves
+    // to `vcomp140.dll`, a Visual C++ redistributable already present on
+    // the machine — nothing to stage. On **arm64** Windows ggml refuses
+    // MSVC and the build uses **clang-cl** (see `win_arm64` in
+    // `build_llamacpp`), whose OpenMP runtime is LLVM's `libomp.dll`. That
+    // DLL lives only in the LLVM install dir, so `llama.dll` (→ ggml-base)
+    // fails to load with `0xC0000135` unless `libomp.dll` sits next to the
+    // exe. This mirrors how the Linux CUDA path bundles the CUDA runtime
+    // libs next to `libggml-cuda.so`: a bundled module's non-system
+    // runtime dependency travels with it.
+    //
+    // Gate on the *target* (CARGO_CFG_TARGET_*), NOT `cfg!(...)` — a build
+    // script is compiled for the HOST, so `cfg!(target_arch)` would read
+    // the host arch and misfire under cross-compilation. The rest of this
+    // build script uses the same CARGO_CFG_TARGET_* convention (see the
+    // `target_arch` binding in `build_llamacpp`).
+    let libomp_target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let libomp_target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if libomp_target_os == "windows" && libomp_target_arch == "aarch64" {
+        stage_libomp_windows_arm64(&backends_dir);
+    }
+
     // Surface the staged location for downstream consumers.
     println!(
         "cargo:rustc-env=INFERD_BACKENDS_DIR={}",
@@ -580,6 +608,82 @@ fn stage_backends_dir(cmake_dst: &std::path::Path, manifest_dir: &std::path::Pat
     // crate-relative path (e.g. shipping a default mmproj alongside
     // the backends).
     let _ = manifest_dir;
+}
+
+/// Copy LLVM's `libomp.dll` into `backends_dir` on Windows arm64.
+///
+/// See the call site for why this is needed (b9850 links OpenMP into
+/// ggml-base; the clang-cl arm64 build's OpenMP runtime is `libomp.dll`,
+/// which isn't a system DLL). We locate it via `LLVM_PATH` (exported by
+/// the CI `install-llvm-action`) or `LIBCLANG_PATH` (bindgen already
+/// needs it, so it's set on this target), falling back to any `bin`
+/// directory of an `llvm` install on `PATH`. If it can't be found the
+/// build still succeeds — a `cargo:warning` fires and the release job's
+/// arm64 `--help` verify step catches the missing DLL loudly rather than
+/// shipping a broken tarball.
+///
+/// Called only when the *target* is windows-aarch64 (guarded at the call
+/// site via `CARGO_CFG_TARGET_*`), but not itself `cfg`-gated: a build
+/// script compiles for the host, so a `cfg(target_arch)` attribute here
+/// would exclude the function whenever the host isn't arm64 — including a
+/// cross-compile to windows-arm64 from an x64 host. `allow(dead_code)`
+/// because the only call is behind a runtime env-var check the compiler
+/// can't see through, so on any non-arm64-windows host build it looks
+/// unused even though it is reachable on the target that needs it.
+#[allow(dead_code)]
+fn stage_libomp_windows_arm64(backends_dir: &std::path::Path) {
+    use std::path::PathBuf;
+
+    if backends_dir.join("libomp.dll").exists() {
+        return; // already staged (e.g. incremental rebuild)
+    }
+
+    // Candidate directories that may hold libomp.dll, in priority order.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for var in ["LLVM_PATH", "LIBCLANG_PATH"] {
+        if let Ok(v) = env::var(var) {
+            let p = PathBuf::from(&v);
+            // LLVM_PATH is the install root (…/bin holds the dll);
+            // LIBCLANG_PATH may already point at …/bin or …/lib.
+            candidates.push(p.join("bin"));
+            candidates.push(p.clone());
+            if let Some(parent) = p.parent() {
+                candidates.push(parent.join("bin"));
+            }
+        }
+    }
+
+    for dir in &candidates {
+        let src = dir.join("libomp.dll");
+        if src.is_file() {
+            let dest = backends_dir.join("libomp.dll");
+            match std::fs::copy(&src, &dest) {
+                Ok(_) => {
+                    println!(
+                        "cargo:warning=staged OpenMP runtime {} -> {}",
+                        src.display(),
+                        dest.display()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    println!(
+                        "cargo:warning=stage_libomp: copy {} -> {}: {e}",
+                        src.display(),
+                        dest.display()
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "cargo:warning=stage_libomp: libomp.dll not found (searched {} candidate dir(s) via \
+         LLVM_PATH/LIBCLANG_PATH). The Windows arm64 daemon links OpenMP into ggml-base \
+         (llama.cpp b9850+); without libomp.dll next to the exe it fails to load (0xC0000135). \
+         Set LLVM_PATH to the LLVM install root.",
+        candidates.len()
+    );
 }
 
 #[cfg(not(feature = "llamacpp"))]
