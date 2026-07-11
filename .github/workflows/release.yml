@@ -105,18 +105,22 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
             features: inferd-daemon/dl-backends,inferd-daemon/cuda
-          # Windows arm64 (native build on GitHub's GA `windows-11-arm`
-          # runner — not a cross-compile). dl-backends only: there is no
-          # CUDA on Windows/arm64 (no NVIDIA arm64 Windows GPUs), so the
-          # tarball ships CPU ggml variants and the runtime probe (ADR
-          # 0019) picks CPU. Because there's no `cuda` feature, build.rs
-          # keeps the default VS CMake generator (cmake-rs targets it to
-          # ARM64 via `-A ARM64`), so this row needs neither the Ninja
-          # generator nor the msvc-dev-cmd step the x86_64+CUDA row uses.
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            archive: zip
-            features: inferd-daemon/dl-backends
+          # Windows arm64 (aarch64-pc-windows-msvc) is TEMPORARILY PARKED
+          # (task #185): as of the llama.cpp b9850 bump the arm64 daemon
+          # crashes at process load (0xC0000135) even with libllama +
+          # ggml + libomp all staged next to the exe — b9850 introduced
+          # some other load-time DLL dependency the tarball doesn't yet
+          # ship, and pinpointing it needs a `dumpbin /dependents` walk on
+          # the runner (not yet added). It was build+sign-only in v0.5.1
+          # (never runtime-validated on WoA), and there's no CUDA on WoA,
+          # so it's the lowest-value target to block a release on. The
+          # `stage_libomp_windows_arm64` fix in build.rs + the libomp
+          # verify step below are kept for when this row returns. Re-add
+          # this matrix entry once #185 is resolved.
+          #   - os: windows-11-arm
+          #     target: aarch64-pc-windows-msvc
+          #     archive: zip
+          #     features: inferd-daemon/dl-backends
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
@@ -880,12 +884,14 @@ jobs:
           done
           ls -la
 
-      # Asset-completeness sanity check. The matrix builds 5 platforms
-      # (linux x86_64 + arm64, macOS arm64, windows x86_64 + arm64), each
+      # Asset-completeness sanity check. The matrix builds 4 platforms
+      # (linux x86_64 + arm64, macOS arm64, windows x86_64), each
       # producing 1 archive + 1 SHA256 sidecar + (after signing) 1 cosign
-      # bundle. SBOMs are .cdx.json files (one per workspace crate). If
-      # any are missing the workflow fails LOUDLY before publishing rather
-      # than shipping a half-populated release page.
+      # bundle. (windows arm64 is parked — task #185 — so the count is 4,
+      # not 5; re-add here when that matrix row returns.) SBOMs are
+      # .cdx.json files (one per workspace crate). If any are missing the
+      # workflow fails LOUDLY before publishing rather than shipping a
+      # half-populated release page.
       - name: Verify asset completeness
         shell: bash
         run: |
@@ -897,9 +903,9 @@ jobs:
           sboms=$(ls -1 *.cdx.json 2>/dev/null | wc -l)
           echo "archives=$archives shas=$shas bundles=$bundles sboms=$sboms"
           fail=0
-          if [ "$archives" -lt 5 ]; then echo "FAIL: expected 5 archives, got $archives" >&2; fail=1; fi
-          if [ "$shas"     -lt 5 ]; then echo "FAIL: expected 5 sha256 sidecars, got $shas" >&2; fail=1; fi
-          if [ "$bundles"  -lt 5 ]; then echo "FAIL: expected 5 cosign bundles, got $bundles" >&2; fail=1; fi
+          if [ "$archives" -lt 4 ]; then echo "FAIL: expected 4 archives, got $archives" >&2; fail=1; fi
+          if [ "$shas"     -lt 4 ]; then echo "FAIL: expected 4 sha256 sidecars, got $shas" >&2; fail=1; fi
+          if [ "$bundles"  -lt 4 ]; then echo "FAIL: expected 4 cosign bundles, got $bundles" >&2; fail=1; fi
           if [ "$sboms"    -lt 1 ]; then echo "FAIL: expected at least one SBOM, got $sboms" >&2; fail=1; fi
           if [ "$archives" -ne "$shas" ] || [ "$archives" -ne "$bundles" ]; then
             echo "FAIL: archive/sha/bundle counts do not match" >&2
