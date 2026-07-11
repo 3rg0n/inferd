@@ -1,0 +1,80 @@
+crates/inferd-http/src/image_decode.rs
+  s_126aec4081f728::t_79520f821bb7ee 72-80,82-85
+  s_126aec4081f728::t_0a73aa2bc4eb58 1-31,33-71,81,86-212
+  s_126aec4081f728::t_38fcd5ed677d07 32
+crates/inferd-http/Cargo.toml
+  s_126aec4081f728::t_60c3d6907e18c0 37-42
+crates/inferd-http/src/translate.rs
+  s_126aec4081f728::t_09cb6cf00d2c37 159
+  s_126aec4081f728::t_13d1db171974e0 547
+  s_126aec4081f728::t_9e7e5b2be8443c 51-58,61-72
+  s_126aec4081f728::t_ae8fcfdd010386 156-158,160,162-171
+  s_126aec4081f728::t_69d530db69fc6b 95-97
+  s_126aec4081f728::t_969946989ed43e 76-83
+  s_126aec4081f728::t_fbae1bcca3e86a 494
+  s_126aec4081f728::t_285ba9de62429f 227
+  s_126aec4081f728::t_a23a67e4a55e51 13-14,18-19,23
+  s_126aec4081f728::t_7790f396188c9f 900-943
+  s_126aec4081f728::t_c8a4aa8a5ab071 759-899,944-968
+  s_126aec4081f728::t_7d3fdbc6909c9f 43-50
+  s_126aec4081f728::t_cc1b547207f1e6 146,150
+  s_126aec4081f728::t_195a7e8cdd9b76 91-94,108-109,113-135,144-145,147-149,151-155,161,172-192
+  s_126aec4081f728::t_f243f9fa44e90c 24,73
+crates/inferd-http/src/main.rs
+  s_126aec4081f728::t_f273c354b9a45d 21
+crates/inferd-openai-wire/src/lib.rs
+  s_126aec4081f728::t_562813b9c4d3df 79-81,83,95-163
+  s_77c5e323ad5400::t_ce71ca957dffd4 164
+crates/inferd-http/README.md
+  s_126aec4081f728::t_8b6bd6be3f4f01 114-115
+  s_126aec4081f728::t_afe827ace85af2 16-17,23-56
+  s_3f706e3f4b4643::t_883b07176dd5f7 57
+.gitignore
+  s_126aec4081f728::t_26547a1ba36a33 61-63
+CHANGELOG.md
+  s_9b8d68f5aabdc1::t_831f8e2859d4e6 27-41
+Cargo.lock
+  s_126aec4081f728::t_e5679481eb3b0b 1088,1091
+crates/inferd-engine/src/openai_compat/mapper.rs
+  s_126aec4081f728::t_52f3ca32701f2b 178,190,396-399,401-404,486-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "b1fd0eeef631cbc30a8a3e301184c50e74e57583",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_77c5e323ad5400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2db1b9bd-30ff-4002-9382-6b26ac9a840b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
