@@ -1,0 +1,21 @@
+.github/workflows/release.yml
+  s_126aec4081f728::t_d41206f85dce87 416-437
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_668a429e61c725 571-598,613-688
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "02cd5618b2df3a768a6cdffe5d0524b3c153ce14",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
