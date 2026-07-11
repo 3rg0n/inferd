@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0-rc.3] - 2026-07-11
+
+### Changed
+
+- **Windows arm64 (`aarch64-pc-windows-msvc`) temporarily parked** from the
+  release matrix (tracked in the issue for the b9850 arm64 load crash).
+  On the b9850 line the arm64 daemon crashes at process load
+  (`0xC0000135`) even with `libllama` + `ggml` + `libomp` staged next to
+  the exe — b9850 introduced another load-time DLL dependency still being
+  pinpointed. arm64 was build+sign-only in v0.5.1 (never runtime-validated
+  on Windows-on-ARM) and has no CUDA path, so it does not block the
+  release. v0.6.0 ships on Linux x86_64 (CUDA), Linux arm64, macOS arm64
+  (Metal), and Windows x86_64 (CUDA). The `libomp.dll` staging fix and the
+  arm64 build steps are retained for a clean re-add.
+
 ## [0.6.0-rc.2] - 2026-07-11
 
 ### Fixed
