@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0-rc.1] - 2026-07-11
+
 ### Added
 
 - **`inferd-http` — OpenAI-compatible HTTP bridge** ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md)
