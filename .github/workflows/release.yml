@@ -287,6 +287,16 @@ jobs:
         # `inferdctl`. See ADR 0018.
         run: cargo build --release --bin inferdctl --target ${{ matrix.target }}
 
+      - name: Build inferd-http bridge
+        # OpenAI-compat HTTP bridge (ADR 0020 Surface A): a separate,
+        # user-launched process that translates OpenAI /v1 calls to the
+        # daemon's IPC via inferd-client. Like inferdctl it has NO
+        # llamacpp/FFI dependency — it holds no model and does no
+        # inference — so it builds with default features (no
+        # dl-backends, no accelerator). Shipping it in the tarball is
+        # what lets `install=work` reach "point OpenCode at inferd".
+        run: cargo build --release --bin inferd-http --target ${{ matrix.target }}
+
       # Belt-and-braces: assert the produced binary's CLI actually
       # accepts `--backend llamacpp`. This is the *direct* test —
       # if the daemon's BackendKind::Llamacpp arm got compiled out,
@@ -717,6 +727,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
             cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferd-http.exe" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/windows/install.ps1 "$stage/packaging/"
             cp packaging/windows/uninstall.ps1 "$stage/packaging/"
@@ -725,6 +736,7 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"
             cp "target/${{ matrix.target }}/release/inferdctl" "$stage/"
+            cp "target/${{ matrix.target }}/release/inferd-http" "$stage/"
             mkdir -p "$stage/packaging"
             cp packaging/README.md "$stage/packaging/"
             case "${{ runner.os }}" in
