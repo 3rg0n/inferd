@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0-rc.4] - 2026-07-13
+
+### Added
+
+- **Structured output through the `inferd-http` bridge.** OpenAI
+  `response_format` `{"type":"json_schema","json_schema":{"schema":{…}}}`
+  now maps to the daemon's grammar-constrained decoding, so bridge output
+  conforms to the requested JSON Schema (the gap was found during
+  install=work validation — the field was silently dropped — and
+  SDK-verified after the fix). `text` / `json_object` stay unconstrained
+  by design.
+
 ### Fixed
 
+- **Go client version pinning** — `clients/go` is a nested module, so Go
+  resolves its versions only from path-prefixed tags (`clients/go/vX.Y.Z`);
+  the repo tagged only root releases, so `go get …/clients/go@vX.Y.Z`
+  failed and only commit pseudo-versions resolved. The release workflow
+  now publishes a matching `clients/go/<version>` tag per release (#48).
+- **Go client `DialPipe` busy-retry** (Windows) — the busy-pipe match was
+  case-sensitive and missed the capitalised OS error ("All pipe instances
+  are busy."), so the retry never fired and a busy pipe failed
+  immediately; now case-insensitive (#49).
 - **Backend init failures now log to the NDJSON activity log before the
   daemon exits** (issue #47). Previously, a failed backend/model load
   (e.g. `mmproj_image_max_tokens` below the model's vision floor, or any
