@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -79,24 +80,21 @@ func isPipeBusy(err error) bool {
 		containsErrPipeBusy(err.Error()))
 }
 
+// containsErrPipeBusy reports whether the OS error text names a transient
+// pipe-open condition that DialPipe should retry. Matching is
+// **case-insensitive**: Windows returns the busy error capitalised —
+// "All pipe instances are busy." — so a lowercase-only match (the pre-fix
+// bug, #49) never fired and DialPipe failed immediately instead of
+// retrying. We fold both sides to lower-case and match the
+// capitalisation-stable substring "pipe instances are busy".
 func containsErrPipeBusy(s string) bool {
-	return s != "" &&
-		(stringContains(s, "all pipe instances are busy") ||
-			stringContains(s, "The system cannot find the file") ||
-			stringContains(s, "Access is denied"))
-}
-
-func stringContains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+	if s == "" {
+		return false
 	}
-	return -1
+	ls := strings.ToLower(s)
+	return strings.Contains(ls, "pipe instances are busy") ||
+		strings.Contains(ls, "the system cannot find the file") ||
+		strings.Contains(ls, "access is denied")
 }
 
 // pipeConn adapts an os.File to net.Conn so the Client uses the same
