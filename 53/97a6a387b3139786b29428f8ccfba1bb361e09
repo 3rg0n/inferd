@@ -1,0 +1,42 @@
+crates/inferd-openai-wire/src/lib.rs
+  s_126aec4081f728::t_c2e935a2a3da03 65-69,79-119
+  s_c7288ee7b9b87f::t_f53ffdd3457fbd 120
+docs/v0.6-validation.md
+  s_126aec4081f728::t_bc38860b5ce7c1 109-111
+  s_126aec4081f728::t_3262d865cee570 70-90
+crates/inferd-http/README.md
+  s_126aec4081f728::t_5f96cad25dc3e9 113-117,121-125
+crates/inferd-http/src/translate.rs
+  s_126aec4081f728::t_a26f3498181d6e 85-97,103
+  s_126aec4081f728::t_5c235031bbaafd 15
+  s_126aec4081f728::t_15bdff1aa2046b 19-20
+  s_126aec4081f728::t_73d4cff8d99bcd 248
+  s_126aec4081f728::t_dcf72a7cca615f 529,551,577,621,659,822,866,888,916,994,1018,1043
+  s_126aec4081f728::t_6eb01e01fc2004 924-977
+crates/inferd-engine/src/openai_compat/mapper.rs
+  s_c7288ee7b9b87f::t_11b2a142940030 108-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "5397a6a387b3139786b29428f8ccfba1bb361e09",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_c7288ee7b9b87f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be227710-53e8-4ea0-bd69-9d2536b3cc8b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
