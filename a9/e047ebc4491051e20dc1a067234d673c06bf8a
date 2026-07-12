@@ -1,0 +1,42 @@
+CHANGELOG.md
+  s_126aec4081f728::t_cb5eb3426af8b3 10-21
+  s_77c5e323ad5400::t_fbfd8e73d61304 24-32
+Cargo.lock
+  s_126aec4081f728::t_db71a8370fc676 1011,1026,1053,1084,1107,1115,1125
+Cargo.toml
+  s_126aec4081f728::t_8afa8893cf315f 18
+crates/inferd-client/Cargo.toml
+  s_126aec4081f728::t_eb94c8ed8c211e 24
+crates/inferd-daemon/Cargo.toml
+  s_126aec4081f728::t_493e405fe887da 47-48
+crates/inferd-engine/Cargo.toml
+  s_126aec4081f728::t_1a629c0fff8d0a 56,58
+crates/inferd-http/Cargo.toml
+  s_126aec4081f728::t_624be892f1261f 18-19,21
+crates/inferd/Cargo.toml
+  s_126aec4081f728::t_00643779e2b7ab 22-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "a9e047ebc4491051e20dc1a067234d673c06bf8a",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_77c5e323ad5400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2db1b9bd-30ff-4002-9382-6b26ac9a840b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
