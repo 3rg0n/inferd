@@ -1,0 +1,30 @@
+clients/go/busy_windows_test.go
+  s_126aec4081f728::t_c60597271545d0 1-39
+clients/go/client_windows.go
+  s_126aec4081f728::t_60dc32b9f95bee 11
+  s_3f706e3f4b4643::t_8ceacec1d789e6 83-89,91-92,94-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4f34990c1936baa31e88e20dcd81067b15d14191",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
