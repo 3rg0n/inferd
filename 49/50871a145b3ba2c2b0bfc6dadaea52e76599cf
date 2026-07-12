@@ -1,0 +1,21 @@
+docs/v0.6-validation.md
+  s_126aec4081f728::t_b6bac581019bf6 60,66-79
+  s_126aec4081f728::t_5bdb5ed48edc63 96-99
+  s_126aec4081f728::t_cb17ce83b54c75 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4950871a145b3ba2c2b0bfc6dadaea52e76599cf",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
