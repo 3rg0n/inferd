@@ -110,11 +110,19 @@ non-loopback use:
 
 - inferd serves **one warm model**; the request `model` field is accepted
   and echoed, not validated.
+- **Structured output** is supported: `response_format`
+  `{"type":"json_schema","json_schema":{"schema":{…}}}` maps to the
+  daemon's grammar-constrained decoding, so output conforms to your JSON
+  Schema. `{"type":"json_object"}` / `{"type":"text"}` carry no schema, so
+  they're unconstrained (best-effort JSON via the prompt only).
 - **Unsupported OpenAI params:** `n > 1` → 400; `logprobs`,
   `presence_penalty`, `frequency_penalty` are ignored. Image input **is**
   supported (see Vision above); audio content parts are not.
-- **Thinking traces** from the model are not surfaced (no OpenAI public
-  channel); the answer text streams as normal `content`.
+- **Thinking** is not reachable through this bridge: it's an explicit
+  opt-in on inferd's native wire (`RequestV2.thinking`), and the OpenAI
+  Chat API has no standard field for it. Use `inferd-client` directly if
+  you need reasoning traces. (Any thinking the model does emit is not
+  surfaced as separate `content` here.)
 - `finish_reason` maps from inferd's stop reason (`end_turn`→`stop`,
   `max_tokens`→`length`, `tool_use`→`tool_calls`).
 - Daemon errors map to OpenAI-shaped errors with the right status

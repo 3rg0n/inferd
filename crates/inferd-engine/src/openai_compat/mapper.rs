@@ -105,6 +105,9 @@ pub(super) fn request_from_resolved(
         stream_options: Some(StreamOptions {
             include_usage: true,
         }),
+        // Outbound: inferd's own structured-output constraint is applied
+        // at the local backend, not forwarded to the upstream provider.
+        response_format: None,
     })
 }
 

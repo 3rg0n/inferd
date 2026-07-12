@@ -12,11 +12,12 @@ use inferd_openai_wire::{
     ChatChunk, ChatRequest, ChunkChoice, ChunkDelta, ChunkToolCallDelta,
     ChunkToolCallFunctionDelta, ChunkUsage, ContentPart, EmbeddingData, EmbeddingVector,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, MessageContent,
+    ResponseFormat as OpenAiResponseFormat,
 };
 use inferd_proto::embed::EmbedRequest;
 use inferd_proto::v2::{
-    Attachment, ContentBlock, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
-    StopReasonV2, Tool, ToolCallId, UsageV2,
+    Attachment, ContentBlock, MessageV2, RequestV2, ResponseBlock, ResponseFormat, ResponseV2,
+    RoleV2, StopReasonV2, Tool, ToolCallId, UsageV2,
 };
 use thiserror::Error;
 
@@ -81,11 +82,25 @@ fn push_text(content: &mut Vec<ContentBlock>, text: String) {
     }
 }
 
+/// Map an OpenAI `response_format` to the daemon's structured-output
+/// constraint. Only `json_schema` with a concrete schema maps to a
+/// grammar; `text`/`json_object` (no schema to constrain against) and
+/// unknown/absent forms yield `None` (unconstrained decoding).
+fn map_response_format(rf: Option<OpenAiResponseFormat>) -> Option<ResponseFormat> {
+    match rf {
+        Some(OpenAiResponseFormat::JsonSchema { json_schema }) => json_schema
+            .schema
+            .map(|schema| ResponseFormat::JsonSchema { schema }),
+        _ => None,
+    }
+}
+
 /// Translate an inbound OpenAI chat request into an inferd `RequestV2`.
 pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, TranslateError> {
     if req.n.unwrap_or(1) > 1 {
         return Err(TranslateError::MultipleChoices);
     }
+    let response_format = map_response_format(req.response_format);
 
     let mut messages = Vec::with_capacity(req.messages.len());
     // Image bytes ride out-of-band as attachments referenced by id; the
@@ -230,6 +245,7 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
         top_p: req.top_p,
         max_tokens: req.max_tokens,
         stream: Some(req.stream),
+        response_format,
         ..Default::default()
     })
 }
@@ -510,6 +526,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "id1".into()).unwrap();
         assert_eq!(v2.messages.len(), 2);
@@ -531,6 +548,7 @@ mod tests {
             n: Some(2),
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         assert!(matches!(
             chat_request_to_v2(req, "i".into()),
@@ -556,6 +574,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "i".into()).unwrap();
         assert_eq!(v2.messages.len(), 1);
@@ -599,6 +618,7 @@ mod tests {
                 },
             }],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "i".into()).unwrap();
         assert_eq!(v2.tools.len(), 1);
@@ -636,6 +656,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         assert!(matches!(
             chat_request_to_v2(req, "i".into()),
@@ -798,6 +819,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "id".into()).unwrap();
         // One message, two content blocks (text + image ref).
@@ -841,6 +863,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "id".into()).unwrap();
         assert_eq!(v2.attachments.len(), 2);
@@ -862,6 +885,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         assert!(matches!(
             chat_request_to_v2(req, "i".into()),
@@ -889,11 +913,66 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         assert!(matches!(
             chat_request_to_v2(req, "i".into()),
             Err(TranslateError::Image(_))
         ));
+    }
+
+    #[test]
+    fn response_format_json_schema_maps_to_grammar() {
+        let schema = serde_json::json!({"type":"object","properties":{"x":{"type":"number"}}});
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![msg("user", "give x")],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+            response_format: Some(inferd_openai_wire::ResponseFormat::JsonSchema {
+                json_schema: inferd_openai_wire::JsonSchemaSpec {
+                    name: Some("s".into()),
+                    schema: Some(schema.clone()),
+                    strict: Some(true),
+                },
+            }),
+        };
+        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        match v2.response_format {
+            Some(ResponseFormat::JsonSchema { schema: s }) => assert_eq!(s, schema),
+            other => panic!("expected JsonSchema grammar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn response_format_text_and_json_object_are_unconstrained() {
+        for rf in [
+            inferd_openai_wire::ResponseFormat::Text,
+            inferd_openai_wire::ResponseFormat::JsonObject,
+        ] {
+            let req = ChatRequest {
+                model: "m".into(),
+                messages: vec![msg("user", "hi")],
+                stream: false,
+                temperature: None,
+                top_p: None,
+                max_tokens: None,
+                n: None,
+                tools: vec![],
+                stream_options: None,
+                response_format: Some(rf),
+            };
+            let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+            assert!(
+                v2.response_format.is_none(),
+                "text/json_object carry no schema → unconstrained"
+            );
+        }
     }
 
     #[test]
@@ -912,6 +991,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         assert!(matches!(
             chat_request_to_v2(req, "i".into()),
@@ -935,6 +1015,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "i".into()).unwrap();
         assert_eq!(v2.attachments.len(), MAX_IMAGES_PER_REQUEST);
@@ -959,6 +1040,7 @@ mod tests {
             n: None,
             tools: vec![],
             stream_options: None,
+            response_format: None,
         };
         let v2 = chat_request_to_v2(req, "i".into()).unwrap();
         assert_eq!(v2.messages.len(), 1);

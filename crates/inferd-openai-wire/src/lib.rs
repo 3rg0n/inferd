@@ -62,6 +62,11 @@ pub struct ChatRequest {
     /// Ask the provider to include usage in the final stream chunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
+    /// Structured-output constraint. The inbound bridge maps a
+    /// `json_schema` form to the daemon's grammar-constrained decoding
+    /// (ADR 0013); other forms are ignored (best-effort text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
 /// `stream_options` object — only `include_usage` is used.
@@ -69,6 +74,48 @@ pub struct ChatRequest {
 pub struct StreamOptions {
     /// Emit a final chunk carrying token usage.
     pub include_usage: bool,
+}
+
+/// OpenAI `response_format`. Tagged by `type`. inferd's bridge honours
+/// `json_schema` (mapped to the daemon's JSON-Schema grammar); `text`
+/// (the implicit default) and `json_object` (schema-less JSON) carry no
+/// schema to constrain against, so the bridge treats them as
+/// unconstrained — the model is still asked for JSON via the prompt, but
+/// no grammar is applied. Unknown types deserialize to `Other` and are
+/// ignored rather than rejected (forward-compat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Plain text (OpenAI's implicit default).
+    Text,
+    /// Schema-less JSON mode.
+    JsonObject,
+    /// JSON constrained to a schema. OpenAI nests it under a
+    /// `json_schema` object: `{"type":"json_schema","json_schema":{
+    /// "name":...,"schema":{...}}}`.
+    JsonSchema {
+        /// The `json_schema` object (name + schema).
+        json_schema: JsonSchemaSpec,
+    },
+    /// Any `type` the bridge does not recognise — ignored.
+    #[serde(other)]
+    Other,
+}
+
+/// The `json_schema` object inside a `response_format`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonSchemaSpec {
+    /// Caller-chosen name for the schema (required by the OpenAI API;
+    /// inferd does not use it but accepts it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The JSON Schema the output must conform to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+    /// OpenAI's strict flag; accepted and ignored (inferd's grammar is
+    /// always strict).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// One conversation turn.
