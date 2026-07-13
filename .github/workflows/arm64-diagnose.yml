@@ -1,19 +1,19 @@
-# Manual-dispatch diagnostic for the Windows arm64 daemon load crash
-# (task #185). b9850 made inferd-daemon.exe crash at process load
-# (0xC0000135) on aarch64-pc-windows-msvc even with libomp.dll staged.
-# This throwaway workflow builds the arm64 daemon TWO ways — default
-# (OpenMP on) and with INFERD_ARM64_DISABLE_OPENMP=1 (GGML_OPENMP=OFF) —
-# dumps the DLL import closure of the default build, and launches --help
-# on BOTH so we learn (a) the missing dependency and (b) whether
-# disabling OpenMP fixes it, in one run. ~20 min, no release. Delete once
-# #185 is resolved.
+# Manual-dispatch verification for the Windows arm64 daemon load crash
+# fix (task #185). Root cause (proven by dumpbin /dependents): b9850 links
+# OpenMP into ggml-base, and the clang-cl arm64 build needs
+# `libomp140.aarch64.dll` at load — a non-system DLL not in the tarball —
+# so the daemon crashed with 0xC0000135. Fix: build.rs sets
+# GGML_OPENMP=OFF on arm64. This job builds the arm64 daemon (fix now
+# default) and launches `--help` to confirm it loads (exit 0) and shows
+# `--backend llamacpp`. ~12 min, no release. Delete once #185 lands in a
+# release build.
 name: arm64-diagnose
 on:
   workflow_dispatch: {}
 
 jobs:
-  diagnose:
-    name: aarch64 DLL-closure + OpenMP-off A/B
+  verify:
+    name: aarch64 GGML_OPENMP=OFF loads clean
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
@@ -34,55 +34,39 @@ jobs:
         with:
           arch: arm64
 
-      # --- Build A: default (OpenMP ON) ---
-      - name: Build daemon (default, OpenMP on)
+      - name: Build daemon (GGML_OPENMP=OFF now default on arm64)
         run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target aarch64-pc-windows-msvc
 
-      - name: Dump DLL closure + launch (default build)
+      - name: Launch --help + confirm no OpenMP dep
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           $rel = "target/aarch64-pc-windows-msvc/release"
           $exe = "$rel/inferd-daemon.exe"
           Copy-Item "$rel/backends/*.dll" "$rel/" -Force -ErrorAction SilentlyContinue
-          Write-Host "=== DLLs next to exe ==="
+          Write-Host "=== DLLs next to exe (should be NO libomp*) ==="
           Get-ChildItem "$rel/*.dll" | Select-Object -ExpandProperty Name
 
-          function Deps($p) {
-            Write-Host "`n--- $([IO.Path]::GetFileName($p)) imports: ---"
-            # dumpbin /dependents prints '    NAME.dll' lines; match ending in .dll
-            & dumpbin /dependents "$p" 2>&1 | Where-Object { $_ -match '^\s+\S+\.dll' }
-          }
-          Deps $exe
-          foreach ($d in 'llama.dll','ggml-base.dll','ggml-cpu.dll','ggml.dll','libomp.dll') {
-            if (Test-Path "$rel/$d") { Deps "$rel/$d" }
-          }
-          Write-Host "`n=== libomp.dll arch ==="
-          if (Test-Path "$rel/libomp.dll") { & dumpbin /headers "$rel/libomp.dll" 2>&1 | Where-Object { $_ -match 'machine' } | Select-Object -First 1 }
+          # Prove ggml-base no longer imports an OpenMP runtime.
+          Write-Host "`n=== ggml-base.dll OpenMP import? (expect none) ==="
+          $deps = & dumpbin /dependents "$rel/ggml-base.dll" 2>&1
+          $omp = $deps | Where-Object { $_ -match 'libomp' }
+          if ($omp) { Write-Host "STILL IMPORTS: $omp" } else { Write-Host "OK: ggml-base.dll imports no libomp*" }
 
-          Write-Host "`n=== launch --help (DEFAULT / OpenMP ON) ==="
+          # The decisive test: launch --help. Capture exit without letting
+          # a non-zero code abort the step (the pwsh bug from the last run).
+          Write-Host "`n=== launch inferd-daemon.exe --help ==="
           $env:PATH = "$rel;$env:PATH"
-          & $exe --help 2>&1 | Select-Object -First 3
-          Write-Host "DEFAULT exit code: $LASTEXITCODE  (0=ok, -1073741515=0xC0000135 DLL-not-found)"
-
-      # --- Build B: OpenMP OFF ---
-      - name: Build daemon (INFERD_ARM64_DISABLE_OPENMP=1)
-        env:
-          INFERD_ARM64_DISABLE_OPENMP: '1'
-        run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target aarch64-pc-windows-msvc
-
-      - name: Launch (OpenMP-off build)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $rel = "target/aarch64-pc-windows-msvc/release"
-          $exe = "$rel/inferd-daemon.exe"
-          Copy-Item "$rel/backends/*.dll" "$rel/" -Force -ErrorAction SilentlyContinue
-          Write-Host "=== DLLs next to exe (OpenMP off — libomp should be GONE) ==="
-          Get-ChildItem "$rel/*.dll" | Select-Object -ExpandProperty Name
-          Write-Host "`n=== launch --help (OpenMP OFF) ==="
-          $env:PATH = "$rel;$env:PATH"
-          & $exe --help 2>&1 | Select-Object -First 3
-          Write-Host "OPENMP-OFF exit code: $LASTEXITCODE  (0=ok → this is the fix)"
-          if ($LASTEXITCODE -eq 0) { Write-Host "RESULT: GGML_OPENMP=OFF FIXES the arm64 load crash." }
-          else { Write-Host "RESULT: still crashing — root cause is NOT (only) OpenMP." }
+          $out = & $exe --help 2>&1
+          $code = $LASTEXITCODE
+          $out | Select-Object -First 4
+          Write-Host "exit code: $code  (0=loads clean; -1073741515=0xC0000135 DLL-not-found)"
+          if ($code -ne 0) {
+            Write-Host "RESULT: FAIL — still crashes at load."
+            exit 1
+          }
+          if (-not ($out -match 'llamacpp')) {
+            Write-Host "RESULT: FAIL — loads but --backend llamacpp missing."
+            exit 1
+          }
+          Write-Host "RESULT: PASS — arm64 daemon loads clean with GGML_OPENMP=OFF and advertises llamacpp."

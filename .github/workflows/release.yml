@@ -417,27 +417,12 @@ jobs:
           fi
           echo "OK: ggml-cuda.dll present in $dir"
 
-      # Windows arm64 links OpenMP into ggml-base (llama.cpp b9850+,
-      # commit 826539ce5) and builds with clang-cl, whose OpenMP runtime
-      # is LLVM's libomp.dll — NOT a system DLL like MSVC's vcomp140.dll.
-      # build.rs (`stage_libomp_windows_arm64`) copies it into backends/;
-      # if that lookup ever fails, the daemon crashes at load with a
-      # cryptic 0xC0000135. Gate on it here with a clear message BEFORE
-      # the `--help` verify below turns it into an opaque exit-127.
-      - name: Verify OpenMP runtime present (Windows arm64 → libomp.dll)
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        shell: bash
-        run: |
-          set -euo pipefail
-          dir="target/${{ matrix.target }}/release/backends"
-          if ! ls "$dir" | grep -q '^libomp\.dll$'; then
-            echo "FAIL: libomp.dll missing from $dir — the clang-cl arm64 daemon links OpenMP" \
-                 "into ggml-base and will crash at load (0xC0000135) without it. build.rs" \
-                 "stage_libomp_windows_arm64 should have staged it from LLVM_PATH." >&2
-            ls -la "$dir" >&2
-            exit 1
-          fi
-          echo "OK: libomp.dll present in $dir"
+      # (Windows arm64 OpenMP: b9850 links OpenMP into ggml-base, and the
+      # clang-cl arm64 build needed the MSVC-style `libomp140.aarch64.dll`
+      # at load — a non-system DLL not in the tarball, so the daemon
+      # crashed with 0xC0000135. Fixed at the source: build.rs builds arm64
+      # with `GGML_OPENMP=OFF` (ggml self-threads via its pthread pool), so
+      # there's no OpenMP runtime DLL to stage or verify. See task #185.)
 
       # Bundle the CUDA runtime libs (libcudart, libcublas, libcublasLt)
       # next to libggml-cuda.so. Without this, the daemon's runtime
