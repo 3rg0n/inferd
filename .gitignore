@@ -61,3 +61,6 @@ tmp-spec-validation/
 
 # Local scratch (vision proof harnesses, ad-hoc daemon logs) — not committed
 .tmp-vision/
+
+# v0.6 validation scratch (tarballs, harnesses)
+.tmp-v06val/
