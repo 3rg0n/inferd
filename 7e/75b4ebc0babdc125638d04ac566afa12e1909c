@@ -1,0 +1,23 @@
+.github/workflows/arm64-diagnose.yml
+  s_126aec4081f728::t_c7e877d181d3fd 1-9,15-16,37,40,47,50-54,56-58,60-72
+crates/inferd-engine/build.rs
+  s_126aec4081f728::t_19e198f4bc222e 157-171,587-593
+.github/workflows/release.yml
+  s_126aec4081f728::t_81a272715d570e 420-425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "7e75b4ebc0babdc125638d04ac566afa12e1909c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
