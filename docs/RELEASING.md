@@ -8,11 +8,12 @@ and the procedure a human follows when something goes wrong.
 
 Each release tag (`vX.Y.Z`) produces, on the GitHub Release page:
 
-- 4 platform archives (each containing `inferd-daemon`, `inferdctl`, and `inferd-http`):
+- 5 platform archives (each containing `inferd-daemon`, `inferdctl`, and `inferd-http`):
   - `inferd-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`
   - `inferd-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz`
   - `inferd-vX.Y.Z-aarch64-apple-darwin.tar.gz`
   - `inferd-vX.Y.Z-x86_64-pc-windows-msvc.zip`
+  - `inferd-vX.Y.Z-aarch64-pc-windows-msvc.zip`
 - One `*.sha256` sidecar per archive (universal "did this download
   corrupt" check; verify with `shasum -a 256 -c <archive>.sha256`).
 - One `*.cosign.bundle` per archive (keyless OIDC provenance; verify
@@ -67,7 +68,7 @@ The expected trajectory:
 
 - 4 `build` jobs run in parallel (~5 minutes each on llama.cpp builds).
 - 1 `sbom` job runs in parallel (~3 minutes).
-- 1 `publish` job runs after all 4 succeed: signs archives, verifies
+- 1 `publish` job runs after all 5 succeed: signs archives, verifies
   asset completeness, extracts CHANGELOG section, creates the release.
 
 If `Verify asset completeness` fails: at least one platform build
