@@ -7,22 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Validation
+## [0.6.0] - 2026-07-13
 
-- **macOS arm64 Metal — v0.6.0-rc.4 full G1–G6 tarball pass green
-  (2026-07-13, this is the last GA gate):** SHA256 verified.
-  `inferd-daemon`/`inferdctl`/`inferd-http` all `0.6.0-rc.4`. Installed
-  via `install-launchagent.sh` → `status=ready`, `wire_version=1`,
-  `accelerator=metal`, `device=MTL0 vram=11.8 GiB`. 16 GiB unified memory
-  (< 20 GiB auto-select threshold) → correctly picked E4B. G1 text
-  (Paris). G2 thinking (reasoning trace separated, answer 42, no
-  channel-token leak). G3 grammar native (schema-conforming JSON;
-  malformed schema fails closed). G4 vision native (exact OCR
-  transcription over raw-BLOB attachment, `input_tokens=73`). G5 bridge
-  (`inferd-http` from the tarball + real `openai` Python SDK: chat
-  non-stream/stream, embeddings float+base64). G6 bridge vision+grammar
-  (new in 0.6 — `image_url` OCR + `response_format` json_schema, both
-  exact/conforming). All green. See `docs/v0.6-validation.md`, issue #50.
+GA promotion of the `0.6.0-rc.1`…`rc.4` line (below). Headline changes
+over v0.5.1: vendored **llama.cpp `b9850`** + Gemma 4 **12B** support,
+**boot-time model auto-selection** (ADR 0023), and the **`inferd-http`
+OpenAI-compat bridge** (ADR 0020) — now with **vision** (`image_url` →
+RGB attachment) and **structured output** (`response_format` → grammar),
+bundled in every tarball. Plus Go-client fixes (nested-module version
+tags #48, `DialPipe` busy-retry #49) and a daemon backend-init log fix
+(#47). Windows arm64 is **parked** for this line (task #185 — the b9850
+`libomp` load crash); it ships on Linux x86_64 (CUDA), Linux arm64,
+macOS arm64 (Metal), and Windows x86_64 (CUDA).
+
+**install=work validated on all three shipping-desktop platforms** from
+the signed rc.4 tarballs (full G1–G6: text, thinking-no-leak, grammar,
+vision, bridge, bridge-vision+grammar):
+
+- **Windows x64 CUDA** (RTX 5080): upgrade-over-running install → all gates
+  green; auto-select → E4B (16 GiB < 20 GiB).
+- **Linux x64 CUDA / WSL** (clean env): fresh install **auto-fetched the
+  models over HTTPS** (ADR 0010 bootstrap) → all gates green.
+- **macOS arm64 Metal** (16 GiB, issue #50): full G1–G6 green,
+  `accelerator=metal`; auto-select → E4B.
+
+The **12B auto-select tier ships documented-unvalidated**: the selection
+logic is unit-tested and the E4B path is proven, but no `>= 20 GiB`
+accelerator was available to load a real 12B model. See
+`docs/v0.6-validation.md`.
 
 ## [0.6.0-rc.4] - 2026-07-13
 
