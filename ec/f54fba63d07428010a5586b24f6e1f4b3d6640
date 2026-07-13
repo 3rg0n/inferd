@@ -1,0 +1,56 @@
+docs/protocol-v2.md
+  s_126aec4081f728::t_3e2dd8aadc9afb 3
+  s_bf648d35fd0200::t_a75d6743022708 48-49
+README.md
+  s_126aec4081f728::t_e675e5bc80207c 9-13
+  s_126aec4081f728::t_9185a638c8a29d 84,86-99,104-107
+  s_126aec4081f728::t_a2100c67cbbb74 67,69-71,74-77
+  s_126aec4081f728::t_f92a9c95b6cb78 26-32
+CLAUDE.md
+  s_126aec4081f728::t_04c063efad51ba 7
+  s_126aec4081f728::t_78aaa9a309879c 9-11,66,68-69
+site/index.html
+  s_126aec4081f728::t_815cfb451e57d6 198-205,212
+  s_126aec4081f728::t_e85b28b9db8504 41,65,255-256,268-269,276-277
+  s_126aec4081f728::t_f67771c6131003 325
+context.md
+  s_c7288ee7b9b87f::t_0f9f7f6c6d57b2 39,41,43,47,49,67
+crates/inferd-client/README.md
+  s_126aec4081f728::t_dfac6791dd373c 129,132-133,138-140
+crates/inferd-proto/README.md
+  s_bf648d35fd0200::t_e59c33dea2e2e7 44-45,57
+docs/RELEASING.md
+  s_bf648d35fd0200::t_4617fba9875068 11,70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ecf54fba63d07428010a5586b24f6e1f4b3d6640",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_bf648d35fd0200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0b0bd99ce2a1a474",
+        "model": "unknown"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_c7288ee7b9b87f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be227710-53e8-4ea0-bd69-9d2536b3cc8b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
