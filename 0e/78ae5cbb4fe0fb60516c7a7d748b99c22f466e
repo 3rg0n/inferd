@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  s_126aec4081f728::t_68015cdfec66b3 108-120,869-870,872-875,888-890
+CLAUDE.md
+  s_126aec4081f728::t_e7525c79264001 11
+docs/RELEASING.md
+  s_126aec4081f728::t_e71e16513a5aff 11,16,71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "0e78ae5cbb4fe0fb60516c7a7d748b99c22f466e",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
