@@ -153,6 +153,22 @@ fn build_llamacpp() {
         // clang-cl driver enables the standard MSVC exception model.
         // cmake-rs appends these to CMAKE_CXX_FLAGS for the configure.
         config.cxxflag("/EHsc");
+
+        // arm64 OpenMP escape hatch (task #185). As of llama.cpp b9850,
+        // OpenMP is linked into ggml-base (the startup import chain); the
+        // clang-cl arm64 build's OpenMP runtime (libomp.dll + its own
+        // transitive deps) fails to satisfy the loader even when libomp
+        // is staged, so the daemon crashes at load (0xC0000135). Setting
+        // `GGML_OPENMP=OFF` drops that dependency entirely; ggml still
+        // multithreads via its own pthread threadpool (the
+        // `#ifndef GGML_USE_OPENMP` path in ggml-cpu.c), so the only cost
+        // is OpenMP-vs-native scheduling — negligible for LLM decode.
+        // Gated on an env var so it can be A/B-tested in CI before it
+        // becomes the arm64 default.
+        if env::var_os("INFERD_ARM64_DISABLE_OPENMP").is_some() {
+            config.define("GGML_OPENMP", "OFF");
+            println!("cargo:warning=arm64: GGML_OPENMP=OFF (INFERD_ARM64_DISABLE_OPENMP set)");
+        }
     }
 
     config

@@ -1,30 +1,28 @@
 # Manual-dispatch diagnostic for the Windows arm64 daemon load crash
 # (task #185). b9850 made inferd-daemon.exe crash at process load
-# (0xC0000135) on aarch64-pc-windows-msvc even with libomp.dll staged
-# next to it — so a load-time DLL dependency is unresolved and we don't
-# yet know which. This throwaway workflow builds the arm64 daemon exactly
-# as release.yml does, then DUMPS the full DLL import closure + tries to
-# actually launch `--help` and capture the loader error. ~15 min, no
-# release, no artifacts. Delete once #185 is fixed.
+# (0xC0000135) on aarch64-pc-windows-msvc even with libomp.dll staged.
+# This throwaway workflow builds the arm64 daemon TWO ways — default
+# (OpenMP on) and with INFERD_ARM64_DISABLE_OPENMP=1 (GGML_OPENMP=OFF) —
+# dumps the DLL import closure of the default build, and launches --help
+# on BOTH so we learn (a) the missing dependency and (b) whether
+# disabling OpenMP fixes it, in one run. ~20 min, no release. Delete once
+# #185 is resolved.
 name: arm64-diagnose
 on:
   workflow_dispatch: {}
 
 jobs:
   diagnose:
-    name: aarch64-pc-windows-msvc DLL-closure diagnosis
+    name: aarch64 DLL-closure + OpenMP-off A/B
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           submodules: recursive
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: aarch64-pc-windows-msvc
-
-      # Same LLVM + MSVC dev env as release.yml's arm64 leg.
       - name: Install LLVM (Windows arm64)
         uses: KyleMayes/install-llvm-action@a7a1a882e2d06ebe05d5bb97c3e1f8c984ae96fc  # v2.0.7
         with:
@@ -36,62 +34,55 @@ jobs:
         with:
           arch: arm64
 
-      - name: Build daemon (dl-backends)
+      # --- Build A: default (OpenMP ON) ---
+      - name: Build daemon (default, OpenMP on)
         run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target aarch64-pc-windows-msvc
 
-      - name: Dump DLL dependency closure + launch loader error
+      - name: Dump DLL closure + launch (default build)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           $rel = "target/aarch64-pc-windows-msvc/release"
           $exe = "$rel/inferd-daemon.exe"
-          Write-Host "=== staged backends/ ==="
-          Get-ChildItem "$rel/backends" | Select-Object Name,Length | Format-Table -AutoSize
-
-          # Mirror release.yml: flatten backends/*.dll next to the exe.
           Copy-Item "$rel/backends/*.dll" "$rel/" -Force -ErrorAction SilentlyContinue
-          Write-Host "=== after flatten, DLLs next to exe ==="
+          Write-Host "=== DLLs next to exe ==="
           Get-ChildItem "$rel/*.dll" | Select-Object -ExpandProperty Name
 
-          # 1. Direct imports of the daemon exe.
-          Write-Host "`n=== dumpbin /dependents inferd-daemon.exe ==="
-          & dumpbin /dependents "$exe" 2>&1 | Select-String -Pattern '\.dll' -SimpleMatch
-
-          # 2. Direct imports of llama.dll (the FFI lib in the startup chain).
-          if (Test-Path "$rel/llama.dll") {
-            Write-Host "`n=== dumpbin /dependents llama.dll ==="
-            & dumpbin /dependents "$rel/llama.dll" 2>&1 | Select-String -Pattern '\.dll' -SimpleMatch
+          function Deps($p) {
+            Write-Host "`n--- $([IO.Path]::GetFileName($p)) imports: ---"
+            # dumpbin /dependents prints '    NAME.dll' lines; match ending in .dll
+            & dumpbin /dependents "$p" 2>&1 | Where-Object { $_ -match '^\s+\S+\.dll' }
           }
-          # 3. ggml-base.dll — b9850 moved OpenMP here.
-          if (Test-Path "$rel/ggml-base.dll") {
-            Write-Host "`n=== dumpbin /dependents ggml-base.dll ==="
-            & dumpbin /dependents "$rel/ggml-base.dll" 2>&1 | Select-String -Pattern '\.dll' -SimpleMatch
+          Deps $exe
+          foreach ($d in 'llama.dll','ggml-base.dll','ggml-cpu.dll','ggml.dll','libomp.dll') {
+            if (Test-Path "$rel/$d") { Deps "$rel/$d" }
           }
+          Write-Host "`n=== libomp.dll arch ==="
+          if (Test-Path "$rel/libomp.dll") { & dumpbin /headers "$rel/libomp.dll" 2>&1 | Where-Object { $_ -match 'machine' } | Select-Object -First 1 }
 
-          # 4. Is libomp.dll present, and is it actually arm64?
-          if (Test-Path "$rel/libomp.dll") {
-            Write-Host "`n=== libomp.dll headers (machine/arch) ==="
-            & dumpbin /headers "$rel/libomp.dll" 2>&1 | Select-String -Pattern 'machine' -SimpleMatch | Select-Object -First 2
-          } else {
-            Write-Host "`n=== libomp.dll NOT present next to exe ==="
-          }
-
-          # 5. The decisive test: actually launch --help and capture the
-          # loader failure (0xC0000135 = STATUS_DLL_NOT_FOUND; the process
-          # exit code / stderr names nothing, but the Windows loader can be
-          # coaxed to name the missing dll via the loader-snap env var).
-          Write-Host "`n=== launch inferd-daemon.exe --help (capture exit + any output) ==="
+          Write-Host "`n=== launch --help (DEFAULT / OpenMP ON) ==="
           $env:PATH = "$rel;$env:PATH"
-          $p = Start-Process -FilePath $exe -ArgumentList '--help' -PassThru -Wait -NoNewWindow -RedirectStandardError "$rel/err.txt" -RedirectStandardOutput "$rel/out.txt" -ErrorAction SilentlyContinue
-          Write-Host "exit code: $($p.ExitCode)"
-          Write-Host "--- stdout ---"; Get-Content "$rel/out.txt" -ErrorAction SilentlyContinue | Select-Object -First 5
-          Write-Host "--- stderr ---"; Get-Content "$rel/err.txt" -ErrorAction SilentlyContinue | Select-Object -First 5
+          & $exe --help 2>&1 | Select-Object -First 3
+          Write-Host "DEFAULT exit code: $LASTEXITCODE  (0=ok, -1073741515=0xC0000135 DLL-not-found)"
 
-          # 6. Full transitive walk: for every DLL next to the exe, list ITS
-          # imports too, so a second-level missing dep (e.g. libomp needs
-          # something) is visible.
-          Write-Host "`n=== transitive: imports of each staged DLL ==="
-          Get-ChildItem "$rel/*.dll" | ForEach-Object {
-            Write-Host "--- $($_.Name) needs: ---"
-            & dumpbin /dependents $_.FullName 2>&1 | Select-String -Pattern '\.dll' -SimpleMatch
-          }
+      # --- Build B: OpenMP OFF ---
+      - name: Build daemon (INFERD_ARM64_DISABLE_OPENMP=1)
+        env:
+          INFERD_ARM64_DISABLE_OPENMP: '1'
+        run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target aarch64-pc-windows-msvc
+
+      - name: Launch (OpenMP-off build)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $rel = "target/aarch64-pc-windows-msvc/release"
+          $exe = "$rel/inferd-daemon.exe"
+          Copy-Item "$rel/backends/*.dll" "$rel/" -Force -ErrorAction SilentlyContinue
+          Write-Host "=== DLLs next to exe (OpenMP off — libomp should be GONE) ==="
+          Get-ChildItem "$rel/*.dll" | Select-Object -ExpandProperty Name
+          Write-Host "`n=== launch --help (OpenMP OFF) ==="
+          $env:PATH = "$rel;$env:PATH"
+          & $exe --help 2>&1 | Select-Object -First 3
+          Write-Host "OPENMP-OFF exit code: $LASTEXITCODE  (0=ok → this is the fix)"
+          if ($LASTEXITCODE -eq 0) { Write-Host "RESULT: GGML_OPENMP=OFF FIXES the arm64 load crash." }
+          else { Write-Host "RESULT: still crashing — root cause is NOT (only) OpenMP." }
