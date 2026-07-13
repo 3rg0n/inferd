@@ -1,6 +1,6 @@
 # inferd wire protocol — v2 generation + embeddings (normative spec)
 
-> **Status:** normative for inferd **v0.4.0**. This document is the
+> **Status:** normative for inferd **v0.4.0 and later** (current: v0.6.0). This document is the
 > contract an implementer writes middleware against. Where this document
 > and the `inferd-proto` source disagree, the source
 > (`crates/inferd-proto/`) wins and this document is the bug — but CI
@@ -45,7 +45,8 @@ The daemon binds **no inbound network listener** — it is reachable only
 over the local UDS / named pipe ([ADR 0022](adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
 Anything that needs to reach inferd over a network port goes through the
 separate `inferd-http` bridge ([ADR 0020](adr/0020-inferd-http-bridge-is-a-separate-process.md)),
-not the daemon.
+not the daemon. The `inferd-http` bridge binary is bundled with each release tarball
+alongside `inferd-daemon` and `inferdctl`.
 
 ### 1.1 Unix socket path resolution
 

@@ -6,9 +6,11 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: v0.5.0.** `inferd-proto` and `inferd-client` are on crates.io;
-the daemon binary ships via GitHub releases for Linux (x86_64 + arm64),
-macOS arm64, and Windows (x86_64 + arm64). See `context.md` for the
+**Status: v0.6.0.** `inferd-proto` and `inferd-client` are on crates.io;
+the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
+HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
+arm64), macOS arm64, and Windows x86_64. (Windows arm64 is parked for the
+v0.6 line — see `docs/v0.6-validation.md`.) See `context.md` for the
 hand-off brief to first-time contributors and `docs/adr/` for the design
 decisions.
 
@@ -21,7 +23,13 @@ Since v0.3 the daemon picks the strongest available compute backend
 (Metal / CUDA / ROCm / Vulkan / CPU) at runtime from a single binary
 (ADR 0019), and ships multimodal by default — the reference Gemma 4
 model pulls its vision projector on first boot, so a fresh install
-answers questions about images with no extra config.
+answers questions about images with no extra config. As of v0.6 it can
+also **auto-select the model by accelerator memory** (ADR 0023 — Gemma 4
+12B when the accelerator has ≥ 20 GiB, else E4B), and an **OpenAI-compat
+HTTP bridge** (`inferd-http`, ADR 0020) ships in every release so any
+OpenAI-SDK client — including vision and structured-output requests — can
+point at inferd; the bridge is a separate process, the daemon itself
+stays IPC-only.
 
 ## Why
 
@@ -56,30 +64,47 @@ inference daemon; they connect to inferd.
 
 ## Scope
 
-What ships today (v0.5):
+What ships today (v0.6):
 
-- **Local llama.cpp via FFI**, Gemma 4 E4B as the reference model —
-  multimodal by default (vision projector pulled on first boot).
+- **Local llama.cpp via FFI** (vendored `b9850`), Gemma 4 E4B as the
+  reference model — multimodal by default (vision projector pulled on
+  first boot) — with **Gemma 4 12B** support available.
 - **Runtime accelerator detection** (ADR 0019): one binary ships every
   ggml backend as a loadable module and picks the strongest at boot.
+- **Boot-time model auto-selection** (v0.6, ADR 0023): opt in with
+  `model_autoselect: "auto"` and the daemon picks the Gemma 4 variant by
+  the accelerator's total memory — ≥ 20 GiB → 12B, else E4B — with a
+  pre-load fit check and CPU fallback for embeddings under memory pressure.
 - **Two frozen wire surfaces**, each on its own socket: generation
   (v2 — typed content blocks / attachments / tools, ADR 0015) on the
   length-prefixed, type-tagged framing introduced in v0.4 (ADR 0021,
   with raw BLOB media and an in-band `wire_version`), and embeddings
   (ADR 0017, NDJSON). The original text-only v1 surface was folded into
   v2 and removed in v0.4.
-- **Structured-output grammar** (v0.5, ADR 0013): a request may carry a
+- **Structured-output grammar** (ADR 0013): a request may carry a
   `response_format` JSON Schema, which the daemon compiles to a GBNF
-  grammar so output is constrained to match the schema.
-- **No inbound network listener** (v0.5, ADR 0022): the daemon binds a
-  Unix socket / named pipe only; loopback TCP was removed. Network reach
-  is a separate bridge process's job (ADR 0020).
+  grammar so output is constrained to match the schema. Reachable both on
+  the native wire and through the `inferd-http` bridge.
+- **No inbound network listener** (ADR 0022): the daemon binds a Unix
+  socket / named pipe only; loopback TCP was removed. Network reach is a
+  separate bridge process's job (ADR 0020).
+- **`inferd-http` OpenAI-compat bridge** (v0.6, ADR 0020): a separate,
+  user-launched process — bundled in every release tarball — that exposes
+  `/v1/chat/completions` (streaming + non-streaming), `/v1/embeddings`
+  (float + base64), `/v1/models`, and `/health`, and translates them to
+  the daemon's IPC via `inferd-client`. Supports **vision** (OpenAI
+  `image_url` → decoded RGB attachment) and **structured output**
+  (`response_format` json_schema). Point OpenCode or any OpenAI-SDK client
+  at it. The daemon serves no HTTP itself (ADR 0006); this is a consumer,
+  not a privileged surface (ADR 0014).
 - **Cloud backend adapters** behind the same `Backend` trait —
   `openai-compat` (vLLM, LM Studio, LocalAI, llama.cpp's HTTP server,
   OpenAI/Anthropic) and `bedrock-invoke` — feature-gated, outbound
   HTTPS only (ADR 0006).
-- **Rust client** (`inferd-client`) on crates.io; hand-written Go,
-  Python, and TypeScript clients in `clients/`.
+- **Rust client** (`inferd-client`) on crates.io; a hand-written **Go**
+  client in `clients/go/` (the canonical non-Rust reference; pin it with
+  the path-prefixed module tag, `go get …/clients/go@vX.Y.Z`). Python and
+  TypeScript wrappers are planned (stubs in `clients/`).
 - **`inferdctl`** CLI: `status` / `watch` / `pull` / `doctor`.
 
 Everything is one host-wide daemon: apps connect to inferd instead of

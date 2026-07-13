@@ -41,8 +41,8 @@ embeddings as of ADR 0017. Backwards-additive changes are acceptable
 generation wire bumps the in-band `WIRE_VERSION` so a mismatch fails
 loudly rather than negotiating silently.
 
-`inferd-proto 0.5.x` matches `inferd-daemon 0.5.x` and
-`inferd-client 0.5.x`; the published patch versions move in lockstep.
+`inferd-proto 0.6.x` matches `inferd-daemon 0.6.x` and
+`inferd-client 0.6.x`; the published patch versions move in lockstep.
 
 ## Usage
 
@@ -54,7 +54,7 @@ building a non-client tool that needs to parse or generate frames
 
 ```toml
 [dependencies]
-inferd-proto = "0.5"
+inferd-proto = "0.6"
 ```
 
 ## License

@@ -36,17 +36,17 @@ Three things this fixes:
 
 The reason this asymmetry exists in concrete terms: if `inferd-daemon` spoke HTTP itself, ADR 0006 would die. The daemon would have content negotiation, request body limits, CORS, OpenAPI schemas, rate-limit headers — all the things "lean core" exists to keep out. And every "compat with X" demand becomes a daemon feature. Keeping HTTP outside the daemon is what keeps the protocol stable enough to freeze (ADR 0008).
 
-### v0.1 → v0.2 — what changes, what doesn't
+### v0.1 → v0.6 — what changes, what doesn't
 
-| | v0.1 | v0.2 |
+| | v0.1 | v0.6 |
 |---|---|---|
-| Consumer wire surface | NDJSON-over-IPC v1 | **identical** |
+| Consumer wire surface | NDJSON-over-IPC v1 | length-prefixed v2 (as of v0.4) |
 | `Backend` trait | one concrete (llamacpp) | many concretes (cloud + local) |
 | Router | no-op (single backend) | operator-policy across N backends, circuit breakers per ADR 0007 |
 | Daemon HTTP | none | none |
-| Protocol changes | n/a | none — frozen, additive only |
+| Protocol changes | n/a | v1→v2 framing break at v0.4; v0.4+ wire frozen, additive only |
 
-The load-bearing claim of the architecture is that v0.2's cloud work changes **what's behind the protocol**, not the protocol itself. That's why ADR 0008 froze v1 before any of the cloud adapters existed.
+The load-bearing claim of the architecture is that cloud-backend work changes **what's behind the protocol**, not the protocol itself. The v2 wire has been stable since v0.4 (ADR 0021) and remains frozen through v0.6.
 
 ## What inferd has to be
 
@@ -64,7 +64,7 @@ For v0.1, **only the local llama.cpp backend is required** (linked via FFI from 
 
 ## Wire protocol
 
-> **v0.4 update (ADR 0021).** This section was written for the v0.1 text-only NDJSON wire (v1). As of v0.4 there is **one generation surface** (v2) on a length-prefixed, type-tagged wire plus an embeddings surface — the v1 socket and types were removed. The current spec lives in ADRs 0021 (generation framing) / 0015 (v2 content shape) / 0017 (embed); `docs/protocol-v1.md` is now a historical record. The shape below is retained for context on the architecture's *intent*; the live framing differs as noted.
+> **Frozen as of v0.4 (ADR 0021).** This section was written for the v0.1 text-only NDJSON wire (v1). As of v0.4 there is **one generation surface** (v2) on a length-prefixed, type-tagged wire plus an embeddings surface — the v1 socket and types were removed. The current spec lives in ADRs 0021 (generation framing) / 0015 (v2 content shape) / 0017 (embed); the wire remains frozen through v0.6 (backwards-additive changes only). `docs/protocol-v1.md` is a historical record. The shape below is retained for context on the architecture's *intent*; the live framing differs as noted.
 
 The generation surface (ADR 0021):
 
