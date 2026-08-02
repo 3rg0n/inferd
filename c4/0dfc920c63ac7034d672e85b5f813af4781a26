@@ -1,0 +1,45 @@
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_743ab11c7374de 779-782
+  s_126aec4081f728::t_f0377f9b341217 1348-1382
+  s_126aec4081f728::t_5ef9629753360a 293-298,367,370-377,568,588-595,600,742-743,752-773,783-786,797-803
+  s_126aec4081f728::t_6509ca77da8358 744-751
+crates/inferd-engine/src/bedrock_invoke/adapter.rs
+  s_126aec4081f728::t_638b929ef4a15c 288
+docs/protocol-v2.md
+  s_126aec4081f728::t_c78b7cd76b5539 256
+  s_126aec4081f728::t_047218c8b0fe51 285-306
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_0d288fd0bd03f3 160
+crates/inferd-engine/src/backend.rs
+  s_126aec4081f728::t_20eb21c18d461e 153-167
+crates/inferd-daemon/src/admin.rs
+  s_126aec4081f728::t_7270957780007d 342,385,440-441,456
+crates/inferd-engine/src/openai_compat/adapter.rs
+  s_126aec4081f728::t_4f12fc1edd99b0 163
+crates/inferd-proto/src/v2/attachment.rs
+  s_126aec4081f728::t_952674acadfdcc 26-41
+  s_126aec4081f728::t_8b01d36cc7d125 135-141
+CHANGELOG.md
+  s_126aec4081f728::t_a15defdde46a5b 10-31
+crates/inferd-daemon/src/status.rs
+  s_126aec4081f728::t_1b6418910aa3b1 213-255
+  s_126aec4081f728::t_cad58d48a9a028 59-70
+crates/inferd-engine/tests/openai_compat.rs
+  s_126aec4081f728::t_665a0429fad5ec 64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c40dfc920c63ac7034d672e85b5f813af4781a26",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
