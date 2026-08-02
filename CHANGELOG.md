@@ -51,11 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardware), the ≥ 20 GiB → 12B auto-select branch, and **cosign signature
   verification — skipped, cosign is not installed on the validating box**.
   SHA-256 was verified for every archive that was installed.
-- **crates.io still at 0.6.0.** The release run's `Publish crates.io` job
-  reported success *without publishing*: `CARGO_REGISTRY_TOKEN` is unset and
-  the job no-ops with a notice by design, so `inferd-proto` /
-  `inferd-client` lag the binaries. Nothing in the validated install path
-  depends on crates.io, but `cargo add inferd-client` resolves to 0.6.0.
+- **crates.io: `inferd-proto` + `inferd-client` 0.6.1 published** (by hand,
+  same day). The release run's `Publish crates.io` job had reported success
+  *without publishing* — `CARGO_REGISTRY_TOKEN` is unset and the job no-ops
+  with a notice by design, so a green run does not mean the crates shipped.
+  Published from a tree verified identical to the `v0.6.1` tag for both crate
+  directories and confirmed against the registry API; `cargo add
+  inferd-client` now resolves to 0.6.1. The workflow guard is unchanged, so
+  the next stable tag skips again until the repo secret is added.
 
 ## [0.6.1] - 2026-08-02
 
