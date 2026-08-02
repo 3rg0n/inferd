@@ -1,0 +1,33 @@
+CLAUDE.md
+  s_126aec4081f728::t_83592263d40c09 209
+docs/v0.6-validation.md
+  s_126aec4081f728::t_fb04cfd7fb2603 195-205
+  s_126aec4081f728::t_4276bd59e8f00f 184-186,188
+docs/RELEASING.md
+  s_126aec4081f728::t_55201db78d5242 128-133,135-139
+  s_126aec4081f728::t_4841a31acdea18 85-89
+  s_126aec4081f728::t_d0368e49d399c2 140-142
+  s_126aec4081f728::t_64b38ba323a4d5 78-84,90-98,100,106,108,123,126-127,134,143-147
+  s_126aec4081f728::t_a4807b72e163b1 99,101-104,107,110-111,114,116,120-122,124-125
+.github/workflows/release.yml
+  s_126aec4081f728::t_964fa149273b46 8-16
+CHANGELOG.md
+  s_126aec4081f728::t_3aa7926e845fcb 32-45
+  s_126aec4081f728::t_6e36434ba5d4e8 96-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "05760e80d25a27e2e66023e39631c8bd0b3776e6",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
