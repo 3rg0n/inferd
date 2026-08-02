@@ -57,8 +57,14 @@ pub const MAX_ATTACHMENT_BYTES_PER_REQUEST: u64 = 128 * 1024 * 1024;
 // MiB; lowering either cap below those would make the daemon refuse
 // requests the bridge happily builds. Compile-time so the break is a build
 // failure, not a runtime surprise on a vision request.
-const _: () = assert!(MAX_ATTACHMENTS_PER_REQUEST >= 8);
-const _: () = assert!(MAX_ATTACHMENT_BYTES_PER_REQUEST >= 128 * 1024 * 1024);
+const _: () = assert!(
+    MAX_ATTACHMENTS_PER_REQUEST >= 8,
+    "cap is below inferd-http's MAX_IMAGES_PER_REQUEST (8); the daemon would refuse requests the bridge builds"
+);
+const _: () = assert!(
+    MAX_ATTACHMENT_BYTES_PER_REQUEST >= 128 * 1024 * 1024,
+    "cap is below inferd-http's MAX_TOTAL_DECODED_IMAGE_BYTES (128 MiB); the daemon would refuse requests the bridge builds"
+);
 
 /// One binary attachment in the request's top-level `attachments[]` table.
 ///
