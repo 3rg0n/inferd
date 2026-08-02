@@ -75,23 +75,76 @@ If `Verify asset completeness` fails: at least one platform build
 silently shipped fewer-than-expected outputs. Check the upstream
 build job logs.
 
-### 5. Publish to crates.io
+### 5. Publish to crates.io (manual, by design)
 
-The workflow does **not** push to crates.io — that is a deliberate
-manual step so a borked release page doesn't poison the registry.
+The workflow does **not** push to crates.io. That is deliberate: a
+crates.io version is permanent, so publishing stays a human decision
+taken *after* the release page looks right, and the token stays off the
+repo's secret list.
 
-Order matters; later crates depend on earlier ones:
+**This step is easy to forget, and nothing will remind you** — that is
+the cost of doing it by hand. The binaries on the release page and the
+crates on the registry are separate deliverables; a green release run
+says nothing about the latter.
+
+There was a `crates-io` job here through v0.6.1. It was removed because
+it could not fail safely — with no `CARGO_REGISTRY_TOKEN` secret it
+no-op'd with a `::notice::` and reported **success**, so a green release
+run looked like the crates had shipped when they hadn't. That is exactly
+what happened at v0.6.1 (published by hand the same day). A job that
+silently does nothing is worse than no job.
+
+Only **two** crates are published: `inferd-proto` and `inferd-client`.
+The daemon, engine, and `inferdctl` ship as binaries on the GitHub
+release — they are not registry crates.
+
+**First**, prove the tree is identical to the tag for both crate
+directories. The registry keeps whatever you send, forever, so publishing
+from a tree that has drifted past the tag ships something no tag
+describes:
 
 ```sh
-cargo publish -p inferd-proto
-cargo publish -p inferd-engine
-cargo publish -p inferd-client
-cargo publish -p inferd-daemon
-cargo publish -p inferdctl
+git diff --stat "v${VER}" -- crates/inferd-proto crates/inferd-client   # MUST be empty
 ```
 
-Wait ~30 seconds between each so the registry index has time to
-propagate before the next dependent build runs.
+Then publish, in dependency order — `inferd-client` depends on
+`inferd-proto`:
+
+```sh
+cargo publish -p inferd-proto --dry-run   # packages + compiles, aborts before upload
+cargo publish -p inferd-proto
+# wait ~30s for the index to pick proto up, then:
+cargo publish -p inferd-client
+```
+
+The wait matters: the `inferd-client` publish resolves `inferd-proto` from
+the registry, not the workspace, and fails if it isn't indexed yet. The
+token lives in `CARGO_HOME/credentials.toml`, so no env var is needed.
+
+Finally confirm against the registry rather than trusting the CLI's own
+`Uploading`/`Published` lines:
+
+```sh
+for c in inferd-proto inferd-client; do
+  printf '%s: ' "$c"
+  curl -s -H "User-Agent: inferd-release-check" \
+    "https://crates.io/api/v1/crates/$c" \
+    | python -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
+done
+```
+
+The `User-Agent` is **required** — crates.io's data-access policy rejects
+UA-less requests with an `errors` body, not a 4xx, so a naive one-liner
+looks like a parse bug rather than a refusal. On the maintainer's corp
+network add `--ssl-no-revoke` (Cisco Secure Access breaks OCSP revocation
+checks; never disable cert validation itself). Corp TLS inspection does
+**not** block the crates.io upload API — the v0.6.1 crates were published
+straight through it, so there's no need to route publishing via CI.
+
+The token lives in `CARGO_HOME/credentials.toml` (on the maintainer's
+box `CARGO_HOME` is **not** `~/.cargo`), so `cargo publish` needs no
+environment variable. Corp TLS inspection does not block the upload API
+— the v0.6.1 crates were published through it.
 
 ## When something goes wrong
 

@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resample (ADR 0016 — the consumer decodes, so it owns rate conversion);
   consumers read the advertised rate and convert before sending.
 
+### Removed
+
+- **`crates-io` job dropped from `release.yml`.** It could not fail
+  safely: with no `CARGO_REGISTRY_TOKEN` secret it no-op'd with a
+  `::notice::` and reported **success**, so a green release run looked
+  like `inferd-proto` / `inferd-client` had shipped when they hadn't —
+  exactly what happened at v0.6.1. Publishing is now explicitly manual
+  (`docs/RELEASING.md` §5, rewritten): two crates, not five, in dependency
+  order, from a tree verified identical to the tag, confirmed against the
+  registry API. No secret on the repo, and no job that silently does
+  nothing. The old job's premise — that corp TLS blocks the crates.io
+  upload API, so publishing had to run from CI — is also false; the v0.6.1
+  crates were published through it by hand.
+
 ### Validation
 
 - **Windows x86_64 CUDA — v0.6.1 install=work green (2026-08-02):**
@@ -79,8 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a notice by design, so a green run does not mean the crates shipped.
   Published from a tree verified identical to the `v0.6.1` tag for both crate
   directories and confirmed against the registry API; `cargo add
-  inferd-client` now resolves to 0.6.1. The workflow guard is unchanged, so
-  the next stable tag skips again until the repo secret is added.
+  inferd-client` now resolves to 0.6.1. The misleading job has since been
+  removed rather than given a secret — see Removed above; publishing is
+  manual by design.
 
 ## [0.6.1] - 2026-08-02
 

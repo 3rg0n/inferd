@@ -206,7 +206,7 @@ grep -rn 'version = "=' --include=Cargo.toml crates/   # find all 10
 cargo update -w                                        # refresh Cargo.lock
 ```
 
-`docs/RELEASING.md` is the full tag/publish runbook. Release is tag-triggered (`vX.Y.Z`) across 5 platforms with `fail-fast: false`; `publish` needs every build leg, so one red platform publishes nothing. Only `inferd-proto` and `inferd-client` go to crates.io.
+`docs/RELEASING.md` is the full tag/publish runbook. Release is tag-triggered (`vX.Y.Z`) across 5 platforms with `fail-fast: false`; `publish` needs every build leg, so one red platform publishes nothing. Only `inferd-proto` and `inferd-client` go to crates.io, and **the workflow does not publish them** — that is a deliberate manual step (`docs/RELEASING.md` §5). A `crates-io` job existed through v0.6.1 and was deleted because it no-op'd to *success* without the token, making a green run look like the crates had shipped.
 
 Feature-gated builds and tests:
 

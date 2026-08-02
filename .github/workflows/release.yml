@@ -5,6 +5,15 @@ name: Release
 # with cosign (keyless OIDC), generates a CycloneDX SBOM, and attaches
 # everything to a GitHub Release.
 #
+# This workflow does NOT publish to crates.io. `inferd-proto` and
+# `inferd-client` are published by hand per docs/RELEASING.md §5 — a
+# registry version is permanent, so it stays a human decision and the
+# token stays off the repo secret list. A `crates-io` job lived here
+# through v0.6.1 and was removed: with no CARGO_REGISTRY_TOKEN secret it
+# no-op'd and reported *success*, so a green run looked like the crates
+# had shipped when they hadn't (which is what happened at v0.6.1). Don't
+# re-add it without making a missing token fail the job.
+#
 # Platforms shipped:
 #   - linux x86_64 (gnu)
 #   - linux aarch64 (gnu)
@@ -967,56 +976,3 @@ jobs:
           git tag -a "${gotag}" "${GITHUB_SHA}" -m "clients/go ${ver}"
           git push origin "${gotag}"
           echo "::notice::pushed Go module tag ${gotag}"
-
-  # Publish the two library crates to crates.io. Runs from CI rather
-  # than a developer laptop on purpose: the maintainer's corp network
-  # (Cisco Secure Access) 403s the crates.io upload API, and GitHub's
-  # runners reach it cleanly. Only `inferd-proto` and `inferd-client`
-  # are published — the daemon / engine / ctl are binaries shipped via
-  # the GitHub release above, not crates.
-  #
-  # Gated to **stable** tags only: a tag like `v0.3.0-rc.13` must NOT
-  # publish (crates.io versions are permanent; pre-releases would burn
-  # the version). Requires the `CARGO_REGISTRY_TOKEN` repo secret; if
-  # it's absent the job no-ops with a notice rather than failing the
-  # release.
-  crates-io:
-    name: Publish crates.io
-    needs: [build, publish]
-    runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-') }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Publish inferd-proto then inferd-client
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::notice::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish. \
-            Add the secret to enable automatic publishing on stable tags."
-            exit 0
-          fi
-          tag_version="${GITHUB_REF_NAME#v}"
-          # Assert the tag matches the workspace version so we never
-          # publish a mismatched crate.
-          ws_version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "$tag_version" != "$ws_version" ]; then
-            echo "FAIL: tag $tag_version != workspace version $ws_version" >&2
-            exit 1
-          fi
-          # Dependency order: proto first (client depends on it).
-          # --no-verify is intentional: the crate already built+tested in
-          # the `build` job; re-verifying here just burns minutes. crates.io
-          # may take a few seconds to index proto before client resolves it,
-          # so retry the client publish briefly.
-          cargo publish -p inferd-proto
-          for attempt in 1 2 3 4 5 6; do
-            if cargo publish -p inferd-client; then
-              break
-            fi
-            echo "client publish attempt $attempt failed (proto may still be indexing); retrying in 20s"
-            sleep 20
-          done
