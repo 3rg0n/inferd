@@ -6,7 +6,7 @@
 //! with HTTP stripped and inferd-specific fields (`id`) added.
 
 use crate::error::ProtoError;
-use crate::v2::attachment::Attachment;
+use crate::v2::attachment::{Attachment, MAX_ATTACHMENTS_PER_REQUEST};
 use crate::v2::tool::{Tool, ToolCallId, ToolUseInput};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -240,6 +240,19 @@ impl RequestV2 {
             ));
         }
 
+        // Bound the attachment table before anything else touches it: each
+        // entry entitles the sender to one more 64 MiB BLOB frame, so an
+        // unbounded table is a read-amplification lever (THREAT_MODEL F-1).
+        // Readers enforce the same cap while streaming, before the bytes
+        // arrive; this is the contract restated where every producer and
+        // every non-streaming consumer also sees it.
+        if self.attachments.len() > MAX_ATTACHMENTS_PER_REQUEST {
+            return Err(ProtoError::InvalidRequest(format!(
+                "request declares {} attachments; at most {MAX_ATTACHMENTS_PER_REQUEST} allowed",
+                self.attachments.len()
+            )));
+        }
+
         let mut attachments_by_id: HashMap<&str, &Attachment> = HashMap::new();
         for att in &self.attachments {
             if matches!(att, Attachment::Unknown) {
@@ -456,5 +469,65 @@ mod tests {
 
         assert_eq!(req, deserialized);
         assert!(deserialized.response_format.is_none());
+    }
+
+    /// THREAT_MODEL F-1: the 64 MiB frame cap bounds one *frame*, not one
+    /// *request*. Without a count cap, a single in-cap request frame can
+    /// declare enough attachment entries to entitle the sender to
+    /// arbitrarily many further 64 MiB BLOB reads.
+    #[test]
+    fn resolve_rejects_more_attachments_than_the_cap() {
+        let n = MAX_ATTACHMENTS_PER_REQUEST + 1;
+        let req = RequestV2 {
+            wire_version: 1,
+            id: "flood".to_owned(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "hi".to_owned(),
+                }],
+            }],
+            attachments: (0..n)
+                .map(|i| Attachment::Image {
+                    id: format!("a{i}"),
+                    width: 1,
+                    height: 1,
+                    bytes: Vec::new(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let err = req.resolve().expect_err("must reject over-cap attachments");
+        assert!(
+            matches!(err, ProtoError::InvalidRequest(ref m) if m.contains("attachments")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_accepts_attachments_at_the_cap() {
+        let req = RequestV2 {
+            wire_version: 1,
+            id: "at-cap".to_owned(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "hi".to_owned(),
+                }],
+            }],
+            attachments: (0..MAX_ATTACHMENTS_PER_REQUEST)
+                .map(|i| Attachment::Image {
+                    id: format!("a{i}"),
+                    width: 1,
+                    height: 1,
+                    bytes: Vec::new(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let resolved = req.resolve().expect("at-cap request must resolve");
+        assert_eq!(resolved.attachments.len(), MAX_ATTACHMENTS_PER_REQUEST);
     }
 }

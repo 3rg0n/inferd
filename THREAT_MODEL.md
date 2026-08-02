@@ -3,15 +3,17 @@
 - Status: skeleton; populated as code lands. v0.1 GA blocks
   until every "applies" finding is `mitigated` (with a code
   reference) or has an explicit waiver in this document.
-- Last updated: 2026-05-15
+- Last updated: 2026-08-02
 
 ## Scope
 
 This file enumerates threats against `inferd-daemon` and its
 client-facing surfaces:
 
-- The NDJSON-over-IPC perimeter (Unix socket / Windows named
-  pipe / loopback TCP).
+- The IPC perimeter (Unix socket / Windows named pipe):
+  length-prefixed type-tagged frames for generation (ADR 0021),
+  NDJSON for embeddings (ADR 0017). No inbound network listener
+  since ADR 0022.
 - The configured backend(s) reachable through the `Backend`
   trait — in v0.1, the `libllama` FFI engine (ADR 0005); in
   v0.2, cloud adapters routed by ADR 0007 policy.
@@ -32,18 +34,39 @@ Status legend:
   named.
 - **n/a** — finding does not apply; reason given.
 
-### F-1. NDJSON per-frame size cap
+### F-1. Unbounded read on the inference wire
 
-**Description.** Without a per-frame byte limit, a malicious
-local client can write an unbounded line without a newline,
-exhausting the daemon's heap.
+**Description.** Without a byte limit, a malicious local
+client can make the daemon read an unbounded amount: an NDJSON
+line with no newline, an oversized length prefix, or — since
+ADR 0021 — an attachment table whose every entry entitles the
+sender to one further BLOB frame. The last is the one a
+per-frame cap does not cover: the cap bounds one *frame*, not
+one *request*, so `n` declared attachments multiply it by `n`.
 
 **Status.** applies.
 
-**Mitigation.** `inferd-proto` reads frames with a bounded
-reader (not auto-growing), 64 MiB cap. Exceeding the cap
-returns an `error` frame with `code: "frame_too_large"` and
-closes the connection. Codified in `docs/protocol-v1.md`.
+**Mitigation.** Two bounds, both enforced before allocation:
+
+- *Per frame* — `inferd-proto` reads with a bounded reader (not
+  auto-growing), 64 MiB (`MAX_FRAME_BYTES`), checked on the
+  length varint before the payload is read (on line length for
+  embed NDJSON). Exceeding it returns an `error` frame with
+  `code: "frame_too_large"` and closes the connection.
+- *Per request* — `MAX_ATTACHMENTS_PER_REQUEST` (32) and
+  `MAX_ATTACHMENT_BYTES_PER_REQUEST` (128 MiB), defined in
+  `inferd-proto::v2::attachment`. `RequestV2::resolve()` checks
+  the count so every producer and non-streaming consumer sees
+  the same contract; `inferd-daemon::lifecycle_v2`'s
+  `read_attachment_blobs` enforces both while streaming,
+  charging the byte budget against the *declared*
+  `BlobDescriptor::len` — so an over-budget request costs no
+  heap. Both caps are `const`-asserted to stay at or above
+  `inferd-http`'s own limits, which keeps the daemon from
+  refusing what the bridge legitimately builds.
+
+Codified in `docs/protocol-v2.md` (ADR 0021); the removed v1
+surface is recorded in `docs/protocol-v1.md`.
 
 ### F-2. Lock-file pre-existing-symlink attack
 
@@ -150,10 +173,13 @@ process with socket access is indistinguishable. A malicious
 middleware can impersonate another for log-attribution
 attacks, queue-fairness gaming, or future per-caller policy.
 
-**Status.** mitigated (UDS + named pipe). TCP path covered
-by F-8. `crates/inferd-daemon/src/peercred.rs` extracts a
-`PeerIdentity` per connection and records it on the
-`connection_accepted` activity-log event.
+**Status.** mitigated. Since ADR 0022 removed inbound TCP
+(v0.5.0) these are the *only* transports, so peer credentials
+cover the whole surface. `crates/inferd-daemon/src/peercred.rs`
+extracts a `PeerIdentity` per connection and records it on the
+per-surface accept event — `v2_connection_accepted`
+(`lifecycle_v2.rs`) / `embed_connection_accepted`
+(`lifecycle_embed.rs`).
 
 - Unix: `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) via
   `nix::sys::socket::getsockopt(PeerCredentials)`. Returns
@@ -162,9 +188,9 @@ by F-8. `crates/inferd-daemon/src/peercred.rs` extracts a
   `OpenProcessToken(TOKEN_QUERY)` →
   `GetTokenInformation(TokenUser)` →
   `ConvertSidToStringSidW`. Returns sid/pid.
-- Loopback TCP: degraded `PeerIdentity::from_tcp(remote_addr)`
-  — log-correlation only. Real perimeter is the API-key auth
-  per F-8.
+There is no third case: the degraded TCP identity
+(`PeerIdentity::from_tcp`, log-correlation only) was deleted
+with the TCP endpoint in v0.5.0.
 
 **Windows DACL hardening.** The named pipes are created with
 an explicit SDDL DACL that grants `GENERIC_ALL` to the daemon's
@@ -179,36 +205,29 @@ to both inference and admin pipes
 (`crates/inferd-daemon/src/endpoint.rs::bind_named_pipe` and
 `bind_admin_pipe`).
 
-Verified by `peercred::tests` (`tcp_identity_displays_remote_addr`
-unconditional; `unix_peer_credentials_self` `#[cfg(unix)]`) and by
+Verified by `peercred::tests::unix_peer_credentials_self`
+(`#[cfg(unix)]`) and by
 `windows_security::tests::pipe_with_hardened_dacl_accepts_self`,
 which creates a real named pipe with the hardened DACL and
 round-trips a byte through it.
 
 ### F-8. Loopback TCP exposure
 
-**Description.** When the operator enables the loopback TCP
-endpoint (e.g. for WSL or container scenarios), the daemon is
-reachable by any process on the host that can bind 127.0.0.1.
+**Description.** When the operator enabled the loopback TCP
+endpoint (e.g. for WSL or container scenarios), the daemon was
+reachable by any process on the host that could bind 127.0.0.1.
 Peer-credential checks (F-7) do not work on TCP.
 
-**Status.** mitigated.
-
-- `crates/inferd-daemon/src/auth.rs` parses the first NDJSON
-  frame on every TCP connection as
-  `{"type":"auth","key":"..."}` when
-  `AcceptContext::expected_api_key` is set, and constant-time-
-  compares with `subtle::ConstantTimeEq`.
-- Missing or wrong key closes the connection silently (no
-  protocol error frame; we don't confirm endpoint existence
-  to anonymous probers). A `tcp_auth_rejected` warn-level
-  event lands in the activity log.
-- `--api-key` / `INFERD_API_KEY` CLI flag wires this in.
-  `main.rs` warns at startup when `--tcp` is configured
-  without a key.
-- UDS / pipe transports skip this — F-7 covers them.
-- Verified by `tests/auth.rs` (4 tests covering correct,
-  wrong, missing, and disabled-by-config paths).
+**Status.** n/a — closed by removal, not mitigation.
+[ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)
+deleted the inbound TCP endpoint in v0.5.0, along with the
+`auth.rs` shared-key compare that guarded it and its
+`tests/auth.rs` suite. The daemon binds no network listener at
+all; WSL / container consumers reach it through the ADR 0024
+pipe↔UDS relay, which carries the same kernel peer-credential
+trust rather than a shared secret. Re-introducing any inbound
+network listener re-opens this finding and needs a superseding
+ADR.
 
 ### F-9. FFI crash isolation
 

@@ -53,11 +53,11 @@ The load-bearing claim of the architecture is that cloud-backend work changes **
 A small, hardened Rust daemon that:
 
 1. Loads a configured backend at startup and keeps it warm.
-2. Accepts NDJSON-framed requests on a Unix socket, Windows named pipe, or loopback TCP.
+2. Accepts framed requests on a Unix socket or Windows named pipe — length-prefixed type-tagged frames for generation (ADR 0021), NDJSON for embeddings (ADR 0017). No inbound network listener (ADR 0022).
 3. Serialises inference through a single active generation + bounded admission queue.
 4. Streams tokens back over the same connection. Terminates with one `done` or one `error` frame.
 5. Supports multiple backend adapters behind a single `Backend` trait. v0.1 ships local-only; v0.2 adds remote (OpenAI-compat covers vLLM/LM Studio/LocalAI/llama.cpp's HTTP server in addition to OpenAI itself; further adapters added behind the same trait).
-6. Enforces per-caller identity (UID on Unix, SID on Windows) and an optional API key for TCP deployments.
+6. Enforces per-caller identity (UID on Unix, SID on Windows) via kernel peer credentials — the only authentication, since ADR 0022 removed the TCP endpoint and its shared-key path.
 7. Stores models in a shared content-addressable layout under `$MODELS_HOME` so multiple tools that adopt the same convention can reuse blobs.
 
 For v0.1, **only the local llama.cpp backend is required** (linked via FFI from a vendored `llama.cpp` submodule). The adapter trait must be designed in from day one so v0.2 can add cloud + remote backends without a rewrite.
@@ -79,7 +79,7 @@ The embeddings surface (ADR 0017) stays NDJSON: single-frame request, single-fra
 
 Endpoints:
 
-- **Generation socket** (`/run/inferd/inferd.sock` / `\\.\pipe\inferd` / loopback TCP when configured). Bound only after the backend reports `ready`.
+- **Generation socket** (`/run/inferd/inferd.sock` / `\\.\pipe\inferd`). Bound only after the backend reports `ready`.
 - **Embed socket** (`/run/inferd/infer.embed.sock` / `\\.\pipe\inferd-infer-embed`). Bound only when the active backend advertises `capabilities().embed`.
 - **Admin socket** (`/run/inferd/admin.sock` / `\\.\pipe\inferd-admin`, mode `0600`). Bound first, on daemon start; pushes lifecycle events for installer GUIs and progress UIs to subscribe to during model fetch and load.
 

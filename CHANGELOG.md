@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-08-02
+
+Post-GA code review of the v0.6.0 line (correctness / dead code /
+over-engineering sweep). One security fix, two engine fixes, dead-code
+removal, and the doc drift the review surfaced.
+
+#### Added
+
+- **Per-request attachment bounds on the v2 generation wire**
+  (THREAT_MODEL F-1). The 64 MiB frame cap bounds one *frame*, not one
+  *request*: each declared attachment entitles the sender to one further
+  BLOB frame, so an unbounded attachment table multiplied a single
+  in-cap request frame into unbounded reads. Two new caps in
+  `inferd-proto::v2::attachment` close it —
+  `MAX_ATTACHMENTS_PER_REQUEST` (32) and
+  `MAX_ATTACHMENT_BYTES_PER_REQUEST` (128 MiB).
+  `RequestV2::resolve()` enforces the count so every producer and
+  non-streaming consumer sees the same contract, and the daemon's
+  `lifecycle_v2::read_attachment_blobs` enforces both while streaming —
+  charging the byte budget against the **declared**
+  `BlobDescriptor::len` before reading the payload, so an over-budget
+  request costs the daemon no allocation. Over-count is
+  `invalid_request`; over-budget is `frame_too_large`. Both caps are
+  `const`-asserted to stay at or above `inferd-http`'s own limits, so
+  the daemon cannot refuse what the bridge legitimately builds. Covered
+  by new proto tests, daemon tests against small injected bounds, and a
+  Tier 5 case (`f1_attachment_table_is_bounded_per_request`).
+
+#### Fixed
+
+- **Double `llama_sampler_accept` on the grammar path**
+  (`inferd-engine::llamacpp`). `llama_sampler_sample` accepts into the
+  chain internally, so the unconditional post-sample accept advanced
+  every stateful chain member twice on the non-grammar path. The two
+  paths genuinely differ in who accepts — the manually-applied grammar
+  sampler is deliberately kept out of the chain — so the call site now
+  reports which case it took (`chain_needs_accept`) instead of leaving a
+  latent double-advance for any future penalties / dry sampler.
+- Hoisted the vocab-sized candidate buffer out of the grammar path's
+  per-token loop: one allocation per generation instead of one per
+  token, refilled in place.
+
+#### Removed
+
+- Dead code in the llamacpp adapter, all compiler-proven unreachable and
+  previously silenced with `#[allow(dead_code)]`:
+  `mtmd::InputChunk::raw()` (its doc claimed a caller that never
+  arrived) and `BackendCapabilitiesV2::audio_sample_rate`. The live
+  `InputChunks::raw()` / `Bitmap::raw()` are untouched.
+
+#### Changed
+
+- Doc drift the review turned up. `THREAT_MODEL.md`: F-1 rewritten (it
+  claimed the per-frame cap covered heap exhaustion — true per frame,
+  false per request), F-7 now names the real per-surface accept events
+  (`v2_connection_accepted` / `embed_connection_accepted`, not
+  `connection_accepted`), F-8 moved from *mitigated* to *n/a — closed by
+  removal* since ADR 0022 deleted the TCP endpoint and its `auth.rs`
+  shared-key compare in v0.5.0. Same removal swept out of `CLAUDE.md`
+  (which also listed a nonexistent `auth.rs`), `context.md`,
+  `INTEGRATING.md` (documented a `--tcp` flag that no longer exists),
+  `docs/ai.internals.explained.md`, and `packaging/README.md`. The
+  per-request attachment bounds are now normative in
+  `docs/protocol-v2.md` §3.7.
+
 ## [0.6.0] - 2026-07-13
 
 GA promotion of the `0.6.0-rc.1`…`rc.4` line (below). Headline changes

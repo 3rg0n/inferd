@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 What v0.6.0 adds over v0.5.1: vendored **llama.cpp `b9850`** with **Gemma 4 12B** support (dense "unified" variant, alongside the default E4B); **boot-time model auto-selection** ([ADR 0023](docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md) — `model_autoselect: "auto"` picks 12B when accelerator total memory ≥ `model_autoselect_min_vram_gib` (default 20 GiB), else E4B); and the **`inferd-http` OpenAI-compat bridge** ([ADR 0020](docs/adr/0020-inferd-http-bridge-is-a-separate-process.md)) — a separate process (NOT part of the daemon; the daemon stays IPC-only) that translates `/v1/chat/completions` + `/v1/embeddings` to the daemon's IPC via `inferd-client`, supporting streaming, embeddings (float + base64), **vision** (OpenAI `image_url` → decoded RGB attachment) and **structured output** (`response_format` json_schema → daemon grammar). Also: Go-client nested-module version tags + `DialPipe` busy-retry fix, and daemon backend-init failures now log to the activity log before exit.
 
-What landed across v0.1–v0.5: runtime accelerator detection (ADR 0019 — strongest of Metal / CUDA / ROCm / Vulkan / CPU at boot), the v2 typed-content wire protocol (ADR 0015), the embeddings third socket (ADR 0017), the unified length-prefixed BLOB wire (ADR 0021 — v1 folded into v2 and removed), inbound-TCP removal (ADR 0022), cloud backend adapters (`openai-compat`, `bedrock-invoke`), and the gateway-not-pipe positioning (ADR 0013). Treat `context.md`, the ADRs (`docs/adr/`, especially 0021/0017 for the live wire), and `CHANGELOG.md` as the authoritative spec; `docs/protocol-v2.md` is the normative wire spec and `docs/protocol-v1.md` is a historical record of the removed v1 surface. The workspace version in the root `Cargo.toml` is the source of truth for the current release. v0.6.0 shipped on Linux x86_64 (CUDA), Linux arm64, macOS arm64 (Metal), and Windows x86_64 (CUDA); **Windows arm64** was parked at GA for a b9850 OpenMP load crash (task #185) and has since been fixed (`GGML_OPENMP=OFF` on arm64 — ggml self-threads; verified daemon loads clean) and re-added to the release matrix, so the next release ships all five platforms.
+What landed across v0.1–v0.5: runtime accelerator detection (ADR 0019 — strongest of Metal / CUDA / ROCm / Vulkan / CPU at boot), the v2 typed-content wire protocol (ADR 0015), the embeddings third socket (ADR 0017), the unified length-prefixed BLOB wire (ADR 0021 — v1 folded into v2 and removed), inbound-TCP removal (ADR 0022), cloud backend adapters (`openai-compat`, `bedrock-invoke`), and the gateway-not-pipe positioning (ADR 0013). Treat `context.md`, the ADRs (`docs/adr/`, especially 0021/0017 for the live wire), and `CHANGELOG.md` as the authoritative spec; `docs/protocol-v2.md` is the normative wire spec and `docs/protocol-v1.md` is a historical record of the removed v1 surface. The workspace version in the root `Cargo.toml` is the source of truth for the current release. v0.6.0 GA shipped on four platforms — Linux x86_64 (CUDA), Linux arm64, macOS arm64 (Metal), Windows x86_64 (CUDA). **Windows arm64** was parked at that tag for a b9850 OpenMP load crash and has since been fixed on `main` (`GGML_OPENMP=OFF` on arm64 — ggml self-threads via its own pthread pool; verified on real arm64 hardware) and re-added to the release matrix, so the release matrix is back to five platforms and the next tag ships arm64. Do not "re-fix" this by staging `libomp.dll`: the missing import was `libomp140.aarch64.dll`, and two DLL-staging attempts failed before `dumpbin /dependents` on an actual arm64 runner settled it.
 
 Before writing code, read `context.md` — it is the hand-off brief for new contributors and names the non-negotiable invariants the daemon must preserve.
 
@@ -63,7 +63,7 @@ Single `cargo workspace` at repo root. Crates:
 |---|---|---|
 | `inferd-proto` | lib | Wire format for both live surfaces: `v2/` (typed content blocks — the single generation surface), `embed/` (embeddings), `error.rs`, `frame.rs` (length-prefixed type-tagged codec for generation + NDJSON read/write for embed, 64 MiB cap). The v1 `request.rs`/`response.rs` modules were removed in v0.4. `no_std`-friendly. |
 | `inferd-engine` | lib | `Backend` trait (`backend.rs`) + adapters: `llamacpp/` (FFI to vendored `libllama` via `ffi.rs` + `mtmd_ffi.rs` for multimodal), `mock.rs` (tests), `openai_compat/` and `bedrock_invoke/` (outbound-HTTPS cloud adapters, feature-gated). |
-| `inferd-daemon` | bin `inferd-daemon` | Lifecycle (`lifecycle.rs` / `lifecycle_v2.rs` / `lifecycle_embed.rs` — one per wire surface), admission `queue.rs`, single-instance `lock.rs`, `endpoint.rs` (UDS / named pipe / loopback TCP), `admin.rs`, `peercred.rs`, `auth.rs`, `router.rs`, `autoselect.rs` (ADR 0023 boot-time model pick), CAS `store.rs`, `fetch.rs`, activity `logx.rs` + `redact.rs`. IPC-only — links no HTTP server. |
+| `inferd-daemon` | bin `inferd-daemon` | Lifecycle (`lifecycle.rs` / `lifecycle_v2.rs` / `lifecycle_embed.rs` — one per wire surface), admission `queue.rs`, single-instance `lock.rs`, `endpoint.rs` (UDS / named pipe — inbound TCP removed in v0.5.0, ADR 0022), `admin.rs`, `peercred.rs` + `windows_security.rs` (pipe DACL), `router.rs`, `autoselect.rs` (ADR 0023 boot-time model pick), CAS `store.rs`, `fetch.rs`, activity `logx.rs` + `redact.rs`. IPC-only — links no HTTP server, and carries no shared-key auth module: every surviving transport is authenticated by kernel peer credentials. |
 | `inferd-client` | lib | Rust client: `v2_client.rs` (the generation surface), `embed_client.rs`, the shared `ClientError` in `client.rs`, plus `admin.rs` subscriber and `wait.rs` connect-and-retry. The v1 `Client` was removed in v0.4. Published to crates.io. |
 | `inferd-openai-wire` | lib | The OpenAI Chat/Embeddings wire structs (both `Serialize` + `Deserialize`), shared by the outbound `openai_compat` adapter (in `inferd-engine`, feature-gated) and the inbound `inferd-http` bridge so the two directions cannot drift. `MessageContent` (string-or-parts), `ResponseFormat`, etc. Dependency-light (serde only). |
 | `inferd-http` | bin `inferd-http` | **Separate, user-launched** OpenAI-compat HTTP bridge (ADR 0020) — NOT part of the daemon. Exposes `/v1/chat/completions` (stream + non-stream), `/v1/embeddings` (float + base64), `/v1/models`, `/health`; translates them to the daemon's v2/embed IPC via `inferd-client`. Supports vision (`image_url` → decoded RGB attachment) and structured output (`response_format` json_schema → grammar). A consumer, not a privileged surface (ADR 0014). |
@@ -71,7 +71,15 @@ Single `cargo workspace` at repo root. Crates:
 
 The `inferdctl` CLI is a **reference middleware, not a privileged surface** ([ADR 0014](docs/adr/0014-inferd-cli-is-a-reference-middleware.md)) — it talks to the daemon over the same `inferd-client` library every other consumer uses. Cloud adapters live behind cargo features (`openai`, `bedrock`); the dynamic-loader accelerator path lives behind `dl-backends` (ADR 0019). `cargo tree -e features` is the verifiable boundary for what a given build links.
 
-Clients (`clients/go/`, `clients/py/`, `clients/ts/`) are hand-written wrappers shipped alongside the daemon. The Go client is the canonical example for non-Rust consumers.
+Clients (`clients/go/`, `clients/py/`, `clients/ts/`) are hand-written wrappers shipped alongside the daemon. The Go client is the canonical example for non-Rust consumers — **`clients/py/` and `clients/ts/` are README-only stubs**, not implementations.
+
+Layout gotchas that don't match their names:
+
+- `crates/inferd/` builds the package **`inferdctl`** (ADR 0018 renamed the CLI; the directory did not follow).
+- `clients/go/` has its own `go.mod`, so Go treats it as a nested module needing **path-prefixed tags** (`clients/go/vX.Y.Z`) — `release.yml` pushes these automatically; a plain `vX.Y.Z` tag alone makes `go get` fail with "unknown revision".
+- `vendor/llama.cpp` is a submodule; `crates/inferd-proto/fuzz` is deliberately excluded from the workspace.
+- `packaging/` holds the real installers (`windows/install.ps1`, `systemd/`, `launchd/`) — these are what "install=work" exercises.
+- `docs/vX.Y-validation.md` records the per-platform install=work matrix for each release; add a row rather than starting a new format.
 
 ### Flow at runtime
 
@@ -101,11 +109,11 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 
 [ADR 0005](docs/adr/0005-libllama-ffi-not-subprocess.md) (supersedes 0003): the v0.1 default backend is `libllama` linked via FFI from a vendored `llama.cpp` submodule. No subprocess llamafile. No HTTP server compiled into the daemon. The `Backend` trait stays the same; only the default adapter changes.
 
-[ADR 0006](docs/adr/0006-lean-core-ecosystem-extensions.md): lean-core posture. The daemon ships NDJSON-over-IPC + `Backend` trait + admission queue + router + security perimeter. **HTTP, OpenAI-compat, web UI, gRPC are not in the daemon** — they live as separate processes that talk NDJSON to inferd. Apps do not override the backend on the wire; if an app wants per-call control, it writes its own provider SDK integration.
+[ADR 0006](docs/adr/0006-lean-core-ecosystem-extensions.md): lean-core posture. The daemon ships IPC (length-prefixed frames for generation, NDJSON for embed) + `Backend` trait + admission queue + router + security perimeter. **HTTP, OpenAI-compat, web UI, gRPC are not in the daemon** — they live as separate processes that talk to inferd over that IPC (`inferd-http` is exactly this). Apps do not override the backend on the wire; if an app wants per-call control, it writes its own provider SDK integration.
 
 [ADR 0007](docs/adr/0007-backend-routing-and-failure-semantics.md): routing is operator-configured policy across registered backends. **No in-daemon retry. No mid-stream failover.** Circuit breaker is the only stateful policy mechanism. v0.1 router is a no-op (one backend); v0.2 adds cloud adapters + real policy.
 
-[ADR 0009](docs/adr/0009-pre-m1-open-questions-resolved.md): admin socket is a separate endpoint (`0600` on Unix), peer credentials enforced on UDS + named pipe (TCP gets API key only), backend identity exposed via `backend` field on `done` frames. (The "separate-socket-per-version, no in-band negotiation" clause was superseded by ADR 0021 — the generation wire now carries an in-band `wire_version`.)
+[ADR 0009](docs/adr/0009-pre-m1-open-questions-resolved.md): admin socket is a separate endpoint (`0600` on Unix), peer credentials enforced on UDS + named pipe, backend identity exposed via `backend` field on `done` frames. (Two clauses are superseded: "separate-socket-per-version, no in-band negotiation" by ADR 0021 — the generation wire now carries an in-band `wire_version`; and "TCP gets API key only" by ADR 0022 — inbound TCP and the shared-key path were removed in v0.5.0, so peer credentials are the *only* authentication.)
 
 [ADR 0011](docs/adr/0011-shared-content-addressable-model-store.md): models live in a shared CAS store at `$MODELS_HOME`. Manifest indirection (`name → sha`) plus content-addressed blob paths. Wire-compatible with the cross-tool convention.
 
@@ -128,6 +136,18 @@ When extending or refactoring, these are already-paid-for lessons — do not re-
 
 ## Commands
 
+### First clone
+
+`vendor/llama.cpp` is a submodule and the `llamacpp` feature will not build without it:
+
+```sh
+git submodule update --init --recursive
+```
+
+Building any `llamacpp`-derived feature also needs CMake + a C++ toolchain and libclang for bindgen: `libclang-dev` on Ubuntu, `brew install llvm` on macOS. On Windows, the CUDA and arm64 paths drive CMake with the **Ninja** generator (not MSBuild), so `cl.exe` and `ninja` must be on `PATH` — run from an MSVC dev shell, or the configure step fails.
+
+### Pre-commit gate
+
 ```sh
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
@@ -137,6 +157,54 @@ cargo deny check
 ```
 
 Run the full lint + test + audit cycle across the whole workspace before every commit, not just changed files.
+
+**`--all-targets` is not optional.** Omitting it skips test/bench code, where clippy findings have slipped through and failed every CI job after the fact. And `--all-features` alone does not reproduce CI: `ci.yml` gates on a **per-feature matrix**, not one union build, because the GPU features are mutually exclusive in practice. Before pushing anything that touches `inferd-proto` types, `inferd-engine` adapters, or daemon wiring, run the variants CI runs:
+
+```sh
+cargo clippy --all-targets -- -D warnings                                  # default (mock)
+cargo clippy --all-targets --features inferd-engine/openai -- -D warnings
+cargo clippy --all-targets --features inferd-engine/llamacpp -- -D warnings
+cargo clippy --all-targets --features inferd-engine/dl-backends -- -D warnings
+cargo test -p inferd-daemon --features security --test security            # Tier 5
+```
+
+Adding a field to `ResolvedV2` / `RequestV2` is the recurring trap: struct literals in the `openai`, `bedrock`, and `security` feature-gated code break, and plain `cargo test --all` does **not** compile them.
+
+### Test tiers (`docs/test-strategy.md`)
+
+| Tier | What | How |
+|---|---|---|
+| 1–2 | unit + daemon integration on the `mock` backend | `cargo test --all` (default features) |
+| 3 | engine against real `libllama` | `--features inferd-engine/llamacpp-integration` + `INFERD_TEST_MODEL_PATH` (and `INFERD_TEST_EMBED_MODEL_PATH`); **skips silently** without them |
+| 4 | cross-language wire validation | `cd clients/go && go vet ./... && go test ./...` |
+| 5 | security regressions | `cargo test -p inferd-daemon --features security --test security` |
+| 6 | fuzzing | `crates/inferd-proto/fuzz` — deliberately **not** a workspace member (needs nightly) |
+
+Single test: `cargo test -p <crate> <test_name>`. Fast loops: `cargo test -p inferd-proto` (<5 s), `cargo test -p inferd-daemon` (<30 s).
+
+Tier 3 is the only tier that catches real-model regressions. Mock-backend tests have twice passed while all real generation was broken — if you touch prefill, templating, capabilities, or the FFI adapter, Tier 3 is mandatory, not optional.
+
+### Building and running with a backend
+
+```sh
+cargo build -p inferd-daemon --features dl-backends   # runtime accelerator pick (ADR 0019)
+cargo build -p inferd-daemon --features cuda          # static single-accelerator path
+```
+
+`INFERD_FORCE_BACKEND=cpu|metal|cuda|rocm|vulkan` pins the accelerator at runtime (env-only, no CLI flag — ADR 0019). `INFERD_LOG=0|1|debug` controls the activity log.
+
+With `dl-backends`, `build.rs` stages the ggml backend shared libs into `target/<profile>/backends/` and release packaging picks them up from there; the install scripts flatten that directory next to the binary. If the daemon reports the CPU backend on a GPU box, a missing/stale lib in `backends/` is the first thing to check.
+
+### Cutting a version bump
+
+The workspace version in the root `Cargo.toml` is the source of truth, but **10 internal `=X.Y.Z` path-dep pins do not inherit it**. Bump all of them plus the lockfile or the build breaks late:
+
+```sh
+grep -rn 'version = "=' --include=Cargo.toml crates/   # find all 10
+cargo update -w                                        # refresh Cargo.lock
+```
+
+`docs/RELEASING.md` is the full tag/publish runbook. Release is tag-triggered (`vX.Y.Z`) across 5 platforms with `fail-fast: false`; `publish` needs every build leg, so one red platform publishes nothing. Only `inferd-proto` and `inferd-client` go to crates.io.
 
 Feature-gated builds and tests:
 

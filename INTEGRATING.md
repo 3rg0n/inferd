@@ -200,7 +200,7 @@ for f := range stream {
 
 ### Other languages
 
-The generation wire is length-prefixed, type-tagged frames over a Unix socket / Windows named pipe / loopback TCP: `[uvarint payload_len][1 byte type: 0x01 JSON / 0x02 BLOB][payload]`, 64 MiB payload cap. Send a JSON frame (`0x01`) carrying the request (with `"wire_version": 1`); for each attachment send a `BlobDescriptor` JSON frame then a BLOB frame (`0x02`) with the raw bytes. Read response frames the same way. No gRPC, no SSE, no protobuf — a varint codec plus a JSON parser is enough. (The embed surface is simpler still: newline-delimited JSON.)
+The generation wire is length-prefixed, type-tagged frames over a Unix socket / Windows named pipe: `[uvarint payload_len][1 byte type: 0x01 JSON / 0x02 BLOB][payload]`, 64 MiB payload cap. Send a JSON frame (`0x01`) carrying the request (with `"wire_version": 1`); for each attachment send a `BlobDescriptor` JSON frame then a BLOB frame (`0x02`) with the raw bytes. Read response frames the same way. No gRPC, no SSE, no protobuf — a varint codec plus a JSON parser is enough. (The embed surface is simpler still: newline-delimited JSON.)
 
 The Rust types in [`inferd-proto`](https://crates.io/crates/inferd-proto) are the schema reference if you want to generate bindings; ADR 0021 specifies the framing.
 
@@ -305,7 +305,7 @@ One generation socket (v0.4 / ADR 0021 — the old `infer.sock` / `infer.v2.sock
 | macOS | `${TMPDIR}/inferd/inferd.sock` |
 | Windows | `\\.\pipe\inferd` |
 
-It's bound by default as soon as the daemon is `ready` — no flag to flip. (Loopback TCP is opt-in via `--tcp` / `listen.tcp` for cross-VM cases.)
+It's bound by default as soon as the daemon is `ready` — no flag to flip. There is no network listener: [ADR 0022](docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md) removed the loopback-TCP endpoint in v0.5.0. Cross-VM / container consumers use the ADR 0024 pipe↔UDS relay, which preserves the same peer-credential trust.
 
 ### Attachments are raw bytes, not data URLs
 

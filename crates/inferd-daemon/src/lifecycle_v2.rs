@@ -28,8 +28,8 @@ use crate::router::{Router, RouterError};
 use inferd_engine::{GenerateError, TokenEventV2};
 use inferd_proto::ProtoError;
 use inferd_proto::v2::{
-    Attachment, BlobDescriptor, BlobDescriptorTag, ErrorCodeV2, RequestV2, ResponseBlock,
-    ResponseV2, WIRE_VERSION,
+    Attachment, BlobDescriptor, BlobDescriptorTag, ErrorCodeV2, MAX_ATTACHMENT_BYTES_PER_REQUEST,
+    MAX_ATTACHMENTS_PER_REQUEST, RequestV2, ResponseBlock, ResponseV2, WIRE_VERSION,
 };
 use inferd_proto::{FrameType, MAX_FRAME_BYTES, decode_json_payload, write_lp_json};
 use std::io;
@@ -409,11 +409,44 @@ async fn read_json_frame<R: AsyncRead + Unpin, T: serde::de::DeserializeOwned>(
 /// (ADR 0021). Descriptors must reference attachment ids present in the
 /// request, the BLOB length must match the descriptor, and each
 /// attachment must receive exactly one BLOB.
+///
+/// Per-request bounds (THREAT_MODEL F-1). The 64 MiB frame cap bounds one
+/// frame; these bound the whole request, because each declared attachment
+/// entitles the peer to one more BLOB frame:
+///   - at most `MAX_ATTACHMENTS_PER_REQUEST` attachments, checked before
+///     the first frame is read;
+///   - at most `MAX_ATTACHMENT_BYTES_PER_REQUEST` summed across all BLOBs,
+///     charged against each descriptor's *declared* `len` before its
+///     payload is read, so an over-budget request costs no heap.
 async fn read_attachment_blobs<R: AsyncRead + Unpin>(
     reader: &mut R,
     attachments: &mut [Attachment],
 ) -> Result<(), ProtoError> {
+    read_attachment_blobs_bounded(
+        reader,
+        attachments,
+        MAX_ATTACHMENTS_PER_REQUEST,
+        MAX_ATTACHMENT_BYTES_PER_REQUEST,
+    )
+    .await
+}
+
+/// [`read_attachment_blobs`] with the per-request bounds passed in.
+/// Split out so the bounds logic is testable without materialising the
+/// ≥128 MiB of real frames the production constants would require.
+async fn read_attachment_blobs_bounded<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    attachments: &mut [Attachment],
+    max_attachments: usize,
+    max_total_bytes: u64,
+) -> Result<(), ProtoError> {
     let expected = attachments.len();
+    if expected > max_attachments {
+        return Err(ProtoError::InvalidRequest(format!(
+            "request declares {expected} attachments; at most {max_attachments} allowed"
+        )));
+    }
+    let mut budget_remaining = max_total_bytes;
     for _ in 0..expected {
         // Descriptor (JSON frame).
         let desc: BlobDescriptor = match read_json_frame(reader).await? {
@@ -429,9 +462,10 @@ async fn read_attachment_blobs<R: AsyncRead + Unpin>(
                 "expected an attachment_blob descriptor".into(),
             ));
         }
-        if desc.len > MAX_FRAME_BYTES as u64 {
+        if desc.len > MAX_FRAME_BYTES as u64 || desc.len > budget_remaining {
             return Err(ProtoError::FrameTooLarge);
         }
+        budget_remaining -= desc.len;
 
         // BLOB frame.
         let (ftype, bytes) = match read_lp_raw(reader).await? {
@@ -574,5 +608,85 @@ pub async fn serve_named_pipe_v2(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inferd_proto::write_lp_blob;
+
+    /// Build the descriptor+BLOB byte stream for `sizes`, as a well-behaved
+    /// producer would. Each entry names attachment `a{i}`.
+    fn blob_stream(sizes: &[usize]) -> Vec<u8> {
+        let mut wire = Vec::new();
+        for (i, &len) in sizes.iter().enumerate() {
+            write_lp_json(&mut wire, &BlobDescriptor::new(format!("a{i}"), len as u64))
+                .expect("descriptor");
+            write_lp_blob(&mut wire, &vec![0u8; len]).expect("blob");
+        }
+        wire
+    }
+
+    fn image_attachments(n: usize) -> Vec<Attachment> {
+        (0..n)
+            .map(|i| Attachment::Image {
+                id: format!("a{i}"),
+                width: 1,
+                height: 1,
+                bytes: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// THREAT_MODEL F-1: the per-frame cap bounds each BLOB at 64 MiB, but
+    /// nothing bounded their *sum*. A request declaring N attachments could
+    /// direct N × 64 MiB of reads into daemon heap. The budget must be
+    /// charged against the *declared* descriptor `len`, i.e. refused before
+    /// the BLOB payload is read at all.
+    #[tokio::test]
+    async fn attachment_blobs_reject_over_budget_aggregate() {
+        // Two attachments whose declared lengths together exceed the budget.
+        // Only the first is actually written: the reader must refuse on the
+        // second descriptor without ever waiting for its payload.
+        let mut wire = Vec::new();
+        write_lp_json(&mut wire, &BlobDescriptor::new("a0", 6)).expect("descriptor");
+        write_lp_blob(&mut wire, &[0u8; 6]).expect("blob");
+        write_lp_json(&mut wire, &BlobDescriptor::new("a1", 6)).expect("descriptor");
+        // a1's BLOB deliberately absent — the reader must not get that far.
+
+        let mut attachments = image_attachments(2);
+        let err = read_attachment_blobs_bounded(&mut wire.as_slice(), &mut attachments, 32, 10)
+            .await
+            .expect_err("aggregate attachment bytes must be bounded");
+        assert!(
+            matches!(err, ProtoError::FrameTooLarge),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The count cap must be refused before the first frame is read, so a
+    /// flooded attachment table costs one request frame and nothing else.
+    #[tokio::test]
+    async fn attachment_blobs_reject_over_count_before_reading() {
+        let mut attachments = image_attachments(3);
+        let err = read_attachment_blobs_bounded(&mut [].as_slice(), &mut attachments, 2, u64::MAX)
+            .await
+            .expect_err("attachment count must be bounded");
+        assert!(
+            matches!(err, ProtoError::InvalidRequest(ref m) if m.contains("attachments")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_blobs_accept_within_bounds() {
+        let wire = blob_stream(&[3, 4]);
+        let mut attachments = image_attachments(2);
+        read_attachment_blobs_bounded(&mut wire.as_slice(), &mut attachments, 32, 7)
+            .await
+            .expect("within-budget attachments must be accepted");
+        assert_eq!(attachments[0].bytes(), &[0u8; 3]);
+        assert_eq!(attachments[1].bytes(), &[0u8; 4]);
     }
 }

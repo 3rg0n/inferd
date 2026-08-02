@@ -19,7 +19,10 @@
 
 use inferd_daemon::lock::{Lock, LockError};
 use inferd_daemon::redact::redact_in_place;
-use inferd_proto::v2::{ContentBlock, MessageV2, RequestV2, RoleV2, WIRE_VERSION};
+use inferd_proto::v2::{
+    Attachment, ContentBlock, MAX_ATTACHMENTS_PER_REQUEST, MessageV2, RequestV2, RoleV2,
+    WIRE_VERSION,
+};
 use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_lp_frame, write_lp_blob};
 use std::io;
 
@@ -95,6 +98,45 @@ fn f1_frame_cap_rejects_oversized_output() {
     let mut buf = Vec::new();
     let err = write_lp_blob(&mut buf, &huge).unwrap_err();
     assert!(matches!(err, ProtoError::FrameTooLarge));
+}
+
+#[test]
+fn f1_attachment_table_is_bounded_per_request() {
+    // The per-frame cap bounds one frame; it does NOT bound one request.
+    // Each declared attachment entitles the sender to one further BLOB
+    // frame, so an unbounded attachment table multiplies a single in-cap
+    // request frame into unbounded reads. The count cap closes that,
+    // and the daemon's reader enforces it (plus a total-byte budget,
+    // charged against the *declared* descriptor length) before any
+    // payload is read — see `lifecycle_v2::read_attachment_blobs`.
+    // Asserted here at the shared proto contract, which is the layer
+    // every producer and every non-streaming consumer also sees.
+    let over = MAX_ATTACHMENTS_PER_REQUEST + 1;
+    let req = RequestV2 {
+        wire_version: WIRE_VERSION,
+        id: "amplify".into(),
+        messages: vec![MessageV2 {
+            role: RoleV2::User,
+            content: vec![ContentBlock::Text { text: "hi".into() }],
+        }],
+        attachments: (0..over)
+            .map(|i| Attachment::Image {
+                id: format!("img-{i}"),
+                width: 1,
+                height: 1,
+                bytes: Vec::new(),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let err = req.resolve().unwrap_err();
+    match err {
+        ProtoError::InvalidRequest(msg) => assert!(
+            msg.contains("attachments"),
+            "expected an attachment-cap rejection, got: {msg}"
+        ),
+        other => panic!("expected InvalidRequest, got {other:?}"),
+    }
 }
 
 // =====================================================================

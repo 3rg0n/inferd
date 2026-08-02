@@ -458,13 +458,6 @@ impl InputChunk<'_> {
         unsafe { ffi::mtmd_input_chunk_get_n_pos(self.ptr.as_ptr()) }
     }
 
-    /// Borrow the inner pointer for FFI calls. Used by the
-    /// `LlamaCpp` adapter's encode loop in later phases.
-    #[allow(dead_code)]
-    pub(crate) fn raw(&self) -> *const ffi::mtmd_input_chunk {
-        self.ptr.as_ptr()
-    }
-
     /// Optional id (only present on image/audio chunks; text returns
     /// nullptr in C).
     pub fn id(&self) -> Option<&str> {

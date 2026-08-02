@@ -26,6 +26,40 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum attachments a single request may declare.
+///
+/// The 64 MiB frame cap ([`crate::MAX_FRAME_BYTES`], THREAT_MODEL F-5)
+/// bounds one *frame*, not one *request*: each declared attachment
+/// entitles the sender to send one further BLOB frame, so an unbounded
+/// attachment table turns one in-cap request frame into an unbounded
+/// amount of reads (THREAT_MODEL F-1). This bounds the multiplier.
+///
+/// Sized to admit what a legitimate producer sends — `inferd-http`'s
+/// `MAX_IMAGES_PER_REQUEST` is 8 — with headroom for multi-modal
+/// conversations that reference several images plus audio.
+pub const MAX_ATTACHMENTS_PER_REQUEST: usize = 32;
+
+/// Maximum total attachment bytes a single request may carry, summed
+/// across every BLOB frame.
+///
+/// The companion to [`MAX_ATTACHMENTS_PER_REQUEST`]: the count cap alone
+/// still permits `count × 64 MiB`. Readers enforce this against the
+/// *declared* `BlobDescriptor::len` before reading a payload, so an
+/// over-budget request costs no heap.
+///
+/// Matches `inferd-http`'s `MAX_TOTAL_DECODED_IMAGE_BYTES` (128 MiB) so
+/// the bridge cannot produce a request the daemon refuses.
+pub const MAX_ATTACHMENT_BYTES_PER_REQUEST: u64 = 128 * 1024 * 1024;
+
+// These caps must never reject what a legitimate producer sends. The
+// tightest such producer is the `inferd-http` bridge, whose own limits are
+// `MAX_IMAGES_PER_REQUEST` = 8 and `MAX_TOTAL_DECODED_IMAGE_BYTES` = 128
+// MiB; lowering either cap below those would make the daemon refuse
+// requests the bridge happily builds. Compile-time so the break is a build
+// failure, not a runtime surprise on a vision request.
+const _: () = assert!(MAX_ATTACHMENTS_PER_REQUEST >= 8);
+const _: () = assert!(MAX_ATTACHMENT_BYTES_PER_REQUEST >= 128 * 1024 * 1024);
+
 /// One binary attachment in the request's top-level `attachments[]` table.
 ///
 /// Tagged-enum shape: each variant carries exactly the metadata libmtmd

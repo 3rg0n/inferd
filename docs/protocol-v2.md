@@ -303,6 +303,17 @@ consumer's responsibility when the `tool_use` result comes back.
 of that BLOB and SHOULD equal the BLOB's `payload_len`; a reader uses it
 as a sanity check.
 
+**Per-request attachment bounds (THREAT_MODEL F-1).** The frame cap in §2
+bounds one *frame*; the attachment table bounds how many frames one
+request may demand, so it needs its own limits. A request MUST NOT
+declare more than **32** attachments, and the sum of all its BLOB lengths
+MUST NOT exceed **128 MiB**. A reader MUST reject an over-count request
+before reading any BLOB, and MUST charge the byte budget against this
+descriptor's `len` **before** reading the payload it describes — so an
+over-budget request costs the reader no allocation. Over-count is
+`invalid_request`; over-budget is `frame_too_large`. These are separate
+from, and stricter than, `32 × 64 MiB`.
+
 ---
 
 ## 4. Generation response
