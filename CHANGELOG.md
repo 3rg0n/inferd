@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — v0.6.1 full G1–G6 tarball pass green
+  (2026-08-02):** SHA256 verified. `inferd-daemon`/`inferdctl`/
+  `inferd-http` all `0.6.1`. Installed via `install-launchagent.sh` →
+  `status=ready`, `wire_version=1`, `accelerator=metal`,
+  `device=MTL0 vram=11.8 GiB`. Activity log confirms F-17
+  (`response write timeout configured write_timeout=60s`). 16 GiB box
+  (< 20 GiB auto-select threshold) → correctly picked E4B. G1 text
+  (Paris). G2 thinking (reasoning separated, answer 42, no channel
+  leak — confirms the double-`llama_sampler_accept` fix didn't disturb
+  the non-grammar path). G3 grammar native (schema-conforming JSON;
+  malformed schema fails closed — confirms the grammar-loop fixes
+  didn't regress correctness). G4 vision native (exact OCR
+  transcription, `input_tokens=73` — confirms F-1's new per-request
+  attachment bounds don't false-positive-reject a normal single-image
+  request). G5 bridge (chat non-stream/stream, embeddings float+base64).
+  G6 bridge vision+grammar (exact OCR + schema-conforming JSON). All
+  green, no regressions. See `docs/v0.6-validation.md`, issue #53.
+
 ## [0.6.1] - 2026-08-02
 
 Post-GA code review of the v0.6.0 line (correctness / dead code /
