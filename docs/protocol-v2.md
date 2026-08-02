@@ -1,6 +1,6 @@
 # inferd wire protocol — v2 generation + embeddings (normative spec)
 
-> **Status:** normative for inferd **v0.4.0 and later** (current: v0.6.0). This document is the
+> **Status:** normative for inferd **v0.4.0 and later** (current: v0.6.1). This document is the
 > contract an implementer writes middleware against. Where this document
 > and the `inferd-proto` source disagree, the source
 > (`crates/inferd-proto/`) wins and this document is the bug — but CI

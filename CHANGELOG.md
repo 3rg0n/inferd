@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 2026-08-02
+## [0.6.1] - 2026-08-02
 
 Post-GA code review of the v0.6.0 line (correctness / dead code /
-over-engineering sweep). One security fix, two engine fixes, dead-code
+over-engineering sweep). Two security fixes, two engine fixes, dead-code
 removal, and the doc drift the review surfaced.
+
+No wire change: the v2 generation and embed surfaces are untouched
+(ADR 0021 / 0017), so `wire_version` does not move and v0.6.0 clients
+interoperate unchanged. The two new `inferd-proto` consts and the new
+daemon flag are additive. One behaviour change is deliberate and
+observable: a request declaring more than 32 attachments, or more than
+128 MiB of them, is now rejected where it was previously accepted.
 
 #### Added
 

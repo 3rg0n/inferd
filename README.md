@@ -6,7 +6,7 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: v0.6.0.** `inferd-proto` and `inferd-client` are on crates.io;
+**Status: v0.6.1.** `inferd-proto` and `inferd-client` are on crates.io;
 the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
 HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
 arm64), macOS arm64, and Windows x86_64. (Windows arm64 is parked for the
