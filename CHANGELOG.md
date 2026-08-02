@@ -34,8 +34,32 @@ removal, and the doc drift the review surfaced.
   the daemon cannot refuse what the bridge legitimately builds. Covered
   by new proto tests, daemon tests against small injected bounds, and a
   Tier 5 case (`f1_attachment_table_is_bounded_per_request`).
+- **`--write-timeout-secs` / `INFERD_WRITE_TIMEOUT_SECS`** (default 60)
+  bounds how long the daemon will block writing one response frame
+  before it abandons the frame and drops the connection. Operator escape
+  hatch: `0` disables the bound, which the daemon logs a warning about at
+  startup. See the fix below for why the bound exists.
 
 #### Fixed
+
+- **A peer that stops reading can no longer hold an admission permit
+  indefinitely** (THREAT_MODEL F-17). Response writes happen downstream
+  of the admission gate, while the request's permit is alive: a local
+  client that sent a valid request, got admitted, and then simply stopped
+  draining its socket filled the kernel send buffer and blocked the
+  daemon inside `write_all` forever — holding a generation slot with no
+  timeout to break it. `active_permits + queue_depth` such connections
+  (11 by default) starved generation for every other consumer on the
+  machine, at almost no cost to the attacker. Both surfaces now bound
+  every response write (`lifecycle_v2::write_response_v2`,
+  `lifecycle_embed::write_response_embed`) — they share one `Admission`,
+  so an unbounded embed write starved generation too. The bound covers
+  the writer-mutex acquisition as well as `write_all`/`flush`, since the
+  wedged task holds that lock. Regression test
+  (`tests/write_stall.rs`, UDS + named pipe) fails with the bound
+  removed: the victim client is refused `queue_full` on every one of
+  ~184 attempts across a 20s budget, versus served in under a second
+  with the fix.
 
 - **Double `llama_sampler_accept` on the grammar path**
   (`inferd-engine::llamacpp`). `llama_sampler_sample` accepts into the

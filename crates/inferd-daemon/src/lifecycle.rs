@@ -42,20 +42,52 @@ pub async fn wait_for_ready(router: &Router, timeout: Duration) -> Result<Durati
 #[error("backend not ready within {0:?}")]
 pub struct ReadyTimeout(pub Duration);
 
+/// Default ceiling on a single response write (THREAT_MODEL F-17).
+///
+/// A response write blocks once the peer's receive buffer fills and the
+/// peer stops reading. Because that write happens while the request
+/// holds its admission permit, an unbounded wait converts one
+/// stopped-reading client into a permanently occupied generation slot.
+/// This bounds the wait.
+///
+/// 60s is chosen to be far longer than any legitimate write can take —
+/// a response frame is at most a few hundred KiB and the peer is a local
+/// process, so the only way to exceed it is a peer that has stopped
+/// reading entirely — while still short enough that a wedged slot
+/// recovers without operator intervention.
+pub const DEFAULT_WRITE_TIMEOUT_SECS: u64 = 60;
+
 /// Per-accept context that the lifecycle hands to every spawned
 /// connection task.
 ///
-/// Today it carries the shared admission gate (queue_full enforcement).
-/// New per-connection policy (rate limits, per-caller quotas) extends
-/// this struct rather than each `serve_*` signature. (Peer identity is
-/// kernel-attested per transport — UDS/pipe, F-7 — so there is no
-/// in-band API-key field; inbound TCP was removed in ADR 0022.)
-#[derive(Clone, Default)]
+/// Today it carries the shared admission gate (queue_full enforcement)
+/// and the per-write timeout (F-17). New per-connection policy (rate
+/// limits, per-caller quotas) extends this struct rather than each
+/// `serve_*` signature. (Peer identity is kernel-attested per transport
+/// — UDS/pipe, F-7 — so there is no in-band API-key field; inbound TCP
+/// was removed in ADR 0022.)
+#[derive(Clone)]
 pub struct AcceptContext {
     /// Shared admission gate. `None` for tests / dev paths that
     /// don't care about queue depth — those treat every request
     /// as admitted. Production lifecycle always passes `Some`.
     pub admission: Option<Admission>,
+    /// Ceiling on one response write, after which the connection is
+    /// dropped and the admission permit released (THREAT_MODEL F-17).
+    /// Defaults to [`DEFAULT_WRITE_TIMEOUT_SECS`]; tests shorten it to
+    /// make the wedge reproducible in bounded time. `None` disables the
+    /// bound — never set by the daemon binary, and only correct for a
+    /// test that owns both ends of the socket.
+    pub write_timeout: Option<Duration>,
+}
+
+impl Default for AcceptContext {
+    fn default() -> Self {
+        Self {
+            admission: None,
+            write_timeout: Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT_SECS)),
+        }
+    }
 }
 
 impl std::fmt::Debug for AcceptContext {
@@ -65,6 +97,7 @@ impl std::fmt::Debug for AcceptContext {
                 "admission_capacity",
                 &self.admission.as_ref().map(|a| a.capacity()),
             )
+            .field("write_timeout", &self.write_timeout)
             .finish()
     }
 }

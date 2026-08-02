@@ -39,10 +39,9 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
-/// Per-accept context for v2 connections. v2 reuses v1's
-/// `AcceptContext` shape — same TCP API key, same admission
-/// gate. The admission gate, in particular, sees v1 and v2
-/// requests as equivalent: one slot is one slot.
+/// Per-accept policy for v2 connections — the same type the embed
+/// surface uses, because both share one admission gate: one slot is one
+/// slot regardless of which surface asked for it.
 pub use crate::lifecycle::AcceptContext;
 
 /// Handle one accepted v2 client connection.
@@ -67,6 +66,9 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
     let (read_half, write_half) = tokio::io::split(&mut conn);
     let mut reader = BufReader::with_capacity(64 * 1024, read_half);
     let writer = Arc::new(Mutex::new(write_half));
+    // THREAT_MODEL F-17: every response write is bounded, because writes
+    // downstream of the admission gate happen while the permit is held.
+    let write_timeout = ctx.write_timeout;
 
     loop {
         // 1. Request JSON frame.
@@ -83,7 +85,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code: error_code_for(&e),
                     message: e.to_string(),
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 return Ok(());
             }
         };
@@ -100,7 +102,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     request.wire_version, WIRE_VERSION
                 ),
             };
-            write_response_v2(&writer, &resp).await?;
+            write_response_v2(&writer, &resp, write_timeout).await?;
             // A version mismatch means the peer's framing assumptions may
             // differ from ours; don't try to resync on this connection.
             return Ok(());
@@ -116,7 +118,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                 code: error_code_for(&e),
                 message: e.to_string(),
             };
-            write_response_v2(&writer, &resp).await?;
+            write_response_v2(&writer, &resp, write_timeout).await?;
             return Ok(());
         }
 
@@ -131,7 +133,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code: ErrorCodeV2::InvalidRequest,
                     message: e.to_string(),
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 continue;
             }
         };
@@ -147,7 +149,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code: ErrorCodeV2::QueueFull,
                     message: "queue full".into(),
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 continue;
             }
             Some(Err(SubmitError::Closed)) => {
@@ -156,7 +158,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code: ErrorCodeV2::BackendUnavailable,
                     message: "admission closed".into(),
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 return Ok(());
             }
         };
@@ -170,7 +172,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code: ErrorCodeV2::BackendUnavailable,
                     message: "no backend available".into(),
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 continue;
             }
         };
@@ -188,7 +190,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                 code: ErrorCodeV2::Internal,
                 message: format!("backend {backend_name:?} does not advertise v2 capability"),
             };
-            write_response_v2(&writer, &resp).await?;
+            write_response_v2(&writer, &resp, write_timeout).await?;
             continue;
         }
 
@@ -217,7 +219,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     code,
                     message,
                 };
-                write_response_v2(&writer, &resp).await?;
+                write_response_v2(&writer, &resp, write_timeout).await?;
                 continue;
             }
         };
@@ -230,14 +232,14 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                         id: req_id.clone(),
                         block: ResponseBlock::Text { delta },
                     };
-                    write_response_v2(&writer, &frame).await?;
+                    write_response_v2(&writer, &frame, write_timeout).await?;
                 }
                 TokenEventV2::Thinking(delta) => {
                     let frame = ResponseV2::Frame {
                         id: req_id.clone(),
                         block: ResponseBlock::Thinking { delta },
                     };
-                    write_response_v2(&writer, &frame).await?;
+                    write_response_v2(&writer, &frame, write_timeout).await?;
                 }
                 TokenEventV2::ToolUse {
                     tool_call_id,
@@ -252,7 +254,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                             input,
                         },
                     };
-                    write_response_v2(&writer, &frame).await?;
+                    write_response_v2(&writer, &frame, write_timeout).await?;
                 }
                 TokenEventV2::Done { stop_reason, usage } => {
                     let frame = ResponseV2::Done {
@@ -261,7 +263,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                         stop_reason,
                         backend: backend_name.clone(),
                     };
-                    write_response_v2(&writer, &frame).await?;
+                    write_response_v2(&writer, &frame, write_timeout).await?;
                     router.record_success(&backend_name);
                     info!(
                         target: "inferd_daemon::activity",
@@ -295,7 +297,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                 code: ErrorCodeV2::BackendUnavailable,
                 message: "backend ended stream without terminal frame".into(),
             };
-            write_response_v2(&writer, &frame).await?;
+            write_response_v2(&writer, &frame, write_timeout).await?;
         }
     }
 }
@@ -513,17 +515,38 @@ async fn read_attachment_blobs_bounded<R: AsyncRead + Unpin>(
     Ok(())
 }
 
+/// Write one length-prefixed JSON response frame, bounded by
+/// `timeout` (THREAT_MODEL F-17).
+///
+/// The bound covers the lock acquisition as well as the write and flush:
+/// a peer wedged inside `write_all` holds the writer mutex, so an
+/// unbounded `lock().await` here would stall just as long as an unbounded
+/// write. On expiry the frame is abandoned and the error propagates,
+/// which drops the connection and — crucially — releases the caller's
+/// admission permit.
 async fn write_response_v2<W: AsyncWrite + Unpin>(
     writer: &Mutex<W>,
     resp: &ResponseV2,
+    timeout: Option<std::time::Duration>,
 ) -> io::Result<()> {
     let mut buf = Vec::with_capacity(512);
     write_lp_json(&mut buf, resp)
         .map_err(|e| io::Error::other(format!("serialise v2 response: {e}")))?;
-    let mut guard = writer.lock().await;
-    guard.write_all(&buf).await?;
-    guard.flush().await?;
-    Ok(())
+    let write = async {
+        let mut guard = writer.lock().await;
+        guard.write_all(&buf).await?;
+        guard.flush().await?;
+        Ok(())
+    };
+    match timeout {
+        None => write.await,
+        Some(d) => tokio::time::timeout(d, write).await.unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("peer did not accept a response frame within {d:?}"),
+            ))
+        }),
+    }
 }
 
 /// Serve a v2 Unix domain socket listener.

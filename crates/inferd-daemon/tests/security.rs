@@ -17,6 +17,7 @@
 
 #![cfg(feature = "security")]
 
+use inferd_daemon::lifecycle::{AcceptContext, DEFAULT_WRITE_TIMEOUT_SECS};
 use inferd_daemon::lock::{Lock, LockError};
 use inferd_daemon::redact::redact_in_place;
 use inferd_proto::v2::{
@@ -25,6 +26,7 @@ use inferd_proto::v2::{
 };
 use inferd_proto::{MAX_FRAME_BYTES, ProtoError, read_lp_frame, write_lp_blob};
 use std::io;
+use std::time::Duration;
 
 // =====================================================================
 // F-1 / F-5: length-prefixed per-frame size cap (ADR 0021)
@@ -172,6 +174,33 @@ fn f2_lock_pre_existing_symlink_rejected() {
 
     let err = Lock::acquire(&symlink).unwrap_err();
     assert!(matches!(err, LockError::Symlink(_)));
+}
+
+// =====================================================================
+// F-17: response writes are bounded by default
+// =====================================================================
+
+#[test]
+fn f17_default_accept_policy_bounds_response_writes() {
+    // The wedge itself — a non-reading peer holding an admission permit
+    // through a blocked `write_all` — is reproduced over real sockets in
+    // `tests/write_stall.rs`. What that test cannot catch is a
+    // *regression of the default*: it injects a short bound so the
+    // timeout is observable in test time, so swapping the production
+    // default back to `None` (e.g. by deriving `Default` on
+    // `AcceptContext`, where `Option::default()` is `None`) would leave
+    // it green while every real daemon ran unbounded again.
+    //
+    // So assert the policy directly: whatever an `AcceptContext` is
+    // constructed from, out of the box the write is bounded.
+    let ctx = AcceptContext::default();
+    assert_eq!(
+        ctx.write_timeout,
+        Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT_SECS)),
+        "the default accept policy must bound response writes: an \
+         unbounded write downstream of the admission gate lets a peer \
+         that stops reading hold a generation slot forever"
+    );
 }
 
 // =====================================================================

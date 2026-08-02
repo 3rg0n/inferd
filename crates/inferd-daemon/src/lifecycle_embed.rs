@@ -60,6 +60,9 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
     let (read_half, write_half) = tokio::io::split(&mut conn);
     let mut reader = BufReader::with_capacity(64 * 1024, read_half);
     let writer = Arc::new(Mutex::new(write_half));
+    // THREAT_MODEL F-17: bounded so a peer that stops reading can't hold
+    // the shared admission permit indefinitely.
+    let write_timeout = ctx.write_timeout;
 
     loop {
         let request: EmbedRequest = match read_request_embed(&mut reader).await {
@@ -72,7 +75,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code: error_code_for(&e),
                     message: e.to_string(),
                 };
-                write_response_embed(&writer, &resp).await?;
+                write_response_embed(&writer, &resp, write_timeout).await?;
                 return Ok(());
             }
         };
@@ -86,7 +89,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code: EmbedErrorCode::InvalidRequest,
                     message: e.to_string(),
                 };
-                write_response_embed(&writer, &resp).await?;
+                write_response_embed(&writer, &resp, write_timeout).await?;
                 continue;
             }
         };
@@ -102,7 +105,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code: EmbedErrorCode::QueueFull,
                     message: "queue full".into(),
                 };
-                write_response_embed(&writer, &resp).await?;
+                write_response_embed(&writer, &resp, write_timeout).await?;
                 continue;
             }
             Some(Err(SubmitError::Closed)) => {
@@ -111,7 +114,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code: EmbedErrorCode::BackendUnavailable,
                     message: "admission closed".into(),
                 };
-                write_response_embed(&writer, &resp).await?;
+                write_response_embed(&writer, &resp, write_timeout).await?;
                 return Ok(());
             }
         };
@@ -128,7 +131,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code: EmbedErrorCode::BackendUnavailable,
                     message: "no embed-capable backend available".into(),
                 };
-                write_response_embed(&writer, &resp).await?;
+                write_response_embed(&writer, &resp, write_timeout).await?;
                 continue;
             }
         };
@@ -151,7 +154,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     usage,
                     backend: backend_name.clone(),
                 };
-                write_response_embed(&writer, &frame).await?;
+                write_response_embed(&writer, &frame, write_timeout).await?;
                 router.record_success(&backend_name);
                 info!(
                     target: "inferd_daemon::activity",
@@ -188,7 +191,7 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
                     code,
                     message,
                 };
-                write_response_embed(&writer, &frame).await?;
+                write_response_embed(&writer, &frame, write_timeout).await?;
             }
         }
     }
@@ -236,17 +239,37 @@ where
     }
 }
 
+/// Write one NDJSON response frame, bounded by `timeout`
+/// (THREAT_MODEL F-17).
+///
+/// Same rationale as `lifecycle_v2::write_response_v2`: the embed
+/// response is written while the request holds its admission permit, and
+/// embed shares that gate with generation — so an unbounded write here
+/// wedges generation slots too. The bound covers the lock acquisition as
+/// well, since a peer stalled inside `write_all` holds the writer mutex.
 async fn write_response_embed<W: AsyncWrite + Unpin>(
     writer: &Mutex<W>,
     resp: &EmbedResponse,
+    timeout: Option<std::time::Duration>,
 ) -> io::Result<()> {
     let mut buf = Vec::with_capacity(512);
     write_frame(&mut buf, resp)
         .map_err(|e| io::Error::other(format!("serialise embed response: {e}")))?;
-    let mut guard = writer.lock().await;
-    guard.write_all(&buf).await?;
-    guard.flush().await?;
-    Ok(())
+    let write = async {
+        let mut guard = writer.lock().await;
+        guard.write_all(&buf).await?;
+        guard.flush().await?;
+        Ok(())
+    };
+    match timeout {
+        None => write.await,
+        Some(d) => tokio::time::timeout(d, write).await.unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("peer did not accept a response frame within {d:?}"),
+            ))
+        }),
+    }
 }
 
 /// Serve an embed Unix domain socket listener.

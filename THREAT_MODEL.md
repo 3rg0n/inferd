@@ -352,6 +352,47 @@ working-directory inheritance).
 - v0.1 codebase has zero `Command::spawn` calls. Verify with
   `grep` before each release.
 
+### F-17. Admission-permit starvation via a non-reading peer
+
+**Description.** Response writes happen *downstream* of the
+admission gate, while the request's `OwnedSemaphorePermit` is
+alive. A local client that sends a valid request, gets
+admitted, and then simply stops reading its socket fills the
+kernel's send buffer; the daemon blocks inside `write_all` and
+never releases the permit. `active_permits + queue_depth` such
+connections (11 by default) exhaust the gate, and every other
+consumer on the machine gets `queue_full` forever. Costs the
+attacker almost nothing — no oversized frames, no malformed
+input, just a socket it declines to drain — and no other
+mechanism in the daemon breaks the stall, since the client
+never disconnects.
+
+Note this is *not* the read side: the BLOB reads happen before
+`try_admit()`, so a client stalled mid-upload holds no permit
+(its cost is one task plus the F-1-bounded attachment bytes).
+
+**Status.** mitigated.
+
+**Mitigation.** Every response write is bounded by
+`AcceptContext::write_timeout` (default
+`lifecycle::DEFAULT_WRITE_TIMEOUT_SECS` = 60s, operator-tunable
+via `--write-timeout-secs` / `INFERD_WRITE_TIMEOUT_SECS`).
+`lifecycle_v2::write_response_v2` and
+`lifecycle_embed::write_response_embed` wrap lock-acquire +
+`write_all` + `flush` in `tokio::time::timeout`; on expiry the
+frame is abandoned and the `io::ErrorKind::TimedOut` propagates,
+dropping the connection and releasing the permit. The bound
+covers the mutex acquisition deliberately — a peer wedged inside
+`write_all` holds the writer lock, so bounding only the write
+would move the stall one line up. Both surfaces are covered
+because they share one `Admission`: an unbounded embed write
+starves generation too.
+
+Verified by `tests/write_stall.rs` (UDS + named pipe): with the
+bound removed the victim client is refused `queue_full` on every
+one of ~184 attempts across a 20s budget; with it in place the
+victim is served in under a second.
+
 ### F-15. Signed releases + SBOM
 
 **Description.** Without signed release artefacts and an
