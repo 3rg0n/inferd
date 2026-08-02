@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
+- **Windows x86_64 CUDA — v0.6.1 install=work green (2026-08-02):**
+  zip sha256 `b3d57ddf…3ed938` verified against the release manifest →
+  the bundled `install.ps1` exercised the **upgrade-over-running** path
+  (stopped the live 0.6.0-rc.3 daemon before staging), flattened 16
+  `backends\*` DLLs → all three binaries report `0.6.1`, `ready` in 1 s,
+  `accelerator=cuda`, `device: CUDA0 vram=15.9 GiB`. Native gates 8/8 over
+  `\\.\pipe\inferd` and bridge gates 6/6 via `openai` SDK 2.45.0 against
+  the zip's own `inferd-http.exe`. Includes the new **G4b** (33
+  attachments → `invalid_request`, F-1) and **F-17** confirmed in the
+  activity NDJSON (`write_timeout=60s`).
+- **Linux x86_64 CUDA (WSL) — v0.6.1 install=work green (2026-08-02):**
+  tarball sha256 `5fe0b9fd…` verified → 26 `backends/*` libs flattened,
+  booted with the exact `packaging/systemd/inferd.service` ExecStart argv
+  → `ready` in 5–6 s on UDS, socket modes `0600`/`0660` as specified,
+  `accelerator=cuda`. Native gates 8/8, bridge gates 6/6, F-17 logged.
+  **G3 grammar now passes natively on Linux, closing the gap the 0.6.0
+  line recorded for this platform.**
 - **macOS arm64 Metal — v0.6.1 full G1–G6 tarball pass green
   (2026-08-02):** SHA256 verified. `inferd-daemon`/`inferdctl`/
   `inferd-http` all `0.6.1`. Installed via `install-launchagent.sh` →
@@ -26,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request). G5 bridge (chat non-stream/stream, embeddings float+base64).
   G6 bridge vision+grammar (exact OCR + schema-conforming JSON). All
   green, no regressions. See `docs/v0.6-validation.md`, issue #53.
+- **Windows arm64 un-parked:** the `aarch64-pc-windows-msvc` leg built and
+  published in the 0.6.1 release run (task #185 fixed by
+  `GGML_OPENMP=OFF`), so the release matrix is five platforms again. No WoA
+  hardware here, so that archive is built + signed only, not install=work.
+- **Not covered, stated explicitly:** Windows/Linux arm64 install=work (no
+  hardware), the ≥ 20 GiB → 12B auto-select branch, and **cosign signature
+  verification — skipped, cosign is not installed on the validating box**.
+  SHA-256 was verified for every archive that was installed.
 
 ## [0.6.1] - 2026-08-02
 
