@@ -9,10 +9,11 @@
 **Status: v0.6.1.** `inferd-proto` and `inferd-client` are on crates.io;
 the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
 HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
-arm64), macOS arm64, and Windows x86_64. (Windows arm64 is parked for the
-v0.6 line — see `docs/v0.6-validation.md`.) See `context.md` for the
-hand-off brief to first-time contributors and `docs/adr/` for the design
-decisions.
+arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms. Windows
+arm64 was parked at the v0.6.0 tag and ships again from v0.6.1; install=work
+is validated on Windows x86_64 CUDA, Linux x86_64 CUDA, and macOS arm64
+Metal (see `docs/v0.6-validation.md`). See `context.md` for the hand-off
+brief to first-time contributors and `docs/adr/` for the design decisions.
 
 inferd is a single host-wide Rust service that owns the hard parts of
 running a local LLM — loading the model, holding it warm, multiplexing
