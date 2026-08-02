@@ -1,0 +1,63 @@
+packaging/README.md
+  s_126aec4081f728::t_f8e89fb60f8625 79-81
+THREAT_MODEL.md
+  s_126aec4081f728::t_d4dcdd8aa27b6a 176-182
+  s_126aec4081f728::t_05d843b61389d5 13-16
+  s_126aec4081f728::t_a4999e8c983d3d 208-209,216-218,221-230
+  s_126aec4081f728::t_178dcc144848cf 191-193
+  s_126aec4081f728::t_5f4c5ffa3648ac 37,39-45,49-69
+  s_126aec4081f728::t_13fcfad4f5c050 6
+INTEGRATING.md
+  s_126aec4081f728::t_ef95d031ea8318 308
+  s_126aec4081f728::t_ef05d87fa95e14 203
+crates/inferd-proto/src/v2/mod.rs
+  s_126aec4081f728::t_4a0f5429daf95f 25-28
+CHANGELOG.md
+  s_126aec4081f728::t_0473cde82d0e67 10-74
+crates/inferd-proto/src/v2/attachment.rs
+  s_126aec4081f728::t_6cd75c3c9b3656 29-53
+  s_126aec4081f728::t_7146875fc28b77 54-62
+context.md
+  s_126aec4081f728::t_6dd8bd8b7ade99 82
+  s_126aec4081f728::t_51bff96bb48f1e 60
+  s_126aec4081f728::t_b7eb3d3b7dc348 56
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_e7cc79ec276cdf 836-838,843,848-854,970-977,989-995,997-1005,1034-1037
+CLAUDE.md
+  s_126aec4081f728::t_3fbba2c7f30b73 208
+  s_126aec4081f728::t_15af6269693d68 147
+  s_126aec4081f728::t_04ffab6484dba2 74-82
+  s_126aec4081f728::t_1ff047ebee226f 194-196
+  s_126aec4081f728::t_8f770bd49d68eb 139-146,148-150,161-193,197-207
+  s_126aec4081f728::t_daf8c3d3c87c57 116
+  s_126aec4081f728::t_320dea073cad51 11
+  s_126aec4081f728::t_93668ec9c09d90 112
+  s_126aec4081f728::t_07bd8d5529bcaa 66
+crates/inferd-daemon/tests/security.rs
+  s_126aec4081f728::t_76157e07e3e110 103-141
+  s_126aec4081f728::t_84033ef3c37d84 22-25
+docs/protocol-v2.md
+  s_126aec4081f728::t_30bdd6bbb5774b 306-316
+crates/inferd-proto/src/v2/request.rs
+  s_126aec4081f728::t_fae52421d413ba 9,243-255,473-532
+crates/inferd-daemon/src/lifecycle_v2.rs
+  s_126aec4081f728::t_0987310178f25b 31-32,412-420,424-441,444-449,465,468,613-692
+docs/ai.internals.explained.md
+  s_126aec4081f728::t_8034b68c9866cb 265-268
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "8b4f3436588325278cdcf6409944979a70932389",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
