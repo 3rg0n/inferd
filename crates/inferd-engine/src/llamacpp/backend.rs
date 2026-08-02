@@ -290,12 +290,6 @@ struct EmbedContext {
 struct BackendCapabilitiesV2 {
     vision: bool,
     audio: bool,
-    /// Audio sample rate the mmproj's encoder expects, in Hz.
-    /// Reported on the admin status surface in a future commit so
-    /// middleware can resample before sending. Currently
-    /// informational only.
-    #[allow(dead_code)]
-    audio_sample_rate: Option<u32>,
 }
 
 impl LlamaCpp {
@@ -367,7 +361,6 @@ impl LlamaCpp {
                 let caps = BackendCapabilitiesV2 {
                     vision: mtmd_ctx.supports_vision(),
                     audio: mtmd_ctx.supports_audio(),
-                    audio_sample_rate: mtmd_ctx.audio_sample_rate(),
                 };
                 (Some(mtmd_ctx), Some(caps))
             }
@@ -840,22 +833,25 @@ fn build_grammar_sampler_v2(
 /// SAFETY: `ctx` must have just decoded at least one token (logits for
 /// index -1 valid); `chain` and `grmr` must be live samplers built for
 /// this context's vocab; `n_vocab` must equal the model vocab size.
+/// `cur` is the caller-owned candidate buffer, reused across tokens
+/// (upstream's `common_sampler` keeps the same buffer alive for the same
+/// reason); it is refilled here and its prior contents are irrelevant.
 unsafe fn sample_with_grammar(
     ctx: *mut ffi::llama_context,
     chain: *mut ffi::llama_sampler,
     grmr: *mut ffi::llama_sampler,
+    cur: &mut Vec<ffi::llama_token_data>,
     n_vocab: usize,
 ) -> ffi::llama_token {
     // Logits for the most recent token (-1).
     let logits = unsafe { ffi::llama_get_logits_ith(ctx, -1) };
-    let mut cur: Vec<ffi::llama_token_data> = (0..n_vocab)
-        .map(|i| ffi::llama_token_data {
-            id: i as ffi::llama_token,
-            // SAFETY: logits points to at least n_vocab floats.
-            logit: unsafe { *logits.add(i) },
-            p: 0.0,
-        })
-        .collect();
+    cur.clear();
+    cur.extend((0..n_vocab).map(|i| ffi::llama_token_data {
+        id: i as ffi::llama_token,
+        // SAFETY: logits points to at least n_vocab floats.
+        logit: unsafe { *logits.add(i) },
+        p: 0.0,
+    }));
 
     let mut cur_p = ffi::llama_token_data_array {
         data: cur.as_mut_ptr(),
@@ -971,6 +967,14 @@ fn run_generation_v2(
     let grammar_sampler = build_grammar_sampler_v2(vocab, req)?;
     let _grammar_guard = grammar_sampler.map(|ptr| SamplerGuard { ptr });
     let n_vocab = unsafe { ffi::llama_vocab_n_tokens(vocab) } as usize;
+    // Candidate buffer for the grammar path, allocated once and reused for
+    // every token — it is vocab-sized (~262k × 12 B ≈ 3 MiB for Gemma 4),
+    // so allocating per token would churn gigabytes over a long completion.
+    // Empty (no allocation) when there is no grammar constraint.
+    let mut candidates: Vec<ffi::llama_token_data> = Vec::with_capacity(match grammar_sampler {
+        Some(_) => n_vocab,
+        None => 0,
+    });
 
     let mut completion_tokens: u32 = 0;
     let mut buf = [0u8; 256];
@@ -982,10 +986,23 @@ fn run_generation_v2(
         // Sample. With a grammar constraint we run the two-phase
         // grammar-first path (apply grammar to candidates → apply chain →
         // accept); otherwise the chain samples directly.
+        //
+        // The two paths differ in who accepts: `llama_sampler_sample`
+        // accepts into the chain itself (llama-sampler.cpp:869), whereas
+        // the grammar path only *applies* the chain, so we must accept
+        // explicitly. `chain_needs_accept` tracks that difference — a
+        // second accept on an already-accepted chain would double-advance
+        // any stateful member (penalties, dry, grammar).
         // SAFETY: FFI; sampler + ctx valid in scope.
-        let next: ffi::llama_token = match grammar_sampler {
-            Some(grmr) => unsafe { sample_with_grammar(ctx, sampler, grmr, n_vocab) },
-            None => unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) },
+        let (next, chain_needs_accept): (ffi::llama_token, bool) = match grammar_sampler {
+            Some(grmr) => (
+                unsafe { sample_with_grammar(ctx, sampler, grmr, &mut candidates, n_vocab) },
+                true,
+            ),
+            None => (
+                unsafe { ffi::llama_sampler_sample(sampler, ctx, -1) },
+                false,
+            ),
         };
 
         // SAFETY: FFI; vocab valid.
@@ -1014,8 +1031,10 @@ fn run_generation_v2(
             return Ok(());
         }
 
-        // SAFETY: FFI; sampler valid.
-        unsafe { ffi::llama_sampler_accept(sampler, next) };
+        if chain_needs_accept {
+            // SAFETY: FFI; sampler valid.
+            unsafe { ffi::llama_sampler_accept(sampler, next) };
+        }
         // Advance the grammar state with the accepted token, if any.
         if let Some(grmr) = grammar_sampler {
             // SAFETY: FFI; grammar sampler valid for the loop's lifetime.

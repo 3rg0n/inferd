@@ -76,5 +76,6 @@ the macOS LaunchAgent.
 The activity log lives at the platform-default path
 (`~/.inferd/logs/inferd.ndjson` or wherever `INFERD_LOG_DIR` points).
 Tail it during initial bring-up to confirm the daemon binds the
-expected listener and reports `connection_accepted` events for each
-client connect.
+expected listener and reports a per-surface accept event for each
+client connect — `v2_connection_accepted` on the generation socket,
+`embed_connection_accepted` on the embeddings socket.

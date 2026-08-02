@@ -97,6 +97,21 @@ pub struct Cli {
     #[arg(long, default_value_t = 30, env = "INFERD_READY_TIMEOUT_SECS")]
     pub ready_timeout_secs: u64,
 
+    /// Seconds a single response write may block before the daemon
+    /// abandons the frame and drops the connection (THREAT_MODEL F-17).
+    ///
+    /// Response writes happen while the request holds its admission
+    /// permit, so a peer that is admitted and then stops reading its
+    /// socket would otherwise occupy a generation slot forever. Raise
+    /// this only if a legitimate consumer is slower than the default;
+    /// `0` disables the bound and re-opens the wedge.
+    #[arg(
+        long,
+        default_value_t = crate::lifecycle::DEFAULT_WRITE_TIMEOUT_SECS,
+        env = "INFERD_WRITE_TIMEOUT_SECS"
+    )]
+    pub write_timeout_secs: u64,
+
     /// Path to the GGUF model file. Required when `--backend llamacpp`.
     #[arg(long, env = "INFERD_MODEL_PATH")]
     pub model_path: Option<PathBuf>,

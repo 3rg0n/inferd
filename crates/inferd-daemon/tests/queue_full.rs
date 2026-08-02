@@ -77,6 +77,7 @@ async fn boot_admission_capped_daemon() -> (
     let admission = Admission::new(1, 1);
     let ctx = AcceptContext {
         admission: Some(admission),
+        ..Default::default()
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -183,6 +184,7 @@ async fn queue_full_frame_includes_request_id() {
     let listener = bind_uds(&socket_path, None).await.expect("bind uds");
     let ctx = AcceptContext {
         admission: Some(Admission::new(1, 0)),
+        ..Default::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {

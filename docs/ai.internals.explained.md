@@ -262,9 +262,10 @@ when single-active-generation gets saturated.
 
 - HTTP with OpenAI-compatible JSON endpoints (the default for most
   serving stacks)
-- length-prefixed, type-tagged frames over a Unix domain socket,
-  Windows named pipe, or loopback TCP — this is inferd's choice for
-  generation (ADR 0021); embeddings use NDJSON (ADR 0017)
+- length-prefixed, type-tagged frames over a Unix domain socket or
+  Windows named pipe — this is inferd's choice for generation
+  (ADR 0021); embeddings use NDJSON (ADR 0017). IPC only: the daemon
+  binds no network listener (ADR 0022)
 - gRPC for typed streaming
 
 **Why you need it**: Without it, clients can't ask for inferences.

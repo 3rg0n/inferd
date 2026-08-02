@@ -213,8 +213,23 @@ async fn main() -> anyhow::Result<()> {
         "admission gate configured"
     );
 
+    // 0 disables the bound (operator escape hatch); anything else is a
+    // hard ceiling on one response write (THREAT_MODEL F-17).
+    let write_timeout = (cli.write_timeout_secs > 0).then(|| {
+        let d = Duration::from_secs(cli.write_timeout_secs);
+        info!(write_timeout = ?d, "response write timeout configured");
+        d
+    });
+    if write_timeout.is_none() {
+        warn!(
+            "response write timeout disabled (--write-timeout-secs 0): a peer that stops \
+             reading can hold an admission slot indefinitely"
+        );
+    }
+
     let accept_ctx = AcceptContext {
         admission: Some(admission),
+        write_timeout,
     };
 
     // (v0.4 / ADR 0021) There is no separate v2 listener anymore — the
