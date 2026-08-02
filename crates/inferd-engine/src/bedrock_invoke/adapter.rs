@@ -285,6 +285,7 @@ impl Backend for BedrockInvoke {
             // module-level docs.
             vision: false,
             audio: false,
+            audio_sample_rate: None,
             video: false,
             thinking: false,
             embed: false,

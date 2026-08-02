@@ -56,6 +56,18 @@ pub enum StatusEvent {
         vision: bool,
         /// `true` if the backend can ingest audio attachments.
         audio: bool,
+        /// Sample rate in Hz that the backend's audio encoder requires
+        /// for `Attachment::Audio` payloads. Omitted when the backend
+        /// ingests no audio or reports no rate.
+        ///
+        /// Consumers must send PCM at exactly this rate: the daemon does
+        /// not resample (ADR 0016 — the consumer decodes, so it owns rate
+        /// conversion), and a mismatched rate is rejected rather than
+        /// mis-fed to the encoder. This field is what makes the required
+        /// rate discoverable instead of guesswork. Backwards-additive:
+        /// older subscribers ignore it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio_sample_rate: Option<u32>,
         /// `true` if the backend natively supports tool-use.
         tools: bool,
         /// `true` if the backend separates `<|think|>` reasoning
@@ -196,6 +208,49 @@ mod tests {
         assert_eq!(s["phase"], "checking_local");
         // Path serialises platform-natively; on Unix this is "/tmp/x.gguf".
         assert!(s["path"].is_string());
+    }
+
+    /// Build a `Capabilities` event, varying only the audio fields.
+    fn caps(audio: bool, audio_sample_rate: Option<u32>) -> StatusEvent {
+        StatusEvent::Capabilities {
+            backend: "llamacpp".into(),
+            wire_version: inferd_proto::v2::WIRE_VERSION,
+            v2: true,
+            vision: true,
+            audio,
+            audio_sample_rate,
+            tools: true,
+            thinking: true,
+            embed: false,
+            accelerator: "cpu".into(),
+            gpu_layers: 0,
+            device_name: None,
+            vram_total_bytes: None,
+        }
+    }
+
+    #[test]
+    fn capabilities_publishes_required_audio_sample_rate() {
+        // The rate has to reach the admin wire, not just live in
+        // BackendCapabilities: it is the only way a consumer can learn
+        // what rate to resample to before sending PCM, since the daemon
+        // rejects a mismatch rather than resampling (ADR 0016).
+        let s = serde_json::to_value(caps(true, Some(16_000))).unwrap();
+        assert_eq!(s["status"], "capabilities");
+        assert_eq!(s["audio"], true);
+        assert_eq!(s["audio_sample_rate"], 16_000);
+    }
+
+    #[test]
+    fn capabilities_omits_audio_sample_rate_when_unknown() {
+        // A non-audio backend must not emit a null rate — subscribers
+        // that predate the field see the frame unchanged.
+        let s = serde_json::to_value(caps(false, None)).unwrap();
+        assert_eq!(s["audio"], false);
+        assert!(
+            s.get("audio_sample_rate").is_none(),
+            "audio_sample_rate must be absent, not null: {s}"
+        );
     }
 
     #[test]

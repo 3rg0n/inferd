@@ -23,6 +23,22 @@
 //!   - `Audio`: `sample_rate` (Hz; the daemon doesn't resample).
 //!   - `Video`: reserved; the actual shape is TBD when a video-
 //!     capable adapter lands.
+//!
+//! ## Audio sample rate is a hard contract, not a hint
+//!
+//! An audio encoder is trained at one rate and libmtmd's entry point
+//! takes no rate argument — it consumes the samples at whatever rate the
+//! model expects. So PCM at the wrong rate is not a detectable error
+//! down in the graph: the audio simply plays back at the wrong speed and
+//! the model returns a plausible wrong answer.
+//!
+//! Since the daemon doesn't resample (that follows from ADR 0016 — the
+//! consumer decodes, so it owns rate conversion), `sample_rate` must
+//! equal the rate the active backend requires. The backend advertises it
+//! as `audio_sample_rate` on `BackendCapabilities` and on the admin
+//! `capabilities` frame, and rejects a mismatched attachment with an
+//! error naming both rates. Read the advertised rate and resample to it
+//! before sending; do not assume 16 kHz.
 
 use serde::{Deserialize, Serialize};
 
@@ -116,10 +132,13 @@ pub enum Attachment {
     Audio {
         /// Caller-chosen identifier; unique within the request.
         id: String,
-        /// Sample rate in Hz (e.g. 16000 for Whisper-class encoders;
-        /// Gemma 4 audio uses its own rate which the daemon learns at
-        /// adapter init time and reports via
-        /// `BackendCapabilities`).
+        /// Sample rate in Hz. Must equal the rate the active backend
+        /// advertises as `audio_sample_rate` (`BackendCapabilities`, and
+        /// the admin `capabilities` frame) — the daemon does not
+        /// resample, and rejects a mismatch rather than mis-feeding the
+        /// encoder, which would otherwise yield a silently wrong answer.
+        /// Gemma-4-class encoders use 16000, but read the advertised
+        /// value rather than hardcoding it.
         sample_rate: u32,
         /// Raw little-endian float32 PCM bytes. Carried in a BLOB frame.
         #[serde(skip)]

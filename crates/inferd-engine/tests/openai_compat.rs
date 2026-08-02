@@ -61,6 +61,7 @@ async fn capabilities_advertise_v2_and_tools_only() {
             tools: true,
             vision: false,
             audio: false,
+            audio_sample_rate: None,
             video: false,
             thinking: false,
             embed: false,

@@ -150,6 +150,21 @@ pub struct BackendCapabilities {
     pub vision: bool,
     /// `true` if the backend can ingest audio attachments.
     pub audio: bool,
+    /// Sample rate, in Hz, that this backend's audio encoder requires
+    /// for `Attachment::Audio` payloads. `None` when the backend
+    /// ingests no audio (`audio: false`) or cannot report a rate.
+    ///
+    /// This exists because the daemon does **not** resample (ADR 0016:
+    /// the consumer decodes, and by extension owns rate conversion).
+    /// Without advertising the rate there is nothing a consumer can
+    /// introspect — sending 44.1 kHz PCM to a 16 kHz encoder is not an
+    /// error the engine can detect from the bytes, so it produces
+    /// silently wrong output rather than a failure. Publishing the
+    /// required rate here, and rejecting a mismatched
+    /// `Attachment::sample_rate`, turns that into a loud, fixable
+    /// error. Backwards-additive: `None` for every backend that
+    /// doesn't do audio.
+    pub audio_sample_rate: Option<u32>,
     /// `true` if the backend can ingest video attachments. (Reserved.)
     pub video: bool,
     /// `true` if the backend natively supports tool-use round-tripping

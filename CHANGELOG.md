@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Backends advertise the audio sample rate they require.**
+  `BackendCapabilities` gained `audio_sample_rate: Option<u32>`, published
+  on the admin `capabilities` frame as `audio_sample_rate` (omitted when
+  the backend takes no audio). The llamacpp adapter reads it from the
+  loaded mmproj once at init. Backwards-additive on the admin wire; the
+  generation wire is unchanged.
+
+### Fixed
+
+- **An audio attachment at the wrong sample rate is now rejected instead
+  of silently mis-decoded.** `Attachment::Audio::sample_rate` was declared
+  on the wire and read by nothing, and `mtmd_get_audio_sample_rate` was
+  wrapped with zero call sites. Because libmtmd's audio entry point takes
+  no rate argument, PCM at the wrong rate is not a detectable error — 44.1
+  kHz fed to a 16 kHz encoder is time-scaled ≈2.75× and the model returns a
+  plausible wrong answer. A mismatch now fails with `invalid_request`
+  naming both the declared and required rates. The daemon still does not
+  resample (ADR 0016 — the consumer decodes, so it owns rate conversion);
+  consumers read the advertised rate and convert before sending.
+
 ### Validation
 
 - **Windows x86_64 CUDA — v0.6.1 install=work green (2026-08-02):**

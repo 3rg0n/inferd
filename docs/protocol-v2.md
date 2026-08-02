@@ -253,7 +253,7 @@ daemon links no image/audio codec (ADR 0016).
 | `kind`  | Fields                                          | Bytes in the BLOB frame |
 |---------|-------------------------------------------------|-------------------------|
 | `image` | `id`: string, `width`: uint32, `height`: uint32 | `width*height*3` interleaved RGB octets (no alpha) |
-| `audio` | `id`: string, `sample_rate`: uint32 (Hz)        | little-endian float32 PCM samples |
+| `audio` | `id`: string, `sample_rate`: uint32 (Hz) — MUST equal the backend's advertised `audio_sample_rate` | little-endian float32 PCM samples |
 | `video` | `id`: string                                    | reserved; format TBD |
 
 `id` MUST be unique within a request.
@@ -281,6 +281,28 @@ small text survives, at the cost of more image tokens and slower encode;
 unchanged behaviour. A consumer that needs higher OCR fidelity than the
 deployment's configured budget should pre-segment or upscale the region
 of interest before sending, or ask the operator to raise the budget.
+
+#### Audio `sample_rate` MUST match the backend's advertised rate
+
+libmtmd's audio entry point takes no rate argument — it consumes the
+samples at whatever rate the loaded encoder was trained for. PCM at any
+other rate is therefore **not a detectable error**: the audio is
+effectively time-scaled and the model answers plausibly but wrongly.
+
+So `sample_rate` is a contract, not a hint. The daemon does not resample
+(the consumer decodes, so it owns rate conversion — ADR 0016), and it
+**rejects** an audio attachment whose `sample_rate` differs from the
+active backend's required rate with `invalid_request`, naming both rates.
+
+Discover the required rate from the admin socket's `capabilities` frame:
+
+```json
+{"status":"capabilities","backend":"llamacpp","audio":true,"audio_sample_rate":16000, ...}
+```
+
+`audio_sample_rate` is omitted when the backend ingests no audio or
+reports no rate; when it is absent, no rate check is applied. Consumers
+MUST resample to the advertised value rather than hardcoding 16000.
 
 ### 3.6 `Tool`
 

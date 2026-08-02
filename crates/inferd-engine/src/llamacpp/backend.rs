@@ -290,6 +290,12 @@ struct EmbedContext {
 struct BackendCapabilitiesV2 {
     vision: bool,
     audio: bool,
+    /// Sample rate the mmproj's audio encoder expects, in Hz. Read once
+    /// at mtmd init (the value is fixed for the loaded mmproj) and
+    /// cached so both `capabilities()` and the per-attachment rate check
+    /// can read it without an FFI call per request. `None` on a
+    /// vision-only mmproj.
+    audio_sample_rate: Option<u32>,
 }
 
 impl LlamaCpp {
@@ -358,9 +364,17 @@ impl LlamaCpp {
                     ..MtmdConfig::default()
                 };
                 let mtmd_ctx = unsafe { Mtmd::new(mmproj, model.as_ptr(), mtmd_config)? };
+                let audio = mtmd_ctx.supports_audio();
                 let caps = BackendCapabilitiesV2 {
                     vision: mtmd_ctx.supports_vision(),
-                    audio: mtmd_ctx.supports_audio(),
+                    audio,
+                    // Only meaningful when the mmproj actually has an
+                    // audio projector; mtmd reports 0 (→ None) otherwise.
+                    audio_sample_rate: if audio {
+                        mtmd_ctx.audio_sample_rate()
+                    } else {
+                        None
+                    },
                 };
                 (Some(mtmd_ctx), Some(caps))
             }
@@ -551,6 +565,7 @@ impl Backend for LlamaCpp {
             v2: true,
             vision: snap.map(|c| c.vision).unwrap_or(false),
             audio: snap.map(|c| c.audio).unwrap_or(false),
+            audio_sample_rate: snap.and_then(|c| c.audio_sample_rate),
             video: false,
             tools: true,
             thinking: true,
@@ -570,11 +585,19 @@ impl Backend for LlamaCpp {
             .render(&req)
             .map_err(|e| GenerateError::InvalidRequest(format!("render: {e}")))?;
 
+        // Rate the loaded mmproj's audio encoder requires, for the
+        // per-attachment check in `build_bitmap`. Read once here rather
+        // than per attachment so we take the state lock a single time.
+        let expected_audio_rate = {
+            let guard = self.state.lock().expect("poisoned llamacpp state mutex");
+            guard.caps_v2.and_then(|c| c.audio_sample_rate)
+        };
+
         // Decode each referenced attachment's bytes into Bitmaps.
         let bitmaps: Vec<Bitmap> = rendered
             .attachments
             .iter()
-            .map(|att| build_bitmap(att))
+            .map(|att| build_bitmap(att, expected_audio_rate))
             .collect::<Result<_, _>>()
             .map_err(|e| GenerateError::InvalidRequest(format!("attachment: {e}")))?;
 
@@ -716,12 +739,51 @@ fn token_to_piece(
     &buf[..n]
 }
 
+/// Reject an audio attachment whose declared sample rate isn't the one
+/// the model's audio encoder requires.
+///
+/// mtmd's audio entry point takes a bare `&[f32]` with no rate argument,
+/// so the encoder reads whatever it is given at its *own* rate. 44.1 kHz
+/// PCM fed to a 16 kHz encoder is therefore not detectable from the
+/// samples — it just decodes ~2.75× too fast and yields a
+/// plausible-looking wrong answer. The daemon does not resample (that is
+/// the consumer's job under ADR 0016), so a loud rejection naming both
+/// rates is the only honest option.
+///
+/// Split out of [`build_bitmap`] so it is testable without an mmproj on
+/// disk — `Bitmap` construction needs live FFI, this decision doesn't.
+///
+/// `expected` of `None` means the loaded mmproj reported no rate, so
+/// there is nothing to compare against and the attachment passes: an
+/// invented constraint would reject valid requests.
+fn check_audio_sample_rate(
+    id: &str,
+    declared: u32,
+    expected: Option<u32>,
+) -> Result<(), LlamaCppError> {
+    match expected {
+        Some(expected) if declared != expected => Err(LlamaCppError::Render(format!(
+            "audio attachment {id:?}: sample_rate {declared} Hz does not match the model's \
+             audio encoder, which requires {expected} Hz; resample before sending (the \
+             daemon does not resample)"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Turn an `Attachment` into an mtmd `Bitmap`. As of ADR 0021 the
 /// attachment's `bytes` are the **raw** decoded payload (interleaved RGB
 /// for images, little-endian f32 PCM for audio) delivered out-of-band in
 /// a BLOB frame — no base64. Per ADR 0016 the daemon links no
 /// image/audio codec; the consumer pre-decodes.
-fn build_bitmap(att: &Attachment) -> Result<Bitmap, LlamaCppError> {
+///
+/// `expected_audio_rate` is the loaded mmproj's required sample rate (see
+/// [`BackendCapabilitiesV2::audio_sample_rate`]); audio attachments are
+/// checked against it by [`check_audio_sample_rate`].
+fn build_bitmap(
+    att: &Attachment,
+    expected_audio_rate: Option<u32>,
+) -> Result<Bitmap, LlamaCppError> {
     match att {
         Attachment::Image {
             width,
@@ -732,7 +794,13 @@ fn build_bitmap(att: &Attachment) -> Result<Bitmap, LlamaCppError> {
             let bm = Bitmap::from_image_rgb(*width, *height, bytes)?;
             Ok(bm)
         }
-        Attachment::Audio { id, bytes, .. } => {
+        Attachment::Audio {
+            id,
+            bytes,
+            sample_rate,
+            ..
+        } => {
+            check_audio_sample_rate(id, *sample_rate, expected_audio_rate)?;
             // Reinterpret raw bytes as f32 LE samples.
             if bytes.len() % 4 != 0 {
                 return Err(LlamaCppError::Render(format!(
@@ -1275,5 +1343,40 @@ fn l2_normalise(v: &mut [f32]) {
         for x in v.iter_mut() {
             *x /= norm;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The daemon can't resample and mtmd's audio entry point takes a
+    // bare `&[f32]` with no rate argument, so a mismatched rate is
+    // undetectable downstream: the encoder just reads the samples at
+    // its own rate and returns a plausible, wrong answer. These pin
+    // the rejection so that failure mode stays impossible.
+
+    #[test]
+    fn audio_rate_matching_expected_is_accepted() {
+        assert!(check_audio_sample_rate("a1", 16_000, Some(16_000)).is_ok());
+    }
+
+    #[test]
+    fn audio_rate_mismatch_is_rejected_naming_both_rates() {
+        let err = check_audio_sample_rate("a1", 44_100, Some(16_000))
+            .expect_err("44.1 kHz PCM must not reach a 16 kHz encoder");
+        let msg = err.to_string();
+        // The message has to carry both numbers: a consumer that only
+        // learns "bad rate" can't tell what to resample *to*.
+        assert!(msg.contains("44100"), "must name the declared rate: {msg}");
+        assert!(msg.contains("16000"), "must name the required rate: {msg}");
+        assert!(msg.contains("a1"), "must name the attachment: {msg}");
+    }
+
+    #[test]
+    fn audio_rate_unknown_expectation_passes_through() {
+        // An audio-capable mmproj that reports no rate gives us nothing
+        // to compare against; rejecting here would break valid requests.
+        assert!(check_audio_sample_rate("a1", 44_100, None).is_ok());
     }
 }

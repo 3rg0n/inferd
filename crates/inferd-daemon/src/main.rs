@@ -157,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
             v2: caps.v2,
             vision: caps.vision,
             audio: caps.audio,
+            audio_sample_rate: caps.audio_sample_rate,
             tools: caps.tools,
             thinking: caps.thinking,
             embed: caps.embed,

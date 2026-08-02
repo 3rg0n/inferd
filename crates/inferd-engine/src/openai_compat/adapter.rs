@@ -160,6 +160,7 @@ impl Backend for OpenAiCompat {
             // openai_compat/mod.rs for the rationale.
             vision: false,
             audio: false,
+            audio_sample_rate: None,
             video: false,
             thinking: false,
             // /v1/embeddings support for openai-compat is deferred
