@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,5 +234,74 @@ func TestCapabilitiesFrameDecode(t *testing.T) {
 	if ready.IsCapabilities() || ready.SupportsVision() {
 		t.Errorf("ready frame misclassified: caps=%v vision=%v",
 			ready.IsCapabilities(), ready.SupportsVision())
+	}
+}
+
+// TestCapabilitiesAudioSampleRate proves a consumer can read the sample
+// rate audio attachments must use. Without this the daemon advertises a
+// hard contract no Go caller can see, and a wrong rate is silently
+// time-scaled by the encoder into a plausible wrong answer (#198/#199).
+// The live frame from a Gemma 4 E4B mmproj is reproduced verbatim.
+func TestCapabilitiesAudioSampleRate(t *testing.T) {
+	line := []byte(`{"accelerator":"cpu","audio":true,"audio_sample_rate":16000,` +
+		`"backend":"gemma-4-e4b","embed":false,"gpu_layers":0,"id":"admin",` +
+		`"status":"capabilities","thinking":true,"tools":true,"type":"status",` +
+		`"v2":true,"vision":true,"wire_version":1}`)
+	var ev inferd.AdminEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		t.Fatalf("decode capabilities frame: %v", err)
+	}
+	if !ev.SupportsAudio() {
+		t.Errorf("SupportsAudio() = false, want true")
+	}
+	rate, ok := ev.RequiredAudioSampleRate()
+	if !ok || rate != 16000 {
+		t.Errorf("RequiredAudioSampleRate() = (%d, %v), want (16000, true)", rate, ok)
+	}
+
+	// An audio-capable backend that advertises no rate must report
+	// absence, not a zero rate a caller would send verbatim.
+	var noRate inferd.AdminEvent
+	if err := json.Unmarshal([]byte(`{"id":"admin","type":"status",`+
+		`"status":"capabilities","backend":"b","audio":true}`), &noRate); err != nil {
+		t.Fatalf("decode rate-less frame: %v", err)
+	}
+	if _, ok := noRate.RequiredAudioSampleRate(); ok {
+		t.Errorf("RequiredAudioSampleRate() reported a rate that was never advertised")
+	}
+
+	// An embed-only backend advertises audio:false and no rate.
+	var embed inferd.AdminEvent
+	if err := json.Unmarshal([]byte(`{"id":"admin","type":"status",`+
+		`"status":"capabilities","backend":"embeddinggemma-300m","audio":false,`+
+		`"embed":true}`), &embed); err != nil {
+		t.Fatalf("decode embed frame: %v", err)
+	}
+	if embed.SupportsAudio() {
+		t.Errorf("SupportsAudio() = true for an embed-only backend")
+	}
+}
+
+// TestAudioAttachmentConstructor proves AudioAttachment produces the wire
+// shape the daemon expects: kind=audio, the rate carried in JSON, and the
+// f32 PCM bytes excluded from the JSON (they ride in a BLOB frame per
+// ADR 0021).
+func TestAudioAttachmentConstructor(t *testing.T) {
+	pcm := []byte{0x00, 0x00, 0x80, 0x3f} // 1.0f32 LE
+	att := inferd.AudioAttachment("a1", 16000, pcm)
+	if att.Kind != inferd.AttachmentAudio || att.ID != "a1" || att.SampleRate != 16000 {
+		t.Errorf("attachment fields unexpected: %+v", att)
+	}
+	if len(att.Bytes) != len(pcm) {
+		t.Errorf("bytes not carried: %d", len(att.Bytes))
+	}
+	body, err := json.Marshal(att)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := string(body); !strings.Contains(got, `"sample_rate":16000`) {
+		t.Errorf("sample_rate missing from JSON: %s", got)
+	} else if strings.Contains(got, "Bytes") || strings.Contains(got, `"bytes"`) {
+		t.Errorf("raw bytes leaked into the request JSON: %s", got)
 	}
 }

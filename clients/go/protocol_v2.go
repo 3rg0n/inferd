@@ -131,6 +131,26 @@ func ImageAttachment(id string, width, height uint32, rgb []byte) AttachmentV2 {
 	}
 }
 
+// AudioAttachment builds an audio attachment from raw little-endian
+// float32 PCM samples (mono, 4 octets per sample). The caller decodes the
+// source audio (WAV/MP3/…) to f32 PCM before calling this — the daemon
+// links no codec (ADR 0016).
+//
+// sampleRate MUST equal the rate the backend advertises as
+// `audio_sample_rate` on its capabilities frame (see
+// AdminEvent.RequiredAudioSampleRate). The daemon rejects any other rate
+// with an invalid_request error naming both rates; it does not resample.
+// Sending 44.1 kHz audio to a 16 kHz encoder would otherwise time-scale it
+// ~2.75x and produce a confidently wrong answer.
+func AudioAttachment(id string, sampleRate uint32, pcmF32LE []byte) AttachmentV2 {
+	return AttachmentV2{
+		Kind:       AttachmentAudio,
+		ID:         id,
+		SampleRate: sampleRate,
+		Bytes:      pcmF32LE,
+	}
+}
+
 // BlobDescriptor is the JSON control frame that precedes each
 // attachment BLOB frame (ADR 0021), correlating the raw bytes to an
 // attachment by ID.

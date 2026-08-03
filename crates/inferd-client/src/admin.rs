@@ -78,6 +78,15 @@ pub struct AdminEvent {
     /// `true` if the backend can ingest audio (capabilities phase).
     #[serde(default)]
     pub audio: Option<bool>,
+    /// Sample rate in Hz that audio attachments **must** use, when
+    /// `audio` is `true` (capabilities phase). The audio encoder has no
+    /// rate parameter — it consumes samples at the rate it was trained
+    /// for — so the daemon rejects any other rate rather than silently
+    /// time-scaling the audio. Resample to this value before sending;
+    /// the daemon does not resample. `None` when the backend advertises
+    /// audio but not a required rate.
+    #[serde(default)]
+    pub audio_sample_rate: Option<u32>,
     /// `true` if the backend natively supports tool-use
     /// (capabilities phase).
     #[serde(default)]
@@ -220,6 +229,34 @@ mod tests {
         let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
         assert_eq!(ev.downloaded_bytes, Some(1024));
         assert_eq!(ev.total_bytes, None);
+    }
+
+    /// A consumer must be able to read the sample rate audio attachments
+    /// have to use. The daemon rejects a mismatch rather than resampling
+    /// (#198), so a client that cannot see the advertised rate cannot
+    /// honour the contract. Frame reproduced verbatim from a live Gemma 4
+    /// E4B + F16 mmproj daemon (#199).
+    #[test]
+    fn decodes_advertised_audio_sample_rate() {
+        let raw = br#"{"accelerator":"cpu","audio":true,"audio_sample_rate":16000,
+            "backend":"gemma-4-e4b","embed":false,"gpu_layers":0,"id":"admin",
+            "status":"capabilities","thinking":true,"tools":true,"type":"status",
+            "v2":true,"vision":true,"wire_version":1}"#;
+        let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
+        assert_eq!(ev.status, "capabilities");
+        assert_eq!(ev.audio, Some(true));
+        assert_eq!(ev.audio_sample_rate, Some(16_000));
+    }
+
+    /// An audio-capable backend advertising no rate must decode to `None`,
+    /// not a zero a caller would send verbatim.
+    #[test]
+    fn audio_without_advertised_rate_decodes_to_none() {
+        let raw =
+            br#"{"id":"admin","type":"status","status":"capabilities","backend":"b","audio":true}"#;
+        let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
+        assert_eq!(ev.audio, Some(true));
+        assert_eq!(ev.audio_sample_rate, None);
     }
 
     #[test]

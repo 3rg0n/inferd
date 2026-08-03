@@ -64,6 +64,14 @@ type AdminEvent struct {
 	Thinking *bool  `json:"thinking,omitempty"`
 	Embed    *bool  `json:"embed,omitempty"`
 
+	// AudioSampleRate is the rate in Hz that audio attachments MUST use
+	// when Audio is true. The model's audio encoder takes no rate
+	// parameter — it consumes samples at the rate it was trained for —
+	// so the daemon rejects any other rate rather than silently
+	// time-scaling the audio. Resample to this value before sending; the
+	// daemon does not resample.
+	AudioSampleRate *uint32 `json:"audio_sample_rate,omitempty"`
+
 	// Extra holds any keys we don't recognise. Per the spec, clients
 	// MUST ignore unknown keys without erroring; surfacing them here
 	// lets diagnostic-curious consumers display them anyway.
@@ -82,6 +90,24 @@ func (e AdminEvent) IsCapabilities() bool {
 // is absent.
 func (e AdminEvent) SupportsVision() bool {
 	return e.Vision != nil && *e.Vision
+}
+
+// SupportsAudio reports whether this capabilities frame advertises audio
+// support. False for non-capabilities frames or when the field is absent.
+func (e AdminEvent) SupportsAudio() bool {
+	return e.Audio != nil && *e.Audio
+}
+
+// RequiredAudioSampleRate returns the sample rate in Hz that audio
+// attachments must use, and whether the frame advertised one. Send audio
+// only at this rate: the daemon rejects a mismatch rather than resampling
+// (a rate the encoder wasn't trained for time-scales the audio and yields
+// a plausible wrong answer).
+func (e AdminEvent) RequiredAudioSampleRate() (uint32, bool) {
+	if e.AudioSampleRate == nil {
+		return 0, false
+	}
+	return *e.AudioSampleRate, true
 }
 
 // DialAdmin opens a read-only connection to the inferd admin socket

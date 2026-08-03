@@ -121,6 +121,45 @@ for f := range stream {
 }
 ```
 
+### Audio: the sample rate is a hard contract
+
+Audio works the same way — `AudioBlock` plus `AudioAttachment` carrying
+little-endian float32 PCM (mono, 4 bytes per sample), decoded by you
+per ADR 0016 — with one extra rule that has no analogue on the image
+path.
+
+**The sample rate you declare must equal the rate the backend
+advertises.** The model's audio encoder takes no rate parameter: it
+consumes samples at whatever rate it was trained for. Handing a 16 kHz
+encoder 44.1 kHz audio time-scales it ~2.75x and yields a confident,
+fluent, *wrong* answer — nothing in the bytes reveals the error. So the
+daemon rejects a mismatch with `invalid_request` naming both rates
+rather than resampling. Read the required rate off the capabilities
+frame; don't hardcode it.
+
+```go
+rate, ok := ev.RequiredAudioSampleRate()   // ev.SupportsAudio() first
+if !ok { /* backend advertises audio but no rate; don't guess */ }
+
+pcm := decodeToF32LE(audioBytes, rate)     // your codec + resampler
+stream, _ := c.GenerateV2(ctx, inferd.RequestV2{
+    ID: "aq-1",
+    Messages: []inferd.MessageV2{{
+        Role: inferd.RoleUser,
+        Content: []inferd.ContentBlock{
+            inferd.AudioBlock("clip"),
+            inferd.TextBlock("Transcribe this audio verbatim."),
+        },
+    }},
+    Attachments: []inferd.AttachmentV2{
+        inferd.AudioAttachment("clip", rate, pcm),
+    },
+})
+```
+
+Gemma-4-class encoders advertise 16000, but read the value — a future
+model will not.
+
 Streaming text arrives as `frame` responses carrying a `text` block
 delta; `thinking` blocks carry the reasoning trace separately; a
 complete `tool_use` block arrives whole when the model calls a tool

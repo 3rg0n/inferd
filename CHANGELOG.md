@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the backend takes no audio). The llamacpp adapter reads it from the
   loaded mmproj once at init. Backwards-additive on the admin wire; the
   generation wire is unchanged.
+- **Both client libraries can now read the required audio sample rate.**
+  The daemon advertised `audio_sample_rate` but neither
+  `inferd_client::AdminEvent` nor the Go `AdminEvent` carried the field, so
+  no supported consumer could see the contract it is required to honour.
+  Added to both, plus Go's `SupportsAudio()` / `RequiredAudioSampleRate()`
+  accessors (mirroring `SupportsVision()`) and an `AudioAttachment(id,
+  sampleRate, pcmF32LE)` constructor — the Go client had one for images but
+  not audio, so callers hand-built the struct and could omit `SampleRate`
+  entirely. Found by running the audio path live rather than by review.
 
 ### Fixed
 
@@ -28,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming both the declared and required rates. The daemon still does not
   resample (ADR 0016 — the consumer decodes, so it owns rate conversion);
   consumers read the advertised rate and convert before sending.
+  **Now proven live** (task #199, `docs/v0.6-validation.md`): the shipped
+  Gemma 4 E4B mmproj advertises 16000 Hz; 7 s of 16 kHz speech transcribed
+  **5/5 ground-truth phrases verbatim**; the same PCM declared at 44100 Hz
+  rejected naming both rates. Audio had never run against a real model on
+  any platform before this.
 
 ### Removed
 
