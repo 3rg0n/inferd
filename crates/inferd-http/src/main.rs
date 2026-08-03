@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
+mod audio_decode;
 mod config;
 mod error;
 mod handlers;
@@ -38,6 +39,7 @@ pub(crate) struct AppState {
 pub(crate) struct AppStateInner {
     pub gen_addr: config::Endpoint,
     pub embed_addr: config::Endpoint,
+    pub admin_addr: config::Endpoint,
     pub model_name: String,
     pub startup_timeout: std::time::Duration,
 }
@@ -48,6 +50,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 gen_addr: cfg.gen_addr.clone(),
                 embed_addr: cfg.embed_addr.clone(),
+                admin_addr: cfg.admin_addr.clone(),
                 model_name: cfg.model_name.clone(),
                 startup_timeout: cfg.startup_timeout,
             }),
@@ -58,6 +61,9 @@ impl AppState {
     }
     pub(crate) fn embed_addr(&self) -> &config::Endpoint {
         &self.inner.embed_addr
+    }
+    pub(crate) fn admin_addr(&self) -> &config::Endpoint {
+        &self.inner.admin_addr
     }
     pub(crate) fn model_name(&self) -> &str {
         &self.inner.model_name

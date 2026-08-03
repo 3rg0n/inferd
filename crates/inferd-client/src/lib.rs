@@ -118,7 +118,7 @@ mod embed_client;
 mod v2_client;
 mod wait;
 
-pub use admin::{AdminClient, AdminEvent};
+pub use admin::{AdminClient, AdminError, AdminEvent};
 pub use client::ClientError;
 pub use embed_client::{EmbedClient, default_embed_addr};
 pub use v2_client::{ClientV2, FrameStreamV2, default_v2_addr};

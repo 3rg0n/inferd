@@ -51,8 +51,9 @@ use serde::{Deserialize, Serialize};
 /// amount of reads (THREAT_MODEL F-1). This bounds the multiplier.
 ///
 /// Sized to admit what a legitimate producer sends — `inferd-http`'s
-/// `MAX_IMAGES_PER_REQUEST` is 8 — with headroom for multi-modal
-/// conversations that reference several images plus audio.
+/// `MAX_IMAGES_PER_REQUEST` is 8 and its `MAX_AUDIO_CLIPS_PER_REQUEST` is
+/// 4 — with headroom for multi-modal conversations that reference several
+/// images plus audio.
 pub const MAX_ATTACHMENTS_PER_REQUEST: usize = 32;
 
 /// Maximum total attachment bytes a single request may carry, summed
@@ -63,23 +64,26 @@ pub const MAX_ATTACHMENTS_PER_REQUEST: usize = 32;
 /// *declared* `BlobDescriptor::len` before reading a payload, so an
 /// over-budget request costs no heap.
 ///
-/// Matches `inferd-http`'s `MAX_TOTAL_DECODED_IMAGE_BYTES` (128 MiB) so
-/// the bridge cannot produce a request the daemon refuses.
+/// Matches `inferd-http`'s `MAX_TOTAL_DECODED_ATTACHMENT_BYTES` (128 MiB)
+/// so the bridge cannot produce a request the daemon refuses. That
+/// bridge-side budget is deliberately aggregate across modalities, for the
+/// same reason this one is.
 pub const MAX_ATTACHMENT_BYTES_PER_REQUEST: u64 = 128 * 1024 * 1024;
 
 // These caps must never reject what a legitimate producer sends. The
 // tightest such producer is the `inferd-http` bridge, whose own limits are
-// `MAX_IMAGES_PER_REQUEST` = 8 and `MAX_TOTAL_DECODED_IMAGE_BYTES` = 128
-// MiB; lowering either cap below those would make the daemon refuse
-// requests the bridge happily builds. Compile-time so the break is a build
-// failure, not a runtime surprise on a vision request.
+// `MAX_IMAGES_PER_REQUEST` = 8 plus `MAX_AUDIO_CLIPS_PER_REQUEST` = 4, and
+// `MAX_TOTAL_DECODED_ATTACHMENT_BYTES` = 128 MiB; lowering either cap below
+// those would make the daemon refuse requests the bridge happily builds.
+// Compile-time so the break is a build failure, not a runtime surprise on a
+// vision or audio request.
 const _: () = assert!(
-    MAX_ATTACHMENTS_PER_REQUEST >= 8,
-    "cap is below inferd-http's MAX_IMAGES_PER_REQUEST (8); the daemon would refuse requests the bridge builds"
+    MAX_ATTACHMENTS_PER_REQUEST >= 12,
+    "cap is below inferd-http's MAX_IMAGES_PER_REQUEST (8) + MAX_AUDIO_CLIPS_PER_REQUEST (4); the daemon would refuse requests the bridge builds"
 );
 const _: () = assert!(
     MAX_ATTACHMENT_BYTES_PER_REQUEST >= 128 * 1024 * 1024,
-    "cap is below inferd-http's MAX_TOTAL_DECODED_IMAGE_BYTES (128 MiB); the daemon would refuse requests the bridge builds"
+    "cap is below inferd-http's MAX_TOTAL_DECODED_ATTACHMENT_BYTES (128 MiB); the daemon would refuse requests the bridge builds"
 );
 
 /// One binary attachment in the request's top-level `attachments[]` table.

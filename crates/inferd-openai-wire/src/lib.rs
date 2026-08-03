@@ -170,12 +170,12 @@ impl From<String> for MessageContent {
     }
 }
 
-/// One element of a multimodal `content` array. Tagged by `type`; only
-/// `text` and `image_url` are recognised (the two the OpenAI SDK emits
-/// for chat). Unknown types deserialize into [`ContentPart::Unknown`]
-/// so a newer client field doesn't hard-fail the parse — the caller
-/// decides how to treat it (the bridge rejects it explicitly rather
-/// than silently dropping content).
+/// One element of a multimodal `content` array. Tagged by `type`;
+/// `text`, `image_url` and `input_audio` are recognised (the three the
+/// OpenAI SDK emits for chat). Unknown types deserialize into
+/// [`ContentPart::Unknown`] so a newer client field doesn't hard-fail the
+/// parse — the caller decides how to treat it (the bridge rejects it
+/// explicitly rather than silently dropping content).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
@@ -188,6 +188,12 @@ pub enum ContentPart {
     ImageUrl {
         /// The `image_url` object.
         image_url: ImageUrl,
+    },
+    /// An audio clip, carried inline as base64 (OpenAI defines no URL
+    /// form for audio input).
+    InputAudio {
+        /// The `input_audio` object.
+        input_audio: InputAudio,
     },
     /// Any part type the bridge does not recognise.
     #[serde(other)]
@@ -207,6 +213,22 @@ pub struct ImageUrl {
     /// (`mmproj_image_max_tokens`), not a per-request knob.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// The `input_audio` object inside an `input_audio` content part.
+///
+/// OpenAI carries audio input inline only — there is no `audio_url`
+/// form — so `data` is always raw standard base64 (no `data:` URL
+/// prefix). The bridge decodes it, downmixes to mono and resamples to
+/// the rate the daemon's backend requires (ADR 0025).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputAudio {
+    /// Base64-encoded audio bytes (standard alphabet, no `data:` prefix).
+    pub data: String,
+    /// Container/codec hint: `"wav"` or `"mp3"` on the OpenAI wire. Used
+    /// as a probe hint only — the actual format is detected from the
+    /// bytes, so a wrong hint costs nothing.
+    pub format: String,
 }
 
 /// An assistant tool call, as replayed in message history.

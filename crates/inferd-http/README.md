@@ -14,7 +14,8 @@ serves HTTP ([ADR 0006](../../docs/adr/0006-lean-core-ecosystem-extensions.md)/[
 ## Endpoints
 
 - `POST /v1/chat/completions` — streaming (SSE) and non-streaming;
-  text **and** vision (`image_url` content parts, see below).
+  text, vision (`image_url` content parts) **and** audio (`input_audio`),
+  see below.
 - `POST /v1/embeddings` — `float` and `base64` encodings (the OpenAI SDK
   defaults to `base64`).
 - `GET /v1/models` — advertises the single warm model.
@@ -55,6 +56,53 @@ BLOB-frame wire. Requires the daemon to have a vision-capable model warm
   accepted and ignored (inferd's image budget is an operator/model
   property — `mmproj_image_max_tokens` — not a per-request knob).
 
+## Audio (speech input)
+
+The bridge accepts OpenAI's `input_audio` content part — inline base64
+wav or mp3 on a `user` message:
+
+```python
+client.chat.completions.create(
+    model="anything",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Transcribe this."},
+            {"type": "input_audio", "input_audio": {"data": "<base64 wav>", "format": "wav"}},
+        ],
+    }],
+)
+```
+
+**Send audio at any sample rate — the bridge converts it.** That is the
+whole reason this path exists ([ADR 0025](../../docs/adr/0025-bridge-decodes-and-resamples-audio.md)).
+The daemon's audio encoder takes mono float32 PCM at *one* rate and
+**rejects** anything else rather than resampling, because the wrong rate
+time-scales the audio and yields a fluent, wrong answer instead of an
+error. So the bridge decodes your wav/mp3, downmixes to mono, and
+resamples to the rate the daemon advertises.
+
+- **The rate comes from the daemon, per request**, read off its admin
+  socket (`--admin-addr-override` if it isn't at the platform default) —
+  never hardcoded, so restarting the daemon onto a different model can't
+  desynchronise the two. Only requests that actually carry audio pay for
+  that extra connect.
+- Requires an audio-capable model warm (the default Gemma 4 E4B is). If no
+  backend takes audio you get a 400 rather than a guessed rate the daemon
+  would reject anyway. A daemon that reports audio but no *rate* is a
+  **daemon older than v0.6.2** — that gets its own 400 telling you to
+  upgrade, since it's a different fix from swapping the model.
+- **No URL form.** OpenAI defines none for audio, so there is nothing to
+  fetch and no SSRF surface (unlike `image_url`).
+- **Bomb-guarded.** Three caps: encoded payload (8 MiB), decoded sample
+  count (checked *during* decode, so a small mp3 claiming hours of audio
+  fails partway), and the resampled payload size (checked from the
+  predicted length, before the work happens).
+- Audio is accepted only on `user` messages, max 4 clips per request, and
+  shares a 128 MiB decoded-attachment budget with images.
+- Formats: **wav** and **mp3**. The `format` field is a hint only —
+  detection is from the bytes, so a wrong hint costs nothing.
+
 ## Run
 
 ```sh
@@ -62,6 +110,14 @@ BLOB-frame wire. Requires the daemon to have a vision-capable model warm
 inferd-http                       # binds 127.0.0.1:8080, no auth
 inferd-http --listen 127.0.0.1:9000
 inferd-http --model-name my-model # what /v1/models advertises + echoes
+```
+
+Endpoint overrides, if the daemon isn't at the platform defaults:
+
+```sh
+inferd-http --gen-addr-override   /run/user/1000/inferd/inferd.sock \
+            --embed-addr-override /run/user/1000/inferd/infer.embed.sock \
+            --admin-addr-override /run/user/1000/inferd/inferd.admin.sock
 ```
 
 Then point a client at it:
@@ -116,8 +172,9 @@ non-loopback use:
   Schema. `{"type":"json_object"}` / `{"type":"text"}` carry no schema, so
   they're unconstrained (best-effort JSON via the prompt only).
 - **Unsupported OpenAI params:** `n > 1` → 400; `logprobs`,
-  `presence_penalty`, `frequency_penalty` are ignored. Image input **is**
-  supported (see Vision above); audio content parts are not.
+  `presence_penalty`, `frequency_penalty` are ignored. Image **and** audio
+  input are supported (see Vision / Audio above). Audio *output*
+  (`modalities: ["audio"]`) is not — inferd generates text.
 - **Thinking** is not reachable through this bridge: it's an explicit
   opt-in on inferd's native wire (`RequestV2.thinking`), and the OpenAI
   Chat API has no standard field for it. Use `inferd-client` directly if

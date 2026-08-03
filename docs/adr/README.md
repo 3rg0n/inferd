@@ -29,6 +29,7 @@ implementation choices aren't.
 | [0022](0022-no-inbound-network-listener-deprecate-loopback-tcp.md) | No inbound network listener in the daemon — deprecate loopback TCP (v0.4.0), remove in v0.5.0 | Accepted |
 | [0023](0023-boot-time-model-auto-selection-by-accelerator-memory.md) | Boot-time model auto-selection by accelerator memory (total VRAM ≥20 GiB → Gemma 4 12B, else E4B; embed falls back to CPU under memory pressure) | Accepted |
 | [0024](0024-wsl-relay-for-containerized-middleware.md) | Crossing a VM/container boundary is the consumer's concern — inferd ships no cross-VM bridge (consumer-owned bridging preserves app-mapping fidelity; no supported no-TCP cross-VM transport exists on WSL2; recommend daemon-per-memory-domain) | Accepted |
+| [0025](0025-bridge-decodes-and-resamples-audio.md) | The bridge decodes and resamples audio; codecs stay out of the daemon (extends 0016 — `inferd-http` links symphonia/rubato and reads the required rate off the admin socket per request; MPL-2.0 confined to the unpublished bridge binary) | Accepted |
 
 ## Writing a new ADR
 

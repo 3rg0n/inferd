@@ -1,0 +1,100 @@
+# cargo-deny configuration — `cargo deny check`.
+#
+# This file exists because of ADR 0025. Until v0.6.1 every dependency in
+# the tree was permissive (MIT / Apache-2.0 / ISC / BSD / Zlib), so
+# "inferd is MIT and so is everything under it" was true by accident and
+# checked by nobody. Adding `symphonia` (MPL-2.0) to the `inferd-http`
+# bridge made that claim non-trivial, and a claim about licences that no
+# tool verifies is a claim that silently rots.
+#
+# Two things are enforced here:
+#   1. An allow-list of licences. A new copyleft dependency fails the
+#      build rather than arriving unnoticed.
+#   2. That MPL-2.0 stays confined to the `inferd-http` binary — the
+#      daemon, the engine, and the two crates.io-published libraries
+#      (`inferd-proto`, `inferd-client`) must not link it. That is the
+#      containment argument ADR 0025 makes, expressed as a check.
+#
+# Vulnerability findings are deliberately NOT hard-blocking here; that is
+# `cargo audit`'s job on its own non-PR-blocking schedule (see the
+# rationale at the top of `.github/workflows/ci.yml` — hard-blocking a PR
+# on a pulled-in dep is the posture that got Trivy compromised).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# Informational only. `cargo audit` owns vulnerability gating.
+yanked = "warn"
+ignore = [
+    # rustls-pemfile unmaintained — reached only via the cloud adapters'
+    # TLS stack; no known vulnerability.
+    "RUSTSEC-2025-0134",
+    # anyhow `Error::downcast_mut()` unsoundness — inferd never calls it.
+    "RUSTSEC-2026-0190",
+]
+
+[licenses]
+version = 2
+# Permissive licences, plus MPL-2.0 gated by the `[[licenses.exceptions]]`
+# entries below. Anything not listed fails the check.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# MPL-2.0 is allowed for these crates only (ADR 0025). MPL-2.0 is
+# file-level copyleft: it reaches modifications to symphonia's own source
+# files, not a separate work that links it (§3.3, "Larger Work"). These
+# are pulled in by `inferd-http` — a binary crate, not published to
+# crates.io — to decode the wav/mp3 an OpenAI client sends. The daemon
+# links no codec (ADR 0016) and neither published library links these.
+#
+# If a NEW crate needs an MPL exception, that is a licence-posture
+# decision: write the ADR, don't just extend this list.
+[[licenses.exceptions]]
+name = "symphonia"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "symphonia-core"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "symphonia-bundle-mp3"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "symphonia-codec-pcm"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "symphonia-format-riff"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "symphonia-metadata"
+allow = ["MPL-2.0"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The containment half of ADR 0025: symphonia may be reached from
+# `inferd-http` and nothing else. Listing the *permitted* parent means a
+# future `use symphonia` in the daemon, the engine, or either published
+# library fails `cargo deny check` — which is the whole point, since the
+# MIT-containment argument rests on exactly that boundary.
+[[bans.deny]]
+name = "symphonia"
+wrappers = ["inferd-http"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

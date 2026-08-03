@@ -211,6 +211,22 @@ jobs:
         run: cargo install cargo-audit --locked
       - run: cargo audit
 
+  licenses:
+    name: cargo deny (licences + MPL containment)
+    runs-on: ubuntu-latest
+    # Unlike `audit`, this DOES block PRs. The distinction is that a
+    # licence check is deterministic — it reads Cargo.lock, not a moving
+    # vulnerability database — so it cannot start failing because someone
+    # else published an advisory overnight. It gates two things (see
+    # `deny.toml`): the licence allow-list, and that MPL-2.0 `symphonia`
+    # stays reachable only from the `inferd-http` binary, which is the
+    # containment argument ADR 0025 rests on.
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - run: cargo deny check licenses bans sources
+
   systemd-unit:
     name: systemd-unit smoke (ubuntu)
     runs-on: ubuntu-latest

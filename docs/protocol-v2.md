@@ -304,6 +304,11 @@ Discover the required rate from the admin socket's `capabilities` frame:
 reports no rate; when it is absent, no rate check is applied. Consumers
 MUST resample to the advertised value rather than hardcoding 16000.
 
+`inferd-http` is the reference implementation of that obligation (ADR
+0025): it decodes the client's wav/mp3, downmixes to mono, and resamples
+to the rate it read off this frame — re-reading it per audio request, so a
+daemon restart onto a different mmproj cannot desynchronise the two.
+
 ### 3.6 `Tool`
 
 ```

@@ -36,6 +36,13 @@ pub struct Config {
     #[arg(long)]
     pub embed_addr_override: Option<String>,
 
+    /// Daemon admin endpoint. Defaults to the platform default. Used to
+    /// read the backend's required audio sample rate (the daemon rejects
+    /// any other rate and never resamples), so it is only dialed when a
+    /// request actually carries `input_audio`.
+    #[arg(long)]
+    pub admin_addr_override: Option<String>,
+
     /// Bearer token required on inbound requests. Optional for loopback
     /// (the default is no auth); **required** to bind a non-loopback
     /// address.
@@ -59,6 +66,8 @@ pub struct Config {
     #[arg(skip)]
     pub embed_addr: Endpoint,
     #[arg(skip)]
+    pub admin_addr: Endpoint,
+    #[arg(skip)]
     pub startup_timeout: Duration,
 }
 
@@ -76,6 +85,11 @@ impl Config {
                 .clone()
                 .unwrap_or_else(default_embed_addr_string),
         );
+        c.admin_addr = Endpoint(
+            c.admin_addr_override
+                .clone()
+                .unwrap_or_else(default_admin_addr_string),
+        );
         c.startup_timeout = Duration::from_secs(c.startup_timeout_secs);
         c
     }
@@ -89,6 +103,12 @@ fn default_gen_addr_string() -> String {
 
 fn default_embed_addr_string() -> String {
     inferd_client::default_embed_addr()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn default_admin_addr_string() -> String {
+    inferd_client::default_admin_addr()
         .to_string_lossy()
         .into_owned()
 }

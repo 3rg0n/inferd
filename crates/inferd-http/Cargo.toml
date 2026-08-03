@@ -40,6 +40,17 @@ axum               = { version = "0.7", features = ["json"] }
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # base64-decode data: URL image payloads. Standard alphabet.
 base64             = "0.22"
+# Decode OpenAI `input_audio` (base64 wav/mp3) to f32 PCM — same ADR 0016
+# reasoning as `image` above: the daemon links no audio codec, so the
+# bridge decodes. `wav`/`mp3` are the two formats the OpenAI wire defines;
+# `pcm` is the *codec* inside a RIFF/wav container (a separate feature from
+# the container reader), so omitting it makes every wav decode fail at
+# codec lookup. MPL-2.0 (file-level copyleft; see ADR 0025).
+symphonia          = { version = "0.6", default-features = false, features = ["wav", "mp3", "pcm"] }
+# Resample decoded audio to the rate the backend requires. The daemon
+# refuses a mismatch rather than mis-feeding a rate-less encoder (ADR
+# 0025), and rate conversion is the consumer's job (ADR 0016).
+rubato             = "4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

@@ -21,6 +21,7 @@ use inferd_proto::v2::{
 };
 use thiserror::Error;
 
+use crate::audio_decode::{self, AudioDecodeError};
 use crate::image_decode::{self, ImageDecodeError};
 
 /// Request-translation failures → HTTP 400.
@@ -52,11 +53,30 @@ pub enum TranslateError {
     /// The request carried more than [`MAX_IMAGES_PER_REQUEST`] images.
     #[error("too many images in one request (max {0})")]
     TooManyImages(usize),
-    /// The decoded images exceeded the aggregate byte budget. Bounds the
-    /// bridge's peak RGB memory: many small-compressed / large-decoded
-    /// images (each individually legal) can otherwise sum to gigabytes.
-    #[error("decoded image bytes exceed the {0}-byte per-request budget")]
-    ImageBudgetExceeded(usize),
+    /// The decoded attachments exceeded the aggregate byte budget. Bounds
+    /// the bridge's peak media memory: many small-compressed /
+    /// large-decoded images or audio clips (each individually legal) can
+    /// otherwise sum to gigabytes.
+    #[error("decoded attachment bytes exceed the {0}-byte per-request budget")]
+    AttachmentBudgetExceeded(usize),
+    /// An `input_audio` content part could not be decoded to PCM.
+    #[error("audio content: {0}")]
+    Audio(#[from] AudioDecodeError),
+    /// An `input_audio` part appeared on a non-user message. Same
+    /// reasoning as [`TranslateError::ImageOnNonUser`].
+    #[error("audio content is only allowed on `user` messages, not `{0}`")]
+    AudioOnNonUser(String),
+    /// The request carried more than [`MAX_AUDIO_CLIPS_PER_REQUEST`] clips.
+    #[error("too many audio clips in one request (max {0})")]
+    TooManyAudioClips(usize),
+    /// The request carried audio but no registered backend takes audio, so
+    /// there is no rate to resample to and the daemon would reject a guess
+    /// (see [`crate::audio_decode`]). The narrower case — a backend that
+    /// takes audio but advertises no rate, i.e. a daemon older than the
+    /// field — is caught upstream in `handlers`, which can tell the two
+    /// apart and says "upgrade the daemon" instead.
+    #[error("the daemon's active backend does not accept audio input")]
+    AudioUnsupported,
 }
 
 /// Max number of image parts accepted in one chat request. A single
@@ -65,12 +85,21 @@ pub enum TranslateError {
 /// bridge holds until it forwards the request.
 pub const MAX_IMAGES_PER_REQUEST: usize = 8;
 
-/// Aggregate decoded-RGB budget across all images in one request. Caps
-/// the bridge's peak memory regardless of how the (compressed) images
-/// packed into the 8 MiB HTTP body — a decompression-amplification guard
-/// the per-image limit alone does not provide. 128 MiB comfortably fits
-/// several full-resolution images while refusing a bomb.
-pub const MAX_TOTAL_DECODED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+/// Max number of `input_audio` parts accepted in one chat request. Same
+/// reasoning as [`MAX_IMAGES_PER_REQUEST`]; audio is bounded separately
+/// because a clip's decoded size is unrelated to an image's.
+pub const MAX_AUDIO_CLIPS_PER_REQUEST: usize = 4;
+
+/// Aggregate decoded-media budget across **all** attachments (images and
+/// audio) in one request. Caps the bridge's peak memory regardless of how
+/// the compressed payloads packed into the 8 MiB HTTP body — a
+/// decompression-amplification guard the per-item limits alone do not
+/// provide. It is one shared budget rather than one per modality because
+/// the daemon's own `MAX_ATTACHMENT_BYTES_PER_REQUEST` is also aggregate:
+/// two independent 128 MiB budgets would let the bridge build a request
+/// the daemon then refuses. 128 MiB comfortably fits several
+/// full-resolution images or minutes of audio while refusing a bomb.
+pub const MAX_TOTAL_DECODED_ATTACHMENT_BYTES: usize = 128 * 1024 * 1024;
 
 // ===================== Chat request → RequestV2 =====================
 
@@ -96,20 +125,35 @@ fn map_response_format(rf: Option<OpenAiResponseFormat>) -> Option<ResponseForma
 }
 
 /// Translate an inbound OpenAI chat request into an inferd `RequestV2`.
-pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, TranslateError> {
+///
+/// `audio_rate` is the sample rate the daemon's active backend requires,
+/// as read off its admin capabilities frame. Audio parts are resampled to
+/// it (the daemon never resamples and rejects any other rate — see
+/// [`crate::audio_decode`]). `None` means the backend takes no audio, so a
+/// request carrying `input_audio` is rejected rather than sent at a
+/// guessed rate.
+pub fn chat_request_to_v2(
+    req: ChatRequest,
+    id: String,
+    audio_rate: Option<u32>,
+) -> Result<RequestV2, TranslateError> {
     if req.n.unwrap_or(1) > 1 {
         return Err(TranslateError::MultipleChoices);
     }
     let response_format = map_response_format(req.response_format);
 
     let mut messages = Vec::with_capacity(req.messages.len());
-    // Image bytes ride out-of-band as attachments referenced by id; the
+    // Media bytes ride out-of-band as attachments referenced by id; the
     // daemon reassembles them into BLOB frames. Ids are unique across the
-    // whole request (`img-<n>`), assigned as images are encountered.
+    // whole request (`img-<n>` / `aud-<n>`), assigned per modality as
+    // parts are encountered — the counters are per-modality so an id stays
+    // contiguous within its kind regardless of interleaving.
     let mut attachments: Vec<Attachment> = Vec::new();
-    // Running total of decoded RGB bytes across all images in the
-    // request, checked against the aggregate budget after each decode.
-    let mut total_image_bytes: usize = 0;
+    let mut image_count: usize = 0;
+    let mut audio_count: usize = 0;
+    // Running total of decoded media bytes across the whole request,
+    // checked against the aggregate budget after each decode.
+    let mut total_media_bytes: usize = 0;
     for m in req.messages {
         let role = match m.role.as_str() {
             "system" => RoleV2::System,
@@ -136,6 +180,9 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
                             ContentPart::Text { text: t } => text.push_str(&t),
                             ContentPart::ImageUrl { .. } => {
                                 return Err(TranslateError::ImageOnNonUser("tool".into()));
+                            }
+                            ContentPart::InputAudio { .. } => {
+                                return Err(TranslateError::AudioOnNonUser("tool".into()));
                             }
                             ContentPart::Unknown => {}
                         }
@@ -170,7 +217,7 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
                             }
                             // Bound the image COUNT before decoding the next
                             // one — refuse abuse without doing its work.
-                            if attachments.len() >= MAX_IMAGES_PER_REQUEST {
+                            if image_count >= MAX_IMAGES_PER_REQUEST {
                                 return Err(TranslateError::TooManyImages(MAX_IMAGES_PER_REQUEST));
                             }
                             let decoded = image_decode::decode_image_url(&image_url.url)?;
@@ -178,13 +225,14 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
                             // images can still sum to gigabytes of retained
                             // RGB (a compression-amplification DoS). Cap the
                             // running total.
-                            total_image_bytes = total_image_bytes.saturating_add(decoded.rgb.len());
-                            if total_image_bytes > MAX_TOTAL_DECODED_IMAGE_BYTES {
-                                return Err(TranslateError::ImageBudgetExceeded(
-                                    MAX_TOTAL_DECODED_IMAGE_BYTES,
+                            total_media_bytes = total_media_bytes.saturating_add(decoded.rgb.len());
+                            if total_media_bytes > MAX_TOTAL_DECODED_ATTACHMENT_BYTES {
+                                return Err(TranslateError::AttachmentBudgetExceeded(
+                                    MAX_TOTAL_DECODED_ATTACHMENT_BYTES,
                                 ));
                             }
-                            let id = format!("img-{}", attachments.len());
+                            let id = format!("img-{image_count}");
+                            image_count += 1;
                             content.push(ContentBlock::Image {
                                 attachment_id: id.clone(),
                             });
@@ -195,6 +243,47 @@ pub fn chat_request_to_v2(req: ChatRequest, id: String) -> Result<RequestV2, Tra
                                 bytes: Vec::new(),
                             };
                             att.set_bytes(decoded.rgb);
+                            attachments.push(att);
+                        }
+                        ContentPart::InputAudio { input_audio } => {
+                            // Audio, like images, is only meaningful on a
+                            // user turn.
+                            if role != RoleV2::User {
+                                return Err(TranslateError::AudioOnNonUser(m.role.clone()));
+                            }
+                            // The rate is the backend's, not ours to pick.
+                            // No advertised rate → the daemon takes no
+                            // audio, so fail here rather than build a
+                            // request it will reject.
+                            let target_rate = audio_rate.ok_or(TranslateError::AudioUnsupported)?;
+                            if audio_count >= MAX_AUDIO_CLIPS_PER_REQUEST {
+                                return Err(TranslateError::TooManyAudioClips(
+                                    MAX_AUDIO_CLIPS_PER_REQUEST,
+                                ));
+                            }
+                            let decoded = audio_decode::decode_input_audio(
+                                &input_audio.data,
+                                &input_audio.format,
+                                target_rate,
+                            )?;
+                            let pcm = decoded.to_le_bytes();
+                            total_media_bytes = total_media_bytes.saturating_add(pcm.len());
+                            if total_media_bytes > MAX_TOTAL_DECODED_ATTACHMENT_BYTES {
+                                return Err(TranslateError::AttachmentBudgetExceeded(
+                                    MAX_TOTAL_DECODED_ATTACHMENT_BYTES,
+                                ));
+                            }
+                            let id = format!("aud-{audio_count}");
+                            audio_count += 1;
+                            content.push(ContentBlock::Audio {
+                                attachment_id: id.clone(),
+                            });
+                            let mut att = Attachment::Audio {
+                                id,
+                                sample_rate: decoded.sample_rate,
+                                bytes: Vec::new(),
+                            };
+                            att.set_bytes(pcm);
                             attachments.push(att);
                         }
                         ContentPart::Unknown => {
@@ -528,7 +617,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "id1".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "id1".into(), None).unwrap();
         assert_eq!(v2.messages.len(), 2);
         assert!(matches!(v2.messages[0].role, RoleV2::System));
         assert!(matches!(v2.messages[1].role, RoleV2::User));
@@ -551,7 +640,7 @@ mod tests {
             response_format: None,
         };
         assert!(matches!(
-            chat_request_to_v2(req, "i".into()),
+            chat_request_to_v2(req, "i".into(), None),
             Err(TranslateError::MultipleChoices)
         ));
     }
@@ -576,7 +665,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
         assert_eq!(v2.messages.len(), 1);
         match &v2.messages[0].content[0] {
             ContentBlock::ToolResult { tool_call_id, .. } => {
@@ -620,7 +709,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
         assert_eq!(v2.tools.len(), 1);
         match &v2.messages[0].content[0] {
             ContentBlock::ToolUse { name, input, .. } => {
@@ -659,7 +748,7 @@ mod tests {
             response_format: None,
         };
         assert!(matches!(
-            chat_request_to_v2(req, "i".into()),
+            chat_request_to_v2(req, "i".into(), None),
             Err(TranslateError::BadToolArgs(_))
         ));
     }
@@ -821,7 +910,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "id".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "id".into(), None).unwrap();
         // One message, two content blocks (text + image ref).
         assert_eq!(v2.messages.len(), 1);
         assert_eq!(v2.messages[0].content.len(), 2);
@@ -865,7 +954,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "id".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "id".into(), None).unwrap();
         assert_eq!(v2.attachments.len(), 2);
         assert_ne!(v2.attachments[0].id(), v2.attachments[1].id());
         // The request must resolve (every image block's id maps to an
@@ -888,7 +977,7 @@ mod tests {
             response_format: None,
         };
         assert!(matches!(
-            chat_request_to_v2(req, "i".into()),
+            chat_request_to_v2(req, "i".into(), None),
             Err(TranslateError::ImageOnNonUser(_))
         ));
     }
@@ -916,7 +1005,7 @@ mod tests {
             response_format: None,
         };
         assert!(matches!(
-            chat_request_to_v2(req, "i".into()),
+            chat_request_to_v2(req, "i".into(), None),
             Err(TranslateError::Image(_))
         ));
     }
@@ -942,7 +1031,7 @@ mod tests {
                 },
             }),
         };
-        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
         match v2.response_format {
             Some(ResponseFormat::JsonSchema { schema: s }) => assert_eq!(s, schema),
             other => panic!("expected JsonSchema grammar, got {other:?}"),
@@ -967,7 +1056,7 @@ mod tests {
                 stream_options: None,
                 response_format: Some(rf),
             };
-            let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+            let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
             assert!(
                 v2.response_format.is_none(),
                 "text/json_object carry no schema → unconstrained"
@@ -994,7 +1083,7 @@ mod tests {
             response_format: None,
         };
         assert!(matches!(
-            chat_request_to_v2(req, "i".into()),
+            chat_request_to_v2(req, "i".into(), None),
             Err(TranslateError::TooManyImages(_))
         ));
     }
@@ -1017,8 +1106,183 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
         assert_eq!(v2.attachments.len(), MAX_IMAGES_PER_REQUEST);
+    }
+
+    // --- audio ---------------------------------------------------------
+
+    /// A minimal 16 kHz mono RIFF/WAVE clip of `frames` samples, base64'd.
+    /// Hand-rolled so no binary fixture ships (same approach as
+    /// `audio_decode`'s tests).
+    fn wav16k_b64(frames: usize) -> String {
+        let data_len = (frames * 2) as u32;
+        let mut w = Vec::with_capacity(44 + data_len as usize);
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data_len).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        w.extend_from_slice(&1u16.to_le_bytes()); // mono
+        w.extend_from_slice(&16_000u32.to_le_bytes());
+        w.extend_from_slice(&32_000u32.to_le_bytes()); // byte rate
+        w.extend_from_slice(&2u16.to_le_bytes()); // block align
+        w.extend_from_slice(&16u16.to_le_bytes()); // bits
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.to_le_bytes());
+        for n in 0..frames {
+            w.extend_from_slice(&(((n % 100) as i16) * 300 - 15_000).to_le_bytes());
+        }
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&w)
+    }
+
+    fn audio_part(frames: usize) -> ContentPart {
+        ContentPart::InputAudio {
+            input_audio: inferd_openai_wire::InputAudio {
+                data: wav16k_b64(frames),
+                format: "wav".into(),
+            },
+        }
+    }
+
+    fn audio_req(role: &str, parts: Vec<ContentPart>) -> ChatRequest {
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![parts_msg(role, parts)],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![],
+            stream_options: None,
+            response_format: None,
+        }
+    }
+
+    #[test]
+    fn user_message_with_audio_maps_to_block_and_attachment() {
+        let req = audio_req(
+            "user",
+            vec![
+                ContentPart::Text {
+                    text: "transcribe this".into(),
+                },
+                audio_part(1600),
+            ],
+        );
+        let v2 = chat_request_to_v2(req, "id".into(), Some(16_000)).unwrap();
+        assert_eq!(v2.messages[0].content.len(), 2);
+        let att_id = match &v2.messages[0].content[1] {
+            ContentBlock::Audio { attachment_id } => attachment_id.clone(),
+            other => panic!("expected Audio block, got {other:?}"),
+        };
+        assert_eq!(v2.attachments.len(), 1);
+        match &v2.attachments[0] {
+            Attachment::Audio {
+                id, sample_rate, ..
+            } => {
+                assert_eq!(id, &att_id);
+                // The advertised rate, carried through unchanged — the
+                // daemon rejects anything else.
+                assert_eq!(*sample_rate, 16_000);
+            }
+            other => panic!("expected Audio attachment, got {other:?}"),
+        }
+        // Mono LE f32: 4 octets per sample, no resampling at the target rate.
+        assert_eq!(v2.attachments[0].bytes().len(), 1600 * 4);
+        assert!(v2.resolve().is_ok());
+    }
+
+    #[test]
+    fn audio_and_image_ids_do_not_collide() {
+        let req = audio_req("user", vec![image_part(RED_1X1_PNG_B64), audio_part(320)]);
+        let v2 = chat_request_to_v2(req, "id".into(), Some(16_000)).unwrap();
+        assert_eq!(v2.attachments.len(), 2);
+        // Per-modality counters, so the image keeps `img-0` even though the
+        // audio shares the attachment vec.
+        assert_eq!(v2.attachments[0].id(), "img-0");
+        assert_eq!(v2.attachments[1].id(), "aud-0");
+        assert!(v2.resolve().is_ok());
+    }
+
+    #[test]
+    fn audio_without_an_advertised_rate_rejected() {
+        // `None` means no backend advertised an audio rate. Guessing 16000
+        // would produce a confidently-wrong answer, so refuse instead.
+        let req = audio_req("user", vec![audio_part(320)]);
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), None),
+            Err(TranslateError::AudioUnsupported)
+        ));
+    }
+
+    #[test]
+    fn audio_on_system_message_rejected() {
+        let req = audio_req("system", vec![audio_part(320)]);
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), Some(16_000)),
+            Err(TranslateError::AudioOnNonUser(_))
+        ));
+    }
+
+    #[test]
+    fn too_many_audio_clips_rejected() {
+        let parts: Vec<ContentPart> = (0..=MAX_AUDIO_CLIPS_PER_REQUEST)
+            .map(|_| audio_part(160))
+            .collect();
+        let req = audio_req("user", parts);
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), Some(16_000)),
+            Err(TranslateError::TooManyAudioClips(_))
+        ));
+    }
+
+    #[test]
+    fn audio_clips_at_the_cap_are_allowed() {
+        let parts: Vec<ContentPart> = (0..MAX_AUDIO_CLIPS_PER_REQUEST)
+            .map(|_| audio_part(160))
+            .collect();
+        let req = audio_req("user", parts);
+        let v2 = chat_request_to_v2(req, "i".into(), Some(16_000)).unwrap();
+        assert_eq!(v2.attachments.len(), MAX_AUDIO_CLIPS_PER_REQUEST);
+        assert!(v2.resolve().is_ok());
+    }
+
+    #[test]
+    fn audio_resampled_to_the_advertised_rate() {
+        // The clip is 16 kHz; the backend wants 8 kHz. The bridge converts
+        // rather than passing the source rate through.
+        let req = audio_req("user", vec![audio_part(16_000)]);
+        let v2 = chat_request_to_v2(req, "i".into(), Some(8_000)).unwrap();
+        match &v2.attachments[0] {
+            Attachment::Audio { sample_rate, .. } => assert_eq!(*sample_rate, 8_000),
+            other => panic!("expected Audio attachment, got {other:?}"),
+        }
+        let samples = v2.attachments[0].bytes().len() / 4;
+        assert!(
+            (samples as f64 - 8_000.0).abs() / 8_000.0 < 0.01,
+            "expected ~8000 samples, got {samples}"
+        );
+    }
+
+    #[test]
+    fn undecodable_audio_rejected() {
+        let req = audio_req(
+            "user",
+            vec![ContentPart::InputAudio {
+                input_audio: inferd_openai_wire::InputAudio {
+                    data: "aGVsbG8=".into(), // "hello", not audio
+                    format: "wav".into(),
+                },
+            }],
+        );
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), Some(16_000)),
+            Err(TranslateError::Audio(_))
+        ));
     }
 
     #[test]
@@ -1042,7 +1306,7 @@ mod tests {
             stream_options: None,
             response_format: None,
         };
-        let v2 = chat_request_to_v2(req, "i".into()).unwrap();
+        let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
         assert_eq!(v2.messages.len(), 1);
         assert_eq!(v2.messages[0].content.len(), 1);
         assert!(v2.attachments.is_empty());

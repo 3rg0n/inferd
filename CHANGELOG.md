@@ -15,6 +15,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the backend takes no audio). The llamacpp adapter reads it from the
   loaded mmproj once at init. Backwards-additive on the admin wire; the
   generation wire is unchanged.
+- **`inferd-http` accepts OpenAI `input_audio` — speech in over the
+  OpenAI-compat bridge** ([ADR 0025](docs/adr/0025-bridge-decodes-and-resamples-audio.md),
+  task #200). A `user` message part
+  `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}`
+  is decoded (wav/mp3, via `symphonia`), downmixed to mono, **resampled**
+  (via `rubato`) to the rate the daemon requires, and sent as an inferd
+  `Attachment::Audio`. Resampling in the bridge is what makes the feature
+  usable at all: real clients record at 44.1/48 kHz, the daemon accepts one
+  rate and rejects the rest (it never resamples — ADR 0016), and no OpenAI
+  SDK converts audio. The daemon is unchanged; no wire change.
+  - **The target rate is read from the daemon, per audio request**, off the
+    admin socket (`--admin-addr-override` added for a non-default path) —
+    never hardcoded. A cached rate would survive a daemon restart onto a
+    different mmproj and then produce confidently-wrong transcription,
+    which is the exact failure the rate contract exists to prevent.
+    Text/image-only requests never pay for the probe. No advertised rate →
+    400, not a guess.
+  - Bounded three ways against decompression bombs: encoded payload (8
+    MiB), decoded sample count (checked *during* the decode loop, so a
+    small mp3 claiming hours fails partway), and predicted resampled
+    payload size (checked before the work). Max 4 clips per request, `user`
+    messages only. No SSRF surface — OpenAI defines no audio URL form.
+  - The per-request decoded-attachment byte budget is now **shared across
+    modalities** (`MAX_TOTAL_DECODED_ATTACHMENT_BYTES`, renamed from the
+    image-only constant) to mirror the daemon's aggregate
+    `MAX_ATTACHMENT_BYTES_PER_REQUEST`; two independent budgets would let
+    the bridge build a request the daemon refuses.
+  - `inferd-client` now re-exports `AdminError`, which was already the
+    error type of a public API but had never been exported.
+  - **Licence note:** `symphonia` is MPL-2.0, the first non-permissive
+    dependency in the tree. It is confined to the `inferd-http` **binary**;
+    the daemon, the engine, and both crates.io-published libraries
+    (`inferd-proto`, `inferd-client`) do not link it. inferd stays MIT
+    (ADR 0004); rationale and scope in ADR 0025.
+- **`deny.toml` + a PR-blocking `licenses` CI job.** Until now "inferd is
+  MIT and so is everything under it" was true by accident and verified by
+  nothing — `cargo deny check` was in the documented pre-commit gate with
+  no config file to read and no CI job to run it. The MPL-2.0 dependency
+  above made the claim non-trivial, so it is now machine-checked: a licence
+  allow-list, and a `[[bans.deny]]` entry asserting `symphonia` is
+  reachable **only** from `inferd-http` (verified load-bearing — pointing
+  the wrapper elsewhere fails the check). This job *does* block PRs, unlike
+  `cargo audit`: a licence check reads `Cargo.lock` and cannot start
+  failing because someone published an advisory overnight.
 - **Both client libraries can now read the required audio sample rate.**
   The daemon advertised `audio_sample_rate` but neither
   `inferd_client::AdminEvent` nor the Go `AdminEvent` carried the field, so
@@ -26,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entirely. Found by running the audio path live rather than by review.
 
 ### Fixed
+
+- **The bridge no longer misreports an out-of-date daemon as an
+  audio-incapable one.** A daemon older than the `audio_sample_rate` field
+  advertises `audio: true` with no rate; the bridge returned *"the daemon's
+  active backend does not accept audio input"*, which is false — it sends
+  the operator auditing their model instead of their daemon version. The
+  capabilities probe now distinguishes "no audio backend" from "audio
+  backend, no advertised rate" and tells the latter to upgrade the daemon.
+  Covered by unit tests that fold **verbatim live caps frames** (with rate,
+  without rate, embed-only) so the two cannot silently collapse again.
+  Found by pointing the new bridge at the v0.6.1 GA daemon.
 
 - **An audio attachment at the wrong sample rate is now rejected instead
   of silently mis-decoded.** `Attachment::Audio::sample_rate` was declared
