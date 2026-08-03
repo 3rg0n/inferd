@@ -98,6 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected naming both rates. Audio had never run against a real model on
   any platform before this.
 
+### Changed
+
+- **The README and the landing site now say inferd does audio.** Both
+  described the daemon as multimodal but enumerated only vision — the
+  reference model has shipped an audio projector in the same mmproj the
+  installer already pulls, and the bridge takes `input_audio`, so the copy
+  understated what a fresh install does. Both surfaces now name vision
+  *and* audio, and both explain the rate contract (the backend advertises
+  one rate, a mismatch is rejected rather than resampled, because the
+  encoder cannot detect a wrong rate — it returns a fluent wrong answer)
+  along with the bridge as the way to avoid converting audio yourself.
+  Also fixes a `.callout-block` paragraph-spacing gap the site had never
+  hit, since every callout until this one was a single paragraph.
+
 ### Removed
 
 - **`crates-io` job dropped from `release.yml`.** It could not fail

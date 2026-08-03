@@ -23,14 +23,14 @@ every app on the machine shares one daemon instead of spawning its own.
 Since v0.3 the daemon picks the strongest available compute backend
 (Metal / CUDA / ROCm / Vulkan / CPU) at runtime from a single binary
 (ADR 0019), and ships multimodal by default — the reference Gemma 4
-model pulls its vision projector on first boot, so a fresh install
-answers questions about images with no extra config. As of v0.6 it can
-also **auto-select the model by accelerator memory** (ADR 0023 — Gemma 4
-12B when the accelerator has ≥ 20 GiB, else E4B), and an **OpenAI-compat
-HTTP bridge** (`inferd-http`, ADR 0020) ships in every release so any
-OpenAI-SDK client — including vision and structured-output requests — can
-point at inferd; the bridge is a separate process, the daemon itself
-stays IPC-only.
+model pulls its multimodal projector on first boot, so a fresh install
+answers questions about **images and speech** with no extra config. As of
+v0.6 it can also **auto-select the model by accelerator memory** (ADR 0023
+— Gemma 4 12B when the accelerator has ≥ 20 GiB, else E4B), and an
+**OpenAI-compat HTTP bridge** (`inferd-http`, ADR 0020) ships in every
+release so any OpenAI-SDK client — including vision, audio and
+structured-output requests — can point at inferd; the bridge is a separate
+process, the daemon itself stays IPC-only.
 
 ## Why
 
@@ -68,8 +68,19 @@ inference daemon; they connect to inferd.
 What ships today (v0.6):
 
 - **Local llama.cpp via FFI** (vendored `b9850`), Gemma 4 E4B as the
-  reference model — multimodal by default (vision projector pulled on
-  first boot) — with **Gemma 4 12B** support available.
+  reference model — multimodal by default (the projector pulled on first
+  boot carries **both** vision and audio) — with **Gemma 4 12B** support
+  available.
+- **Vision and audio input** on the generation wire: images as raw RGB,
+  speech as mono little-endian float32 PCM, each a BLOB-framed attachment
+  (ADR 0021). The daemon links no media codec (ADR 0016) — the consumer
+  decodes. For audio the consumer also owns **rate conversion**: the
+  backend advertises the one sample rate it accepts (`audio_sample_rate`
+  on the admin `capabilities` frame; 16 kHz for Gemma 4 E4B) and a
+  mismatch is rejected rather than resampled, because libmtmd's audio
+  entry point takes no rate argument — so the wrong rate would time-scale
+  the clip and return a fluent *wrong* answer instead of an error. Use the
+  `inferd-http` bridge if you'd rather not convert audio yourself.
 - **Runtime accelerator detection** (ADR 0019): one binary ships every
   ggml backend as a loadable module and picks the strongest at boot.
 - **Boot-time model auto-selection** (v0.6, ADR 0023): opt in with
@@ -94,10 +105,13 @@ What ships today (v0.6):
   `/v1/chat/completions` (streaming + non-streaming), `/v1/embeddings`
   (float + base64), `/v1/models`, and `/health`, and translates them to
   the daemon's IPC via `inferd-client`. Supports **vision** (OpenAI
-  `image_url` → decoded RGB attachment) and **structured output**
-  (`response_format` json_schema). Point OpenCode or any OpenAI-SDK client
-  at it. The daemon serves no HTTP itself (ADR 0006); this is a consumer,
-  not a privileged surface (ADR 0014).
+  `image_url` → decoded RGB attachment), **audio** (`input_audio` → decoded
+  wav/mp3, downmixed and **resampled** to the rate the daemon requires,
+  ADR 0025) and **structured output** (`response_format` json_schema).
+  Point OpenCode or any OpenAI-SDK client at it. The daemon serves no HTTP
+  itself (ADR 0006); this is a consumer, not a privileged surface
+  (ADR 0014) — and the only crate permitted to link MPL-2.0 code
+  (`symphonia`, for audio decode), which `deny.toml` enforces in CI.
 - **Cloud backend adapters** behind the same `Backend` trait —
   `openai-compat` (vLLM, LM Studio, LocalAI, llama.cpp's HTTP server,
   OpenAI/Anthropic) and `bedrock-invoke` — feature-gated, outbound
@@ -140,8 +154,9 @@ bundled per-user installer. **No elevation** on any platform — inferd
 runs as a per-user service (systemd `--user` / launchd LaunchAgent /
 Windows Startup-folder), stops at logout, and never touches a
 system-wide service. On first boot it writes `~/.inferd/config.json`
-and auto-pulls the reference model + embedding model + vision projector
-into the shared model store; watch with `inferdctl watch`.
+and auto-pulls the reference model + embedding model + multimodal
+projector (vision **and** audio) into the shared model store; watch with
+`inferdctl watch`.
 
 ### Linux
 

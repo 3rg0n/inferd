@@ -376,6 +376,9 @@ h1.display em {
   line-height: 1.6;
   font-weight: 300;
 }
+/* Multi-paragraph callouts (the multimodal one) need the same paragraph
+ * rhythm as .two-col; single-paragraph callouts are unaffected. */
+.callout-block p:not(.callout-label) + p { margin-top: 18px; }
 .callout-block .ext {
   font-family: var(--mono);
   font-size: 14px;

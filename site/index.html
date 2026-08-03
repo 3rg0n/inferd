@@ -197,7 +197,7 @@
     <aside class="callout callout-block">
       <p class="callout-label">New in v0.6</p>
       <p>
-        Point any OpenAI-SDK tool at inferd. <code>inferd-http</code> is a separate, user-launched bridge — bundled in every release — that speaks <code>/v1/chat/completions</code> and <code>/v1/embeddings</code> (streaming, embeddings, <strong>vision</strong> via <code>image_url</code>, and <strong>structured output</strong> via <code>response_format</code>) and translates them to the daemon's IPC. The daemon still serves no HTTP; the bridge is just another consumer. Plus <strong>Gemma 4 12B</strong> support and boot-time model auto-selection by accelerator memory. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0020-inferd-http-bridge-is-a-separate-process.md" class="ext">ADR 0020 ↗</a> · <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md" class="ext">ADR 0023 ↗</a>
+        Point any OpenAI-SDK tool at inferd. <code>inferd-http</code> is a separate, user-launched bridge — bundled in every release — that speaks <code>/v1/chat/completions</code> and <code>/v1/embeddings</code> (streaming, embeddings, <strong>vision</strong> via <code>image_url</code>, <strong>audio</strong> via <code>input_audio</code>, and <strong>structured output</strong> via <code>response_format</code>) and translates them to the daemon's IPC. The daemon still serves no HTTP; the bridge is just another consumer. Plus <strong>Gemma 4 12B</strong> support and boot-time model auto-selection by accelerator memory. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0020-inferd-http-bridge-is-a-separate-process.md" class="ext">ADR 0020 ↗</a> · <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md" class="ext">ADR 0023 ↗</a>
       </p>
     </aside>
 
@@ -232,7 +232,10 @@
     <aside class="callout callout-block">
       <p class="callout-label">Multimodal out of the box</p>
       <p>
-        The default model is Gemma 4, and inferd pulls its vision projector on first boot — no extra config. Send images as typed content blocks with their raw bytes in a BLOB frame; the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and answers questions about an image without any setup.
+        The default model is Gemma 4, and inferd pulls its multimodal projector on first boot — no extra config. That one projector carries <strong>vision and audio</strong>: send images or speech as typed content blocks with their raw bytes in a BLOB frame, and the daemon routes them through llama.cpp's multimodal pipeline. A fresh install reports <code>vision: true</code> and <code>audio: true</code> and answers questions about a picture or a voice clip without any setup.
+      </p>
+      <p>
+        Media codecs stay <em>out</em> of the daemon — the consumer decodes, which keeps an image parser off the privileged surface. For audio that also means the consumer owns rate conversion: the backend advertises the one sample rate it accepts (16 kHz for Gemma 4 E4B) and a mismatch is <strong>rejected, never resampled</strong>. That looks strict until you see why — the encoder's entry point takes no rate argument, so 44.1 kHz PCM isn't an error it can detect, it's a clip played 2.75× too fast and a fluent, confidently wrong transcript. A loud failure beats a plausible lie. Don't want to resample? Send it through the <code>inferd-http</code> bridge, which decodes and converts for you. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0016-consumer-decodes-media-before-sending.md" class="ext">ADR 0016 ↗</a> · <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0025-bridge-decodes-and-resamples-audio.md" class="ext">ADR 0025 ↗</a>
       </p>
     </aside>
   </div>
