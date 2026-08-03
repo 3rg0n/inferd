@@ -1,0 +1,99 @@
+crates/inferd-proto/src/v2/attachment.rs
+  s_126aec4081f728::t_42d5fe27953545 54-56
+  s_126aec4081f728::t_b129005e2e50dd 67-70,75-79,81-82,86
+crates/inferd-http/src/config.rs
+  s_126aec4081f728::t_015b9eb3afdfc2 69-70
+  s_126aec4081f728::t_3dcfa6840b539d 109-114
+  s_126aec4081f728::t_e52261df60aa5e 39-45
+  s_126aec4081f728::t_4c9756ec7e3526 88-92
+crates/inferd-http/src/translate.rs
+  s_126aec4081f728::t_48ffaaf220a56e 220,228-231,234-235,248-286
+  s_126aec4081f728::t_ddcd1793c89b95 128-139,146,148-150,152-156
+  s_126aec4081f728::t_b366ebc2494445 72-77
+  s_126aec4081f728::t_83b1cb7018b4f3 24
+  s_126aec4081f728::t_03ffb8ee90bf1c 88-102
+  s_126aec4081f728::t_7b9d9cfc4cd553 56-71,78-79
+  s_126aec4081f728::t_ce08deb728308d 184-186
+  s_126aec4081f728::t_a7b8e84585074f 643,751,980,1008,1086,1113-1287
+  s_126aec4081f728::t_12981fe2a55548 287-288
+  s_126aec4081f728::t_e72ee881c666c9 620,668,712,913,957,1034,1059,1109,1309
+docs/adr/README.md
+  s_126aec4081f728::t_72c5d1de9321f6 32
+.github/workflows/ci.yml
+  s_126aec4081f728::t_1c8871f8ffce51 214-229
+crates/inferd-client/src/lib.rs
+  s_126aec4081f728::t_8cf9842686cf08 121
+crates/inferd-http/README.md
+  s_126aec4081f728::t_449fbaaab98ac5 91-94
+  s_126aec4081f728::t_a4a22a45f47205 17-18
+  s_126aec4081f728::t_2558c6523b1656 175-177
+  s_126aec4081f728::t_e923ca401925f7 59-90,95-105,115-121
+  s_126aec4081f728::t_8cd4df936045eb 122
+deny.toml
+  s_126aec4081f728::t_6487c4263920d5 1-100
+crates/inferd-openai-wire/src/lib.rs
+  s_126aec4081f728::t_dc5b100bb1142d 173-178,192-196
+  s_126aec4081f728::t_a710af1461aa13 218-233
+  s_3f706e3f4b4643::t_e8b71a3101cfbf 197
+crates/inferd-http/src/handlers.rs
+  s_126aec4081f728::t_f1b1bfc5409ea4 518-579
+  s_126aec4081f728::t_5a2917d02c0ace 387-402,429
+  s_126aec4081f728::t_9c91701a42092a 376-386,421-428,430-439,441-444,446,448-452,454-472
+  s_126aec4081f728::t_a4cc13b3956dee 21-22
+  s_126aec4081f728::t_49c0f21a50fb08 140-152
+  s_126aec4081f728::t_ae19385b12d0e3 403-420
+  s_126aec4081f728::t_277147e021c10a 440,445,453
+  s_126aec4081f728::t_205cbdb3f3859f 131-139,153-158,160
+  s_126aec4081f728::t_d06710693d812b 447
+CHANGELOG.md
+  s_126aec4081f728::t_c508025c802de7 52-61
+  s_126aec4081f728::t_fffd5e0850bd07 74-84
+  s_126aec4081f728::t_b26b24ead13bd6 18-51
+docs/adr/0025-bridge-decodes-and-resamples-audio.md
+  s_126aec4081f728::t_ae1e6c8a8b4d97 1-170
+docs/protocol-v2.md
+  s_126aec4081f728::t_c76808956ed724 307-311
+docs/v0.6-validation.md
+  s_126aec4081f728::t_42f453bf95f18a 423-477
+crates/inferd-http/Cargo.toml
+  s_126aec4081f728::t_3ceece836fe473 43-53
+crates/inferd-http/src/audio_decode.rs
+  s_126aec4081f728::t_089a0194f3c253 1-37,41-498
+  s_126aec4081f728::t_ce98d571fd9f7f 38-40
+  s_126aec4081f728::t_ee9462141be0ba 499-501
+  s_126aec4081f728::t_10274aeddbff1a 502-503
+CLAUDE.md
+  s_126aec4081f728::t_9559fa64fbb15a 71,165
+  s_126aec4081f728::t_ae47f96a4c3318 111
+  s_126aec4081f728::t_434418193c349d 159,164
+crates/inferd-http/src/main.rs
+  s_126aec4081f728::t_04fed8d32ed303 18
+  s_126aec4081f728::t_75f7db7619d552 65-67
+  s_126aec4081f728::t_4dcde2f91291d8 42,53
+Cargo.lock
+  s_126aec4081f728::t_1580e05c9270de 134-170,523-528,1138,1142,1388-1405,1519-1527,1648-1656,1689-1694,1756-1771,1778-1791,2055-2060,2073-2146,2448-2457,2540-2550,2724-2732
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c3b61837125ee9a5e50c4b1479f4b714e1c1f9de",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
