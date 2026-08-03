@@ -1,0 +1,30 @@
+site/style.css
+  s_126aec4081f728::t_567bdc1a7c85a1 379-381
+CHANGELOG.md
+  s_126aec4081f728::t_e37f83ee2a877e 101-114
+README.md
+  s_126aec4081f728::t_15e4f86cb683fe 71-83
+  s_126aec4081f728::t_37063317ad0c06 26-33
+  s_126aec4081f728::t_c333c11f4d1e9f 157-159
+  s_126aec4081f728::t_41b9c4ae9e616d 108-114
+site/index.html
+  s_126aec4081f728::t_c8bd512ab414a1 235-237
+  s_126aec4081f728::t_f62c6c2e31ac40 200
+  s_126aec4081f728::t_8bcefbc2ecb9c5 238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "97ec1865c3cd7f8811d003b0678fd0197da1360f",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
