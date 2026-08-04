@@ -123,6 +123,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would pass CI, and points at the manual per-platform runs in
   `docs/v0.6-validation.md` as the evidence of record until those
   assertions are tightened. Documentation only; no test behaviour changed.
+- **Install snippets in `README.md` pointed at `v0.5.0` tarballs.** The
+  status badge said v0.6.1 while all three snippets (Linux, macOS,
+  Windows) named `inferd-v0.5.0-*` archives, so a reader copy-pasting the
+  documented install hit a 404 — and because the README ships *inside*
+  every release tarball, the stale copy was in the artifacts too. Root
+  cause was that `docs/RELEASING.md` §2 never mentioned the user-facing
+  version strings that aren't derived from `Cargo.toml`; it now lists them
+  (README status line + three snippets, `site/index.html` masthead /
+  download button / snippets / colophon) with a verify grep against the
+  previous version, so the drift can't repeat silently. The README's
+  Layout tree was also two crates out of date (`inferd-openai-wire`,
+  `inferd-http`) and pointed at the superseded `protocol-v1.md`.
+- **The published crate READMEs now document the attachment contract.**
+  `inferd-proto` is the canonical cross-language schema reference and
+  mentioned images once and audio never; it now specifies both variants'
+  descriptor fields and BLOB payload layout, that audio is **explicitly
+  little-endian** float32 rather than native-endian (which happens to work
+  on every platform inferd ships and would be a latent bug on a big-endian
+  consumer), and the rate contract. `inferd-client` gained a worked
+  attachment example plus how to read `audio_sample_rate` off the admin
+  socket instead of hardcoding it. `inferd-engine` documents that a
+  capability *requirement* left unadvertised is a silent-wrong-output bug,
+  and `inferd-daemon`'s invariant list gained the F-1 attachment bounds,
+  the F-17 write timeout, and the no-codec rule — all shipped, none
+  written down here. Documentation only.
 
 ### Removed
 

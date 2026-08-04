@@ -43,9 +43,23 @@ on `main` before tagging.
 
 In one commit:
 
-- Bump every workspace crate to `X.Y.Z` in `Cargo.toml`.
+- Bump every workspace crate to `X.Y.Z` in `Cargo.toml`. Remember the
+  ~10 internal `version = "="` path-dep pins do **not** inherit the
+  workspace version: `grep -rn 'version = "=' --include=Cargo.toml
+  crates/`, then `cargo update -w` for the lockfile.
 - Promote `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in
   `CHANGELOG.md`. Leave a fresh empty `## [Unreleased]` above it.
+- **Update the user-facing version strings that are not derived from
+  `Cargo.toml`** — nothing generates these, so they drift silently and
+  a reader copy-pastes a 404:
+  - `README.md` — the `**Status: vX.Y.Z.**` line *and* the tarball /
+    zip filenames in the three Install snippets (Linux, macOS,
+    Windows). These went stale for a full minor cycle because this
+    step didn't exist.
+  - `site/index.html` — the masthead version, the "Download" button
+    label, the three install snippets, and the colophon status.
+  - Then verify: `grep -rn "vX\.Y\.Z-1" README.md site/index.html`
+    should return nothing (substitute the *previous* version).
 - Run `cargo fmt --all && cargo clippy --all-targets --all-features
   -- -D warnings && cargo test --all` and commit the result.
 

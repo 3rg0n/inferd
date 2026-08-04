@@ -73,6 +73,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Attachments (vision + audio)
+
+Put the decoded bytes in `RequestV2::attachments`, then reference each
+one by `id` from a content block. `generate()` splits them for you: the
+request JSON frame carries only metadata, and each attachment's bytes
+follow as a `BlobDescriptor` + BLOB frame pair (ADR 0021). The daemon
+links no media codec ([ADR 0016](https://github.com/3rg0n/inferd/blob/main/docs/adr/0016-consumer-decodes-media-before-sending.md)),
+so "decoded" is literal — raw RGB, never a PNG; float32 PCM, never a WAV.
+
+```rust,ignore
+use inferd_client::{Attachment, ContentBlock, MessageV2, RequestV2, RoleV2};
+
+let req = RequestV2 {
+    id: "vision-1".into(),
+    attachments: vec![
+        // width * height * 3 interleaved RGB octets, no alpha.
+        Attachment::Image { id: "img-1".into(), width, height, bytes: rgb },
+        // Mono little-endian float32 PCM at the *advertised* rate.
+        Attachment::Audio { id: "clip-1".into(), sample_rate: rate, bytes: pcm },
+    ],
+    messages: vec![MessageV2 {
+        role: RoleV2::User,
+        content: vec![
+            ContentBlock::Image { attachment_id: "img-1".into() },
+            ContentBlock::Audio { attachment_id: "clip-1".into() },
+            ContentBlock::Text { text: "Describe the image, then transcribe the clip.".into() },
+        ],
+    }],
+    ..Default::default()
+};
+```
+
+**Audio: read the sample rate, don't hardcode it.** The daemon rejects
+an `Attachment::Audio` whose `sample_rate` differs from what the loaded
+backend requires, and never resamples — libmtmd's audio entry point
+takes no rate argument, so a wrong rate isn't a detectable error, it
+time-scales the clip and returns a fluent *wrong* answer. Get the rate
+from the admin socket's `capabilities` event:
+
+```rust,ignore
+// AdminEvent { status: "capabilities", audio_sample_rate: Some(16000), .. }
+let rate = event.audio_sample_rate.expect("backend advertises no audio rate");
+```
+
+Re-read it after a daemon restart; a restart can land on a different
+projector. Resampling is the consumer's job — `inferd-http` is the
+reference implementation ([ADR 0025](https://github.com/3rg0n/inferd/blob/main/docs/adr/0025-bridge-decodes-and-resamples-audio.md)),
+so point an OpenAI SDK at the bridge if you'd rather not own conversion.
+
+Per-request bounds: 32 attachments and 128 MiB aggregate, separate from
+the 64 MiB single-frame cap.
+
 ## Transports
 
 | Constructor | Platform |

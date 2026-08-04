@@ -32,6 +32,40 @@ The text-only v1 types (`Request`/`Response`/`Resolved`/`Role`/
 `Message`/`StopReason`/`Usage`/`ImageTokenBudget`) were removed in v0.4
 when v1 was folded into v2.
 
+## Attachments carry decoded bytes, not encoded files
+
+The daemon links no image or audio codec ([ADR 0016](https://github.com/3rg0n/inferd/blob/main/docs/adr/0016-consumer-decodes-media-before-sending.md)),
+so an `Attachment` is always already-decoded samples in a BLOB frame —
+never a PNG, JPEG, WAV or MP3. Two forms:
+
+| Variant | Descriptor fields | BLOB payload |
+|---|---|---|
+| `Attachment::Image` | `id`, `width`, `height` | raw RGB, `width * height * 3` bytes |
+| `Attachment::Audio` | `id`, `sample_rate` (Hz) | mono **little-endian float32** PCM samples |
+
+Two contracts a client must get right, because neither fails safe:
+
+- **Endianness is explicit, not native.** Audio samples are
+  little-endian on every platform. Encoding with native byte order
+  happens to work on x86_64 and arm64 and would ship a latent bug for
+  a big-endian consumer.
+- **`sample_rate` MUST equal the backend's advertised
+  `audio_sample_rate`**, read off the admin `capabilities` frame (16000
+  for the reference Gemma 4 E4B mmproj). The daemon **rejects** a
+  mismatch and never resamples: libmtmd's audio entry point takes no
+  rate argument, so the wrong rate is not a detectable error — it
+  time-scales the clip and yields a fluent *wrong* answer. Read the
+  rate per request rather than caching it; a daemon restart can land on
+  a different mmproj.
+
+Per-request bounds (v0.6.1): 32 attachments and 128 MiB of them
+aggregate, independent of the 64 MiB single-frame cap.
+
+Converting encoded media is the consumer's job. `inferd-http` is the
+reference implementation — it decodes wav/mp3, downmixes to mono, and
+resamples to whatever rate the daemon reports
+([ADR 0025](https://github.com/3rg0n/inferd/blob/main/docs/adr/0025-bridge-decodes-and-resamples-audio.md)).
+
 ## Versioning
 
 The generation (v2) wire is **frozen** as of

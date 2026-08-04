@@ -7,7 +7,7 @@ multimodal via mtmd + embeddings), `mock` (tests), and the
 feature-gated cloud adapters `openai-compat` and `bedrock-invoke`
 (outbound HTTPS only, ADR 0006).
 
-**Status: shipping (v0.5).** With the `dl-backends` feature (ADR 0019)
+**Status: shipping (v0.6).** With the `dl-backends` feature (ADR 0019)
 each ggml backend (CPU / Metal / CUDA / Vulkan / ROCm) builds as a
 loadable module and the strongest available is selected at runtime.
 The trait carries `generate_v2` (typed content blocks / attachments /
@@ -18,6 +18,21 @@ v0.4 when v1 folded into v2 (ADR 0021). As of v0.5, `generate_v2`
 honours `response_format` (a JSON Schema) by compiling it to a GBNF
 grammar so output is constrained to match the schema (ADR 0013).
 
-See `../../docs/adr/` (0005 FFI, 0013 gateway shaping, 0015 v2, 0017
-embeddings, 0019 runtime accelerator) for the design each adapter
-satisfies.
+## Capabilities are advertised, not assumed
+
+`BackendCapabilities` is how the daemon learns what the loaded model
+can do — `vision`, `audio`, `embed`, `tools`, `thinking` — and it is
+also how a *requirement* reaches the consumer. `audio_sample_rate`
+carries the one rate the loaded projector accepts (16000 for the
+reference Gemma 4 E4B mmproj); the `llamacpp` adapter **rejects** an
+`Attachment::Audio` at any other rate and never resamples, because
+libmtmd's audio entry point takes no rate argument — feeding it the
+wrong rate time-scales the clip and produces a fluent wrong answer
+rather than a detectable error (ADR 0016). Adapters that add a modality
+must advertise it *and* any such requirement; a capability left
+unadvertised is unreachable, and a requirement left unadvertised is a
+silent-wrong-output bug.
+
+See `../../docs/adr/` (0005 FFI, 0013 gateway shaping, 0015 v2, 0016
+consumer decodes media, 0017 embeddings, 0019 runtime accelerator) for
+the design each adapter satisfies.

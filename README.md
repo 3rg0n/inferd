@@ -136,12 +136,16 @@ inferd/
 │   ├── inferd-proto/       # wire format, published to crates.io
 │   ├── inferd-engine/      # backend trait + adapters
 │   ├── inferd-client/      # Rust client, published to crates.io
+│   ├── inferd-openai-wire/ # OpenAI wire types, shared by both directions
+│   ├── inferd-http/        # OpenAI-compat bridge binary (separate process)
 │   └── inferd/             # `inferdctl` CLI binary: status / watch / pull / doctor
 ├── clients/
-│   └── go/                 # hand-written Go client
+│   └── go/                 # hand-written Go client (py/ts are README stubs)
+├── packaging/              # the per-user installers install=work exercises
 ├── docs/
-│   ├── plan-v0.1.md
-│   ├── protocol-v1.md
+│   ├── protocol-v2.md      # normative wire spec (protocol-v1.md is history)
+│   ├── test-strategy.md
+│   ├── RELEASING.md
 │   └── adr/
 └── context.md              # "what is this, why are we building it"
 ```
@@ -161,8 +165,8 @@ projector (vision **and** audio) into the shared model store; watch with
 ### Linux
 
 ```sh
-tar xzf inferd-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
-cd inferd-v0.5.0-x86_64-unknown-linux-gnu
+tar xzf inferd-v0.6.1-x86_64-unknown-linux-gnu.tar.gz
+cd inferd-v0.6.1-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin ~/.config/systemd/user
 cp -f inferd-daemon inferdctl ~/.local/bin/
 cp -f backends/* ~/.local/bin/            # ggml backend modules ($ORIGIN RPATH)
@@ -206,8 +210,8 @@ and run `wsl.exe --shutdown` from Windows.
 ### macOS (Apple Silicon)
 
 ```sh
-tar xzf inferd-v0.5.0-aarch64-apple-darwin.tar.gz
-cd inferd-v0.5.0-aarch64-apple-darwin
+tar xzf inferd-v0.6.1-aarch64-apple-darwin.tar.gz
+cd inferd-v0.6.1-aarch64-apple-darwin
 ./packaging/launchd/install-launchagent.sh ./inferd-daemon
 inferdctl watch
 ```
@@ -219,8 +223,8 @@ bootstraps it. The probe picks Metal on Apple Silicon.
 ### Windows
 
 ```powershell
-Expand-Archive inferd-v0.5.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-cd inferd-v0.5.0-x86_64-pc-windows-msvc
+Expand-Archive inferd-v0.6.1-x86_64-pc-windows-msvc.zip -DestinationPath .
+cd inferd-v0.6.1-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
     -SourceBinary .\inferd-daemon.exe
 inferdctl watch
