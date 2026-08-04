@@ -1,0 +1,65 @@
+CHANGELOG.md
+  s_126aec4081f728::t_85af5c2f9a28cc 74-92
+  s_126aec4081f728::t_4ba9bcac3decc0 124
+  s_9b8d68f5aabdc1::t_1e0c78d62be7a3 122-123,125-171
+crates/inferd-engine/tests/llamacpp.rs
+  s_126aec4081f728::t_4f0777e3a4a7f6 55
+crates/inferd-daemon/src/autoselect.rs
+  s_5cd1b28ed520c1::t_014de4cc4675e8 124-125,153-154,272-273
+crates/inferd-daemon/src/config.rs
+  s_5cd1b28ed520c1::t_8b95e506812947 165-174
+crates/inferd-daemon/src/config_file.rs
+  s_5cd1b28ed520c1::t_02d844471b0ed7 279-295,544-547,570-573,828-830
+crates/inferd-daemon/src/main.rs
+  s_5cd1b28ed520c1::t_1a06d55600c62b 635-647,1130-1133,1189-1193
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_5cd1b28ed520c1::t_1ce82ded8cfa8d 27-30,77-103,156-164,181,219-224,439-450,503,535-614,703-712,714,719-723,734-742
+crates/inferd-engine/src/llamacpp/chat_template/gemma4.rs
+  s_126aec4081f728::t_8515d600d8c4f7 50,55,64-69,71,157,174,196,261
+crates/inferd-engine/src/llamacpp/chat_template/granite.rs
+  s_5cd1b28ed520c1::t_2fde4f11fdacf2 1-171
+crates/inferd-engine/src/llamacpp/chat_template/mod.rs
+  s_5cd1b28ed520c1::t_938d29fc4d0cfa 3-8,10-11,13-40,43-384,386-392
+crates/inferd-engine/src/llamacpp/mod.rs
+  s_5cd1b28ed520c1::t_7f5343bd97c4a3 24-26
+crates/inferd-engine/src/llamacpp/mtmd.rs
+  s_5cd1b28ed520c1::t_62bebd293ed0dc 484-486
+crates/inferd-engine/tests/chat_template_gemma4.rs
+  s_5cd1b28ed520c1::t_a612bef8c59887 13
+crates/inferd-engine/tests/chat_template_granite.rs
+  s_5cd1b28ed520c1::t_e22c6f81202cd6 1-325
+docs/adr/0026-chat-renderer-registry-per-model-family.md
+  s_5cd1b28ed520c1::t_47999b07294ba1 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "05c3c2658a9d16e143dfa80d2bc501bc12259176",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_5cd1b28ed520c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82e2267c-23d5-4c0c-8d96-7d91a00e70c4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
