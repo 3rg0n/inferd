@@ -1,0 +1,45 @@
+crates/inferd-engine/tests/llamacpp.rs
+  s_126aec4081f728::t_26618ebc9ab8f4 212-217,226-229
+  s_126aec4081f728::t_fbe35d30092cda 148-187,189,203,205-211,218-225
+crates/inferd-engine/src/llamacpp/mtmd.rs
+  s_126aec4081f728::t_6c2bc6275591ae 200-204
+  s_126aec4081f728::t_492494533f0faf 16-24
+  s_126aec4081f728::t_fe2e06a9d5944c 193-199
+  s_15b6464673ef8b::t_39c5c00cdc6fcd 91-99,102-104,160,162-168,170,206-209
+CHANGELOG.md
+  s_126aec4081f728::t_1422d43c51753d 87-131
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_f6c0b1ac81cb95::t_4f244b9725c05a 187-197,200-202,311-333,335,338-339,347-348,415-420,424,435-438,453-455,519-522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "70785f80611343804d174d6bd2f7d561b2594fde",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_15b6464673ef8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0488aaa5-b1a9-4922-a6c3-1bef91271e93",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_f6c0b1ac81cb95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "151935e3-d249-47ab-b987-1ee88cf9798f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
