@@ -29,6 +29,17 @@ config; it is the contract that the CI config implements.
   cap behaviour, request validation, queue admission logic,
   lock-file symlink rejection, log redactor patterns,
   router policy choose-fn (with mock backends).
+- **`inferd-http` is covered here too**, since `--all` includes
+  it: OpenAI→v2 request translation, the audio decode path
+  (`audio_decode.rs` — wav/mp3 decode, stereo→mono downmix,
+  resample in both directions, the `MAX_PCM_BYTES` budget
+  checked *before* the resample allocates, and rejection of
+  non-audio and zero-length input), and the admin-socket rate
+  probe's fold over capabilities frames. These need no model
+  and no daemon: the decoder is fed synthesised WAV bytes and
+  the probe is fed synthetic `AdminEvent`s. The end of that
+  path — a decoded clip actually transcribed by a warm model —
+  is Tier 3 plus the manual runs noted there.
 
 ### Tier 2 — daemon integration with `mock` backend
 
@@ -57,10 +68,30 @@ config; it is the contract that the CI config implements.
 - Exercises: real inference round-trip, GBNF grammar
   enforcement (assert constrained output structure),
   cancellation propagation through the C++ generation loop,
-  multi-request serialisation through the queue, and the
+  multi-request serialisation through the queue, the
   embed FFI path (dedicated context, MEAN pooling, MRL
   truncation, L2 renormalisation, all 8 EmbeddingGemma task
-  prefixes).
+  prefixes), and the multimodal attachment paths — an image
+  (raw RGB) and an audio clip (mono LE-f32 PCM at the
+  backend's advertised `audio_sample_rate`) each reaching
+  libmtmd and influencing the output.
+
+**The multimodal paths are Tier-3-only, and the committed tests
+under-assert them.** A mismatched-rate audio attachment is
+rejected by shared (non-FFI) code, so
+`check_audio_sample_rate`'s unit tests
+(`llamacpp/backend.rs:1360-1377`) hold on every platform. But
+whether a *correct* attachment actually produces a *correct*
+answer cannot be asserted without a real model and mmproj — and
+the committed test only checks that `input_tokens` rose, never
+the content. So a regression that garbles an image or
+time-scales a clip would still pass CI. Both paths were
+therefore verified by hand against verbatim expected strings on
+Windows/CUDA, macOS/Metal and Linux/CPU; those runs are recorded
+in `docs/v0.6-validation.md`, which is the evidence of record
+until the assertions are tightened. Treat a change to
+`build_bitmap`, the mmproj load, or the attachment ordering as
+requiring a manual re-run.
 
 ### Tier 4 — cross-language wire validation
 

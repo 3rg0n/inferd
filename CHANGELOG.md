@@ -111,6 +111,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   along with the bridge as the way to avoid converting audio yourself.
   Also fixes a `.callout-block` paragraph-spacing gap the site had never
   hit, since every callout until this one was a single paragraph.
+- **`docs/test-strategy.md` now describes the multimodal and bridge test
+  coverage it had been silent about.** Tier 1 never mentioned
+  `inferd-http` even though `cargo test --all` has always run its 51 tests
+  (translation, audio decode/downmix/resample, the `MAX_PCM_BYTES` budget,
+  the admin rate probe), and Tier 3's "exercises" list named grammar,
+  cancellation, queue and embed but neither vision nor audio — the two
+  paths that *only* exist at Tier 3. It now also states plainly that the
+  committed multimodal test asserts `input_tokens` rose and never checks
+  content, so a regression that garbles an image or time-scales a clip
+  would pass CI, and points at the manual per-platform runs in
+  `docs/v0.6-validation.md` as the evidence of record until those
+  assertions are tightened. Documentation only; no test behaviour changed.
 
 ### Removed
 
