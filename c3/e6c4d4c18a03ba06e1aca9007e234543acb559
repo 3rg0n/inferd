@@ -1,0 +1,26 @@
+CHANGELOG.md
+  s_126aec4081f728::t_7ea16e43815d6c 147-159,163-170
+  s_126aec4081f728::t_79207fc40f0105 171-177
+  s_126aec4081f728::t_ce602526332733 131-146
+  s_126aec4081f728::t_684377abbdfa01 160-162
+docs/v0.6-validation.md
+  s_126aec4081f728::t_7ea16e43815d6c 540-603
+  s_126aec4081f728::t_029da6c6bfad90 475-478
+  s_126aec4081f728::t_e01c44caf71e66 604-616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c3e6c4d4c18a03ba06e1aca9007e234543acb559",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
