@@ -1,0 +1,164 @@
+crates/inferd-daemon/src/autoselect.rs
+  s_126aec4081f728::t_9453f0cc62a743 157-160,167-171,173
+  s_126aec4081f728::t_a141a9c072fd90 284-286
+  s_126aec4081f728::t_aea75556254cd9 124-127
+crates/inferd-proto/README.md
+  s_126aec4081f728::t_df52e13471e76c 10-13
+  s_126aec4081f728::t_fe44580473b73f 76-90,95-96
+  s_126aec4081f728::t_6593600307b2a4 26-31,34-35
+docs/adr/0027-reranking-on-a-fourth-socket.md
+  s_126aec4081f728::t_924ae8836836ac 1-374
+crates/inferd-engine/tests/openai_compat.rs
+  s_126aec4081f728::t_dfb956a540c941 68
+CHANGELOG.md
+  s_126aec4081f728::t_218f1562e51b37 12-50,58-74
+  s_126aec4081f728::t_65cd0f184c0832 51-57
+docs/adr/README.md
+  s_126aec4081f728::t_fbf049fbf59768 34-35
+crates/inferd-client/README.md
+  s_126aec4081f728::t_a33b38875a9141 243-244
+  s_126aec4081f728::t_638aaf4ee78095 135-183,192-193
+  s_126aec4081f728::t_f1339b83b2a406 6,10-18
+  s_126aec4081f728::t_f972e9b0bfceeb 218-222,224-228
+crates/inferd-client/src/rerank_client.rs
+  s_126aec4081f728::t_e663eb1d5a74dc 1-366
+crates/inferd-daemon/src/router.rs
+  s_126aec4081f728::t_46fc3800db9932 217-224
+crates/inferd-daemon/src/main.rs
+  s_126aec4081f728::t_1329206c69a765 1226-1227
+  s_126aec4081f728::t_a63e6e7b8f00c9 1287-1290
+  s_126aec4081f728::t_35a15f6a39faeb 266-273
+  s_126aec4081f728::t_19efdbaa12f675 328-332
+  s_126aec4081f728::t_7404793d354cac 209-211,219
+  s_126aec4081f728::t_64a35985318bed 184-192,220-223
+  s_126aec4081f728::t_a0794314a5e785 400-456
+  s_126aec4081f728::t_f9da048e22b08d 721-730
+  s_126aec4081f728::t_587ed86d4eaf89 164
+crates/inferd-daemon/README.md
+  s_126aec4081f728::t_9e65c702668752 6-14
+  s_126aec4081f728::t_ef7b91ed0e1df2 28-29,32-37
+crates/inferd/src/main.rs
+  s_126aec4081f728::t_05f8a416af09ff 414,421-422
+  s_126aec4081f728::t_a42331ed981ef8 541-543
+clients/go/addr.go
+  s_126aec4081f728::t_8e1fdd3afc121d 10-11,13-15
+  s_126aec4081f728::t_2bd77244f1f12a 61-71
+clients/go/README.md
+  s_126aec4081f728::t_4e6931bb191d29 254,261-267
+  s_9b8d68f5aabdc1::t_1d9990d5c733bc 268
+crates/inferd-proto/src/rerank/response.rs
+  s_126aec4081f728::t_7fb65b688a9767 1-197
+crates/inferd-engine/src/openai_compat/adapter.rs
+  s_126aec4081f728::t_fc82877edd319c 169-172
+crates/inferd-daemon/tests/rerank.rs
+  s_126aec4081f728::t_893708fffbe185 1-35,37-152,156-201,205-324,326-698
+  s_126aec4081f728::t_4be78fd1eb9d0d 325
+  s_126aec4081f728::t_4b201d5e3fd530 36,153-155,202-204
+crates/inferd-engine/src/lib.rs
+  s_126aec4081f728::t_44fd08e229e1ff 33
+crates/inferd-client/src/lib.rs
+  s_126aec4081f728::t_a1e06d0362cd04 163,170
+  s_126aec4081f728::t_f4661a1822104a 111-155
+  s_126aec4081f728::t_e058bd82f6210c 196-204
+clients/go/admin.go
+  s_126aec4081f728::t_21560ace70f7df 67-74
+  s_126aec4081f728::t_1c645662c97195 109-116
+README.md
+  s_126aec4081f728::t_cb38ad4d69aef0 91,94-103
+  s_126aec4081f728::t_c7e1987b81827a 49-50
+crates/inferd-engine/src/bedrock_invoke/adapter.rs
+  s_126aec4081f728::t_f367ceb8b02f5a 292
+clients/go/client_v2_test.go
+  s_126aec4081f728::t_28e69c85d6c0f9 283-318
+crates/inferd-daemon/src/endpoint.rs
+  s_126aec4081f728::t_33b719545960ba 312-317
+  s_126aec4081f728::t_59c995ea86f4dc 118-145
+docs/protocol-v2.md
+  s_126aec4081f728::t_5700e8aa03395c 48-60
+  s_126aec4081f728::t_33256435239bd3 622
+  s_126aec4081f728::t_2fa2c54ef3e250 635
+  s_126aec4081f728::t_6419ab6022f981 641-642
+  s_126aec4081f728::t_bf07608f5afa67 527-606,609-611
+  s_126aec4081f728::t_fa8930df9fcc63 1,8,11-12
+  s_126aec4081f728::t_53e08f269e993c 26,29-30,33-46
+  s_126aec4081f728::t_cf95655dadc198 47
+crates/inferd-client/src/admin.rs
+  s_126aec4081f728::t_32358b5803da23 273-297
+  s_126aec4081f728::t_9b423ef0b75748 102-112
+crates/inferd-daemon/src/config_file.rs
+  s_126aec4081f728::t_fa5a93854e898a 601-605
+  s_126aec4081f728::t_93d8a757bdd254 864-867
+  s_126aec4081f728::t_cd116a6909c511 438-441
+  s_126aec4081f728::t_6cc9540ebdf76b 280-302
+  s_126aec4081f728::t_94184266723b73 571-574
+crates/inferd-daemon/src/admin.rs
+  s_126aec4081f728::t_86fba9f81e83fd 346,390,447,463
+crates/inferd-daemon/src/config.rs
+  s_126aec4081f728::t_fc6d788032e3b6 165-186
+  s_126aec4081f728::t_68f57ae68b7470 290-303
+crates/inferd-engine/src/backend.rs
+  s_126aec4081f728::t_5e88bb5e56a95d 364-376
+  s_126aec4081f728::t_fa2de3874188c5 5
+  s_126aec4081f728::t_9a3244f2623ef1 247-291
+  s_126aec4081f728::t_baccf5d45470a9 183-193
+crates/inferd-daemon/src/status.rs
+  s_126aec4081f728::t_1f98251c5c703c 234
+  s_126aec4081f728::t_ad293593ea2a1f 80-88,266
+  s_126aec4081f728::t_d0fb3a60dedda4 267-287
+crates/inferd-engine/README.md
+  s_126aec4081f728::t_8a9e14cd090428 6-8
+  s_126aec4081f728::t_355523a11c3e5d 14-41
+  s_126aec4081f728::t_45c24ce2c0fbd4 46
+  s_126aec4081f728::t_37799ee55b04f6 59-60
+docs/test-strategy.md
+  s_126aec4081f728::t_03b7659909e94f 68-83,92-95,99-109
+  s_126aec4081f728::t_522c88ce8ee309 208-210
+  s_126aec4081f728::t_0916a4a8bb7e5a 49,56-62,110
+crates/inferd-proto/src/rerank/mod.rs
+  s_126aec4081f728::t_4b201d5e3fd530 35
+  s_126aec4081f728::t_acadcea8070f25 1-34,36
+crates/inferd-engine/src/mock.rs
+  s_126aec4081f728::t_4b201d5e3fd530 13-14,18,114-117,123,220-286
+crates/inferd-proto/src/rerank/request.rs
+  s_126aec4081f728::t_ff466c1444eec0 1-196,200-206,211-236,241-272
+  s_126aec4081f728::t_4b201d5e3fd530 197-199,207-210,237-240
+crates/inferd-daemon/src/lifecycle_rerank.rs
+  s_126aec4081f728::t_32aa9cdda023eb 1-351
+crates/inferd-engine/src/llamacpp/backend.rs
+  s_126aec4081f728::t_4b201d5e3fd530 24,37,105-118,171-190,216-217,387-394,415-439,613-677,691,849-999,1032,1034,1058,1141-1154,1845-1936,1939-1960,2005-2050
+  s_126aec4081f728::t_107414dcf0dd8d 1937-1938
+docs/adr/0028-airgapped-build-profile.md
+  s_126aec4081f728::t_6f899ac19aa208 1-309
+crates/inferd-daemon/src/lib.rs
+  s_126aec4081f728::t_7e1aee2ccc2bed 23
+crates/inferd-engine/tests/rerank_llamacpp.rs
+  s_126aec4081f728::t_4b201d5e3fd530 131,150-156,160-161,181-185
+  s_126aec4081f728::t_1a0b70c478486c 1-130,132-149,157-159,162-180,186-382
+crates/inferd-proto/src/lib.rs
+  s_126aec4081f728::t_1c0dc9eb397a58 12-16
+  s_126aec4081f728::t_253e44e2f1bf6b 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "a4f2e38a95dd4d5ea79cee5c453fe31317d538f0",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
