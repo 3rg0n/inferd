@@ -84,12 +84,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same file calls "mandatory, not optional" for prefill/templating/FFI
   changes — and it was found only by running Tier 3 to verify unrelated
   work. Fixed by adding the missing field.
-  - Separately noted, not fixed: `cargo test -p inferd-engine --features
-    llamacpp-integration` exits `0xc0000005` (STATUS_ACCESS_VIOLATION) on
-    Windows during `~llama_context` teardown, *after* every test reports
-    `ok`. Confirmed pre-existing by reproducing it on a clean tree with
-    only the compile fix applied, so it is not a regression from anything
-    in this release; it needs its own investigation.
+- **Use-after-free of the `llama_model` at teardown** (issue #202). Every
+  C handle derived from a loaded model reads back through it when it is
+  destroyed: `llama_context` stores `const llama_model & model`
+  (`llama-context.h:276`) and its destructor dereferences
+  `model.hparams.no_alloc` plus the ggml scheduler buffers hanging off it
+  (`llama-context.cpp:420`), and `mtmd_context` caches
+  `llama_model_get_vocab(text_model)` (`tools/mtmd/mtmd.cpp:311`). The
+  adapter's `State` declared `model` as its **first** field, and Rust drops
+  struct fields in declaration order — so `llama_model_free` ran first and
+  the generation context, the embed context, and the mtmd context were then
+  each torn down against freed memory. On Windows this surfaced as
+  `0xC0000005` (STATUS_ACCESS_VIOLATION) at process exit; it was
+  deterministic, not flaky (6/6 runs of the Tier 3 embed binary crashed
+  before the fix, 6/6 exit `0` after).
+  - Because backends are held in an `Arc` for the life of the daemon
+    process, the only teardown was at exit, so the practical impact was a
+    crashing shutdown rather than corruption during a request. It still
+    meant the daemon could never report a clean exit status, and it made
+    Tier 3 impossible to wire into any gate.
+  - What made this durable is worth recording: the struct carried comments
+    asserting the drop order was "mtmd → ctx → model" and that `Mtmd`
+    "borrows the parent `ModelHandle` … the Rust borrow makes that
+    explicit". Neither was true — no borrow was ever taken, the constructor
+    took a raw `*const llama_model` — and the comments read as though the
+    hazard had been handled. So the fix makes the lifetime structural
+    instead of documentary: `ModelHandle` is now an `Arc` and every derived
+    handle holds a clone, which keeps teardown correct no matter how the
+    fields are later reordered. `Mtmd::new` consequently drops its `unsafe`
+    marker, since the guarantee it used to demand of callers is now
+    discharged by its own signature.
+- **A Tier 3 test asserted against an API that no longer existed.**
+  `rejects_invalid_messages` expected `generate_v2` to return
+  `InvalidRequest` for an empty `messages[]`, which was true when the
+  renderer returned `Option` and yielded `None`; the `ChatRenderer` trait
+  returns `Result` and no implementor treats "no messages" as an error, so
+  the assertion had been failing — invisibly, because the teardown crash
+  above killed the binary before it printed a summary. Empty `messages[]`
+  is rejected at the proto boundary (`RequestV2::resolve`), which is the
+  only place it *can* be rejected now that `ResolvedV2` is constructible
+  only via `resolve()` outside tests, so the test now asserts against that
+  gate rather than re-adding a redundant engine-layer check. A second test
+  covers a rejection the engine does own (`max_tokens: 0`).
+  - With both fixed, all four Tier 3 binaries pass **and exit `0`** on
+    Windows for the first time: `llamacpp` (4), `embed_llamacpp` (9),
+    `llamacpp_multimodal` (2), `grammar_llamacpp` (3).
 - **The bridge no longer misreports an out-of-date daemon as an
   audio-incapable one.** A daemon older than the `audio_sample_rate` field
   advertises `audio: true` with no rate; the bridge returned *"the daemon's

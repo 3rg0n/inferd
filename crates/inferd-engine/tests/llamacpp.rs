@@ -145,8 +145,48 @@ async fn cancellation_stops_generation_promptly() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
 
+/// An empty `messages[]` is rejected at the **proto boundary**, which
+/// is the only place it can be rejected: `ResolvedV2` is constructible
+/// only by `RequestV2::resolve()` outside of tests, so by the time the
+/// engine sees one the check has already run.
+///
+/// This test used to assert that `generate_v2` returned
+/// `InvalidRequest` for an empty message list, on the strength of a
+/// renderer that returned `Option` and yielded `None` for it. That
+/// renderer is gone (the `ChatRenderer` trait returns `Result`, and no
+/// implementor treats "no messages" as an error), so the assertion was
+/// testing an API that no longer exists — it just never reported,
+/// because the Tier 3 binary crashed at teardown before printing a
+/// summary (issue #202).
+///
+/// Asserting against the real gate instead of re-adding an engine-layer
+/// check keeps the validation at the system boundary where it belongs.
+/// If `resolve()` ever stops rejecting this, this test fails rather
+/// than the burden silently shifting to a renderer that doesn't carry
+/// it.
+#[test]
+fn empty_messages_are_rejected_at_the_proto_boundary() {
+    use inferd_proto::v2::RequestV2;
+
+    let json = serde_json::json!({
+        "type": "generate",
+        "wire_version": inferd_proto::v2::WIRE_VERSION,
+        "id": "t-empty",
+        "messages": [],
+    });
+    let req: RequestV2 = serde_json::from_value(json).expect("parses as a RequestV2");
+    let err = req.resolve().expect_err("empty messages must not resolve");
+    assert!(
+        err.to_string().contains("messages must not be empty"),
+        "got: {err}"
+    );
+}
+
+/// A request the engine *does* reject: `max_tokens: 0` leaves nothing
+/// to generate. Exercises the `generate_v2` rejection path that the
+/// old empty-messages test was standing in for.
 #[tokio::test]
-async fn rejects_invalid_messages() {
+async fn rejects_zero_max_tokens() {
     let Some(path) = model_path() else {
         skipping_msg();
         return;
@@ -159,20 +199,33 @@ async fn rejects_invalid_messages() {
     })
     .expect("construct LlamaCpp");
 
-    // Empty messages would normally be caught by RequestV2::resolve
-    // validation, but ResolvedV2's fields are pub so a test can build
-    // one directly. The chat template render returns None, which
-    // surfaces as InvalidRequest from generate_v2().
     let mut r = req("hello");
-    r.messages.clear();
+    r.max_tokens = Some(0);
 
-    let result = backend.generate_v2(r).await;
-    assert!(
-        matches!(
-            result.as_ref().err(),
-            Some(inferd_engine::GenerateError::InvalidRequest(_))
-        ),
-        "expected InvalidRequest, got {:?}",
-        result.err()
+    let stream = backend.generate_v2(r).await.expect("generate");
+    let events: Vec<TokenEventV2> = tokio::time::timeout(Duration::from_secs(60), stream.collect())
+        .await
+        .expect("generation timed out");
+
+    // Nothing to generate: terminate immediately on MaxTokens with no
+    // text, rather than running the decode loop or hanging.
+    //
+    // Asserting the event list is *exactly* one terminal frame — not just
+    // that the last frame looks right — is what pins "the sampler never
+    // ran". An off-by-one in the decode loop bound would still report
+    // MaxTokens, so a last-frame-only check would pass while the engine
+    // emitted a token it was told not to.
+    let last = events.last().expect("expected a terminal event");
+    match last {
+        TokenEventV2::Done { stop_reason, usage } => {
+            assert_eq!(*stop_reason, StopReasonV2::MaxTokens);
+            assert_eq!(usage.output_tokens, 0);
+        }
+        other => panic!("expected terminal Done event, got {other:?}"),
+    }
+    assert_eq!(
+        events.len(),
+        1,
+        "max_tokens=0 must emit only the terminal frame, got {events:?}"
     );
 }

@@ -13,11 +13,15 @@
 //!
 //! ## Lifetime / threading
 //!
-//! - `Mtmd` owns a `*mut mtmd_context`. It borrows the parent
-//!   [`crate::llamacpp::ModelHandle`] for its lifetime — the C
-//!   context holds a non-owning pointer to the `llama_model` and
-//!   the model must outlive the mtmd context. The Rust borrow makes
-//!   that explicit.
+//! - `Mtmd` owns a `*mut mtmd_context` and an `Arc` of the parent
+//!   [`crate::llamacpp::ModelHandle`]. The C context holds a
+//!   non-owning pointer to the `llama_model` and reads through it
+//!   during teardown, so the model must outlive the mtmd context; the
+//!   refcount is what enforces that. Earlier revisions of this file
+//!   claimed a "Rust borrow" made the requirement explicit, but no
+//!   borrow was ever taken — the constructor took a raw pointer — and
+//!   the model was in fact freed first, which is the use-after-free
+//!   fixed in issue #202.
 //! - `Bitmap` owns a `*mut mtmd_bitmap`. Independent of `Mtmd`; it
 //!   can be created before the context exists and reused across
 //!   contexts.
@@ -84,10 +88,20 @@ pub fn probe_mmproj_caps(mmproj: &Path) -> Result<MmprojCaps, MtmdError> {
     })
 }
 
-/// Multimodal context wrapping an `mtmd_context`. Borrows the parent
-/// `llama_model` to ensure it outlives this handle.
+/// Multimodal context wrapping an `mtmd_context`.
+///
+/// Holds an `Arc` of the parent [`crate::llamacpp::ModelHandle`]
+/// because `mtmd_context` caches pointers derived from the text model
+/// — notably `llama_model_get_vocab(text_model)`
+/// (`vendor/llama.cpp/tools/mtmd/mtmd.cpp:311`) — and reads them during
+/// teardown. The refcount is what guarantees the model outlives this
+/// handle; a doc comment asserting a drop order previously did not
+/// (issue #202).
 pub struct Mtmd {
     ctx: NonNull<ffi::mtmd_context>,
+    /// Keeps the parent model alive for at least as long as this
+    /// context. Never read; the refcount is the point.
+    _model: std::sync::Arc<crate::llamacpp::ModelHandle>,
 }
 
 // SAFETY: `mtmd_context` is opaque from Rust's view; per `mtmd.h`,
@@ -143,18 +157,17 @@ impl Default for MtmdConfig {
 
 impl Mtmd {
     /// Initialise an mtmd context against the given mmproj file +
-    /// already-loaded text model. The text model must outlive the
-    /// returned `Mtmd` (enforced by the borrow on `crate::llamacpp::ModelHandle`).
+    /// already-loaded text model.
     ///
-    /// # Safety
-    ///
-    /// Caller guarantees the `llama_model` pointer is alive for at
-    /// least the lifetime of the returned `Mtmd`. In practice this
-    /// is enforced by the `LlamaCpp` adapter holding both handles
-    /// in the same struct.
-    pub unsafe fn new(
+    /// Takes the model by `Arc` rather than by raw pointer: the C
+    /// context outlives this call and reads through to the model during
+    /// teardown, so "the model must outlive this handle" is a lifetime
+    /// requirement, not a call-site one. Holding the `Arc` discharges it
+    /// for the whole lifetime of the returned value, which is why this
+    /// constructor is safe where it used to be `unsafe` (issue #202).
+    pub fn new(
         mmproj: &Path,
-        text_model: *const crate::ffi::llama_model,
+        text_model: std::sync::Arc<crate::llamacpp::ModelHandle>,
         config: MtmdConfig,
     ) -> Result<Self, MtmdError> {
         let cpath = path_to_cstring(mmproj)?;
@@ -177,15 +190,23 @@ impl Mtmd {
             params.image_min_tokens = n;
         }
 
-        // SAFETY: `cpath` outlives the call. `text_model` outlives
-        // the returned context per the function's documented
-        // contract. The cast is safe — the llama_model pointer
-        // bindgen produced for libllama and the one mtmd's bindings
-        // expect both alias the same opaque struct from the same
-        // `llama.h` header.
-        let raw = unsafe { ffi::mtmd_init_from_file(cpath.as_ptr(), text_model.cast(), params) };
+        // `mtmd_init_from_file` takes the model as `*const`; only the
+        // mut→const conversion is needed. The two bindgen runs do *not*
+        // emit two types for `llama_model` — mtmd's bindings open with
+        // `use crate::ffi::{.., llama_model, ..}`, so both headers'
+        // declarations land on the one Rust struct and no type-changing
+        // cast is involved.
+        let model_ptr: *const crate::ffi::llama_model = text_model.as_ptr().cast_const();
+
+        // SAFETY: `cpath` outlives the call. The model outlives the
+        // returned context because we hold an `Arc` clone of it in the
+        // returned value.
+        let raw = unsafe { ffi::mtmd_init_from_file(cpath.as_ptr(), model_ptr, params) };
         let ctx = NonNull::new(raw).ok_or(MtmdError::InitFromFile)?;
-        Ok(Self { ctx })
+        Ok(Self {
+            ctx,
+            _model: text_model,
+        })
     }
 
     /// `true` if the loaded mmproj supports vision input.

@@ -184,8 +184,22 @@ impl Default for LlamaCppConfig {
 }
 
 /// Owned `llama_context`. `Drop` runs `llama_free`.
+///
+/// Holds an `Arc` of the parent [`ModelHandle`] because
+/// `~llama_context` **dereferences the model it was created from**:
+/// `llama_context` stores `const llama_model & model`
+/// (`vendor/llama.cpp/src/llama-context.h:276`) and its destructor
+/// reads `model.hparams.no_alloc` plus the ggml scheduler buffers
+/// hanging off it (`src/llama-context.cpp:420`). Freeing the model
+/// first is a use-after-free, so the model's lifetime is enforced by
+/// refcount here rather than by field-declaration order in a parent
+/// struct — see the `State` docs for why that distinction earned its
+/// keep.
 struct ContextHandle {
     ptr: NonNull<ffi::llama_context>,
+    /// Keeps the parent model alive for at least as long as this
+    /// context. Never read; the refcount is the point.
+    _model: Arc<ModelHandle>,
 }
 
 // SAFETY: see `ModelHandle` — internal sync for read ops, exclusive Drop.
@@ -294,13 +308,35 @@ fn build_accelerator_info(kind: AcceleratorKind, n_gpu_layers: i32) -> Accelerat
     }
 }
 
+/// Live FFI state for one loaded model.
+///
+/// ## Teardown ordering is enforced by refcount, not by field order
+///
+/// Every handle below outlives the `llama_model` it was derived from,
+/// because each C destructor reads through to the model:
+/// `~llama_context` dereferences `const llama_model & model`
+/// (`llama-context.h:276`, `llama-context.cpp:420`) and `mtmd_context`
+/// caches `llama_model_get_vocab(text_model)` (`tools/mtmd/mtmd.cpp:311`).
+///
+/// Rust drops struct fields in **declaration order**, so an earlier
+/// version of this struct — which declared `model` first and asserted
+/// in a comment that the order was "mtmd → ctx → model" — freed the
+/// model *before* its three dependents and tore them down against
+/// freed memory. That was a real use-after-free on every platform; it
+/// surfaced as `STATUS_ACCESS_VIOLATION` at process exit on Windows
+/// and went unnoticed for as long as it did only because Tier 3 is in
+/// no gate (issue #202).
+///
+/// So the ordering is no longer a comment to be kept true by hand:
+/// `model` is an [`Arc`] and each dependent holds a clone, which makes
+/// the model's lifetime a property the compiler and the refcount
+/// enforce regardless of how these fields are later reordered.
 struct State {
-    model: ModelHandle,
+    model: Arc<ModelHandle>,
     ctx: ContextHandle,
     /// Multimodal context. `Some` when the adapter was constructed
-    /// with an `mmproj_path`. `Mtmd` borrows the model pointer; the
-    /// drop order in `State` (mtmd → ctx → model) ensures it's freed
-    /// before the model it depends on.
+    /// with an `mmproj_path`. Holds its own `Arc<ModelHandle>` clone —
+    /// see the struct docs.
     mtmd: Option<Mtmd>,
     /// Cached capabilities derived from the `Mtmd` probe. None when
     /// no mmproj was configured (text-only).
@@ -308,8 +344,8 @@ struct State {
     /// Dedicated embedding context. `Some` when the adapter was
     /// configured with `embed = true`. Allocated alongside the
     /// generation context so embed and generate calls don't fight
-    /// over `llama_set_embeddings`. Drop order (embed → ctx → model)
-    /// ensures the embed context is freed before the parent model.
+    /// over `llama_set_embeddings`. Its `ContextHandle` holds an
+    /// `Arc<ModelHandle>` clone — see the struct docs.
     embed: Option<EmbedContext>,
 }
 
@@ -376,11 +412,16 @@ impl LlamaCpp {
             config.n_gpu_layers
         };
 
-        let model = load_model(
+        // `Arc` because every derived C handle (the generation context,
+        // the embed context, the mtmd context) reads through to this
+        // model in its own destructor. See the `State` docs — this is
+        // what keeps teardown ordering correct without depending on
+        // field-declaration order (issue #202).
+        let model = Arc::new(load_model(
             &config.model_path,
             config.model_sha256.as_ref(),
             effective_gpu_layers,
-        )?;
+        )?);
 
         // SAFETY: FFI. `model.as_ptr()` is non-null and valid for the
         // lifetime of `model`. `ctx_params` is POD initialised by libllama.
@@ -391,7 +432,10 @@ impl LlamaCpp {
         };
 
         let ctx = NonNull::new(ctx_ptr)
-            .map(|ptr| ContextHandle { ptr })
+            .map(|ptr| ContextHandle {
+                ptr,
+                _model: Arc::clone(&model),
+            })
             .ok_or(LlamaCppError::ContextInit)?;
 
         // Optional mtmd context for multimodal v2 support.
@@ -402,14 +446,13 @@ impl LlamaCpp {
                 if let Some(expected) = config.mmproj_sha256.as_ref() {
                     crate::llamacpp::loader::verify_mmproj_sha256(mmproj, expected)?;
                 }
-                // SAFETY: caller (this fn) holds `model` for the
-                // entirety of `State`'s lifetime; `Mtmd` lives inside
-                // the same `State` struct so its borrow is satisfied.
                 let mtmd_config = MtmdConfig {
                     image_max_tokens: config.mmproj_image_max_tokens,
                     ..MtmdConfig::default()
                 };
-                let mtmd_ctx = unsafe { Mtmd::new(mmproj, model.as_ptr(), mtmd_config)? };
+                // `Mtmd` holds its own `Arc` clone, so the model is
+                // guaranteed to outlive the mtmd context.
+                let mtmd_ctx = Mtmd::new(mmproj, Arc::clone(&model), mtmd_config)?;
                 let audio = mtmd_ctx.supports_audio();
                 let caps = BackendCapabilitiesV2 {
                     vision: mtmd_ctx.supports_vision(),
@@ -473,7 +516,10 @@ impl LlamaCpp {
                 ffi::llama_init_from_model(model.as_ptr(), params)
             };
             let embed_ctx = NonNull::new(embed_ctx_ptr)
-                .map(|ptr| ContextHandle { ptr })
+                .map(|ptr| ContextHandle {
+                    ptr,
+                    _model: Arc::clone(&model),
+                })
                 .ok_or(LlamaCppError::ContextInit)?;
             // SAFETY: FFI; `model.as_ptr()` valid.
             let n_embd = unsafe { ffi::llama_n_embd(model.as_ptr()) };
