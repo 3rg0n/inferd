@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — audio native wire + bridge validation, no
+  defects (2026-08-04):** closes the "not covered on macOS" gap from
+  tasks #199/#200. Built from `main` (`cargo build --release
+  -p inferd-daemon --features dl-backends,metal -p inferd-http`, no
+  tarball yet). Native wire: A (live rate discovery,
+  `audio_sample_rate=16000`), B (matching-rate transcription, 5/5
+  ground-truth items verbatim, `input_tokens=260`), C (mismatched-rate
+  rejection, both rates named) — all reproduce the Windows result.
+  Bridge (ADR 0025): 44.1 kHz stereo → decode+downmix+resample →
+  verbatim transcription (non-stream + streaming + multi-turn),
+  `format` hint ignored in favor of real container probing,
+  undecodable-payload / system-message-audio / clip-cap edge cases all
+  return the same 400s as Windows, text-only unaffected. Every gate
+  from the Windows validation reproduces identically on Metal — a clean
+  confirmation pass, no macOS-specific defects. See
+  `docs/v0.6-validation.md`.
+
 ### Added
 
 - **Backends advertise the audio sample rate they require.**
