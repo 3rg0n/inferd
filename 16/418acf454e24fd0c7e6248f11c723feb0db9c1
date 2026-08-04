@@ -1,0 +1,26 @@
+docs/adr/0026-chat-renderer-registry-per-model-family.md
+  s_126aec4081f728::t_8630e3fdc1821a 1-236
+docs/test-strategy.md
+  s_126aec4081f728::t_0087a42ee7d46f 32-42
+  s_126aec4081f728::t_965865045a77ec 71,74-94
+docs/adr/README.md
+  s_126aec4081f728::t_d63fb6ad08d739 33
+CHANGELOG.md
+  s_126aec4081f728::t_f6b5ef0bc8cdc9 114-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "16418acf454e24fd0c7e6248f11c723feb0db9c1",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
