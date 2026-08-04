@@ -21,7 +21,9 @@ pub mod tool_parser;
 #[cfg(feature = "dl-backends")]
 pub use accelerator::{DeviceMemory, probe_accelerator, query_device_memory_for_kind};
 pub use backend::{LlamaCpp, LlamaCppConfig, LlamaCppError};
-pub use chat_template::{Gemma4RenderError, Gemma4Rendered, Gemma4Renderer};
+pub use chat_template::{
+    ChatFamily, ChatRenderer, Gemma4Renderer, GraniteRenderer, RenderError, Rendered, detect_family,
+};
 pub use loader::{ModelHandle, ModelLoadError, load_model};
 pub use mtmd::{
     Bitmap, InputChunk, InputChunkKind, InputChunks, MmprojCaps, Mtmd, MtmdConfig, MtmdError,

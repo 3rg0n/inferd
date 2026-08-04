@@ -71,6 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tier 3 has not compiled since 2026-06-30 and nobody noticed.** The
+  real-model integration tests (`crates/inferd-engine/tests/llamacpp.rs`)
+  build a `ResolvedV2` literal directly, so the `thinking` field added by
+  the Gemma 4 thinking-activation work (#173) broke the file — five weeks
+  and two releases ago, spanning v0.6.0 GA and v0.6.1. It went unseen
+  because Tier 3 is invoked by neither `cargo test --all` nor any
+  documented clippy variant, and it *skips silently* without
+  `INFERD_TEST_MODEL_PATH`, so a green local gate and a green CI run both
+  looked identical to a passing Tier 3. This is the same feature-gated
+  struct-literal trap `CLAUDE.md` already warns about, in the one tier the
+  same file calls "mandatory, not optional" for prefill/templating/FFI
+  changes — and it was found only by running Tier 3 to verify unrelated
+  work. Fixed by adding the missing field.
+  - Separately noted, not fixed: `cargo test -p inferd-engine --features
+    llamacpp-integration` exits `0xc0000005` (STATUS_ACCESS_VIOLATION) on
+    Windows during `~llama_context` teardown, *after* every test reports
+    `ok`. Confirmed pre-existing by reproducing it on a clean tree with
+    only the compile fix applied, so it is not a regression from anything
+    in this release; it needs its own investigation.
 - **The bridge no longer misreports an out-of-date daemon as an
   audio-incapable one.** A daemon older than the `audio_sample_rate` field
   advertises `audio: true` with no rate; the bridge returned *"the daemon's
@@ -100,6 +119,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The chat renderer is now a registry keyed to model family, and a model
+  whose prompt format inferd does not know fails to load**
+  ([ADR 0026](docs/adr/0026-chat-renderer-registry-per-model-family.md),
+  task #201). Until now there was exactly one renderer, Gemma 4's, applied
+  unconditionally to whatever GGUF was configured. Point the daemon at a
+  non-Gemma model and it would wrap that model's turns in `<|turn>` /
+  `<turn|>` markers the tokeniser has never seen, and generate fluently
+  against a prompt the model cannot parse — no error, no warning, just a
+  wrong answer with a plausible shape. What made it worth fixing now rather
+  than at the next model bump: the architecture string alone cannot be the
+  key. `ibm-granite/granite-docling-258M`'s text tower declares
+  `model_type: "llama"`, so its GGUF `general.architecture` is
+  byte-identical to Llama-3-Instruct's, whose grammar is unrelated.
+  - `ChatRenderer` is now a trait with two implementors (`Gemma4Renderer`,
+    unchanged in behaviour and still byte-exact against
+    `docs/text.function.calling.with.gemma.4.md`; `GraniteRenderer`,
+    transcribed from `granite-docling-258M/chat_template.jinja` and
+    corroborated against llama.cpp's own `LLM_CHAT_TEMPLATE_GRANITE_3_X`).
+    The second implementor exists to prove the seam is real rather than a
+    one-renderer abstraction.
+  - The family is resolved **once at model load**, not per request: an
+    explicit `chat_template` field on the backend entry wins (also
+    `--chat-template` / `INFERD_CHAT_TEMPLATE` for the `--model-path` dev
+    path); otherwise it is detected from the loaded GGUF's own metadata,
+    pairing `general.architecture` with a fingerprint of
+    `tokenizer.chat_template`. No new FFI — the existing
+    `llama_model_meta_val_str` reader is reused.
+  - **The behaviour change:** a model that carries a chat template matching
+    no known family now **fails the load** with a message naming the
+    architecture, a bounded fingerprint of the template, and the families
+    inferd knows. It does not fall back to Gemma. This is safe to do
+    loudly because socket binding already happens strictly after backend
+    readiness (invariant #5), so the failure is a daemon that refuses to
+    start rather than one serving wrong answers. A model with **no** chat
+    template at all (every embedding model, including the
+    `embeddinggemma-300m` in the first-boot default config) is not an
+    error: it resolves to no renderer, and `capabilities().v2` is now
+    `false` for such a backend, so the generation socket simply is not
+    bound for it.
+  - Capabilities are now family-derived rather than constant: `tools` and
+    `thinking` report what the resolved renderer actually implements.
+    Granite's template carries no tool or thinking grammar, so a request
+    to a Granite model carrying `tools[]`, a `tool_use`/`tool_result`
+    block, or `thinking: true` is **rejected** rather than rendered with
+    the tools silently dropped — same reasoning as the audio rate contract
+    above: a request the model was never told about produces a fluent
+    wrong answer, which is worse than an error.
+  - No wire change. `wire_version` is unmoved and the media path needed no
+    per-family work — `<__media__>` is mtmd's marker, not Gemma's, and
+    mtmd substitutes the per-architecture fences itself.
 - **The README and the landing site now say inferd does audio.** Both
   described the daemon as multimodal but enumerated only vision — the
   reference model has shipped an audio projector in the same mmproj the

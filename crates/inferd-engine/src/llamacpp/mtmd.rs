@@ -481,7 +481,8 @@ pub fn default_media_marker() -> &'static str {
     // mtmd::default_media_marker() returns the literal "<__media__>"
     // — confirmed in tools/mtmd/mtmd.cpp:109. We hard-code it here
     // (constant in upstream's API) rather than calling through FFI
-    // every time. The token is also referenced from
-    // `crates/inferd-daemon/src/chat_template/gemma4.rs`.
+    // every time. The same literal is `MEDIA_MARKER` in
+    // `crates/inferd-engine/src/llamacpp/chat_template/mod.rs`, shared
+    // by every renderer in the registry (ADR 0026).
     "<__media__>"
 }

@@ -121,6 +121,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            // Detected from GGUF metadata (ADR 0026).
+            chat_template: None,
         },
         Tier::B12 => LlamacppEntry {
             name: "gemma-4-12b".into(),
@@ -148,6 +150,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            // Detected from GGUF metadata (ADR 0026).
+            chat_template: None,
         },
     }
 }
@@ -265,6 +269,8 @@ fn default_embed_entry() -> LlamacppEntry {
         embed: true,
         embed_pooling: None,
         embed_n_ctx: 2048,
+        // Embedding model: no chat template, no renderer (ADR 0026).
+        chat_template: None,
     }
 }
 

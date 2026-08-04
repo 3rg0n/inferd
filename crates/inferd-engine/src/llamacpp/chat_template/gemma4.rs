@@ -47,63 +47,12 @@
 //! the markers and splices the per-modality fence tokens
 //! (`<start_of_image>...<end_of_image>`, etc.) in.
 
+use super::{ChatFamily, ChatRenderer, MEDIA_MARKER, RenderError, Rendered};
 use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool, ToolCallId};
 use serde_json::Value;
 
-/// The mtmd default media marker. The engine adapter sees this
-/// substring in the rendered prompt and replaces it (via
-/// `mtmd_tokenize`) with the per-modality fence tokens for the
-/// associated bitmap.
-pub const MEDIA_MARKER: &str = "<__media__>";
-
-/// Output of [`Gemma4Renderer::render`].
-///
-/// `prompt` is the flat string ready for `mtmd_tokenize`.
-/// `attachments` lists the attachments referenced by media markers
-/// in `prompt`, in the order the markers appear. The engine adapter
-/// supplies them to `mtmd_tokenize` in this same order so each
-/// marker resolves to the correct bitmap.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Gemma4Rendered<'a> {
-    /// Flat prompt with control tokens + media markers.
-    pub prompt: String,
-    /// Attachments in the order their content blocks appear.
-    pub attachments: Vec<&'a Attachment>,
-}
-
-/// Errors from [`Gemma4Renderer::render`].
-#[derive(Debug, thiserror::Error)]
-pub enum Gemma4RenderError {
-    /// A content block referenced an attachment_id that doesn't
-    /// resolve to a `ResolvedV2::attachments[]` entry. (This should
-    /// have been caught by `RequestV2::resolve()`; arriving here
-    /// means the resolved input was constructed bypassing
-    /// validation.)
-    #[error(
-        "messages[{message_index}].content[{block_index}]: attachment {attachment_id:?} not found"
-    )]
-    DanglingAttachment {
-        /// Which message in `messages[]`.
-        message_index: usize,
-        /// Which content block in that message.
-        block_index: usize,
-        /// The id that didn't resolve.
-        attachment_id: String,
-    },
-    /// A content block carried `ContentBlock::Unknown`. The daemon
-    /// rejects this earlier in `RequestV2::resolve`; if it gets here
-    /// we treat it as an internal invariant violation.
-    #[error("messages[{message_index}].content[{block_index}] is an unknown content-block type")]
-    UnknownBlock {
-        /// Which message in `messages[]`.
-        message_index: usize,
-        /// Which content block in that message.
-        block_index: usize,
-    },
-}
-
 /// Stateless Gemma 4 renderer. Construct with [`Gemma4Renderer::new`]
-/// and call [`render`](Self::render) per request.
+/// and call [`ChatRenderer::render`] per request.
 #[derive(Debug, Default)]
 pub struct Gemma4Renderer;
 
@@ -112,13 +61,14 @@ impl Gemma4Renderer {
     pub fn new() -> Self {
         Self
     }
+}
 
-    /// Render `resolved` into a flat Gemma 4 prompt + an ordered
-    /// list of referenced attachments.
-    pub fn render<'a>(
-        &self,
-        resolved: &'a ResolvedV2,
-    ) -> Result<Gemma4Rendered<'a>, Gemma4RenderError> {
+impl ChatRenderer for Gemma4Renderer {
+    fn family(&self) -> ChatFamily {
+        ChatFamily::Gemma4
+    }
+
+    fn render<'a>(&self, resolved: &'a ResolvedV2) -> Result<Rendered<'a>, RenderError> {
         let mut prompt = String::with_capacity(512);
         let mut attachments: Vec<&Attachment> = Vec::new();
 
@@ -204,7 +154,7 @@ impl Gemma4Renderer {
         // example).
         prompt.push_str("<|turn>model\n");
 
-        Ok(Gemma4Rendered {
+        Ok(Rendered {
             prompt,
             attachments,
         })
@@ -221,7 +171,7 @@ fn render_message<'a>(
     tools: &[Tool],
     tool_name_by_call_id: &std::collections::HashMap<&'a ToolCallId, &'a str>,
     inject_think: bool,
-) -> Result<(), Gemma4RenderError> {
+) -> Result<(), RenderError> {
     out.push_str(role_open_tag(msg.role));
     out.push('\n');
 
@@ -243,7 +193,7 @@ fn render_message<'a>(
             | ContentBlock::Audio { attachment_id }
             | ContentBlock::Video { attachment_id } => {
                 let att = by_id.get(attachment_id.as_str()).ok_or_else(|| {
-                    Gemma4RenderError::DanglingAttachment {
+                    RenderError::DanglingAttachment {
                         message_index: mi,
                         block_index: bi,
                         attachment_id: attachment_id.clone(),
@@ -308,7 +258,7 @@ fn render_message<'a>(
                 out.push_str("<tool_response|>");
             }
             ContentBlock::Unknown => {
-                return Err(Gemma4RenderError::UnknownBlock {
+                return Err(RenderError::UnknownBlock {
                     message_index: mi,
                     block_index: bi,
                 });

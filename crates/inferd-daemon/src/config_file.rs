@@ -276,6 +276,23 @@ pub struct LlamacppEntry {
     /// Ignored when `embed = false`.
     #[serde(default = "default_embed_n_ctx")]
     pub embed_n_ctx: u32,
+
+    /// Prompt-grammar family for this model (ADR 0026), e.g.
+    /// `"gemma4"` or `"granite"`.
+    ///
+    /// Normally omitted: the daemon detects the family from the GGUF's
+    /// own metadata at load. Set it when the model's metadata cannot be
+    /// fingerprinted (a fine-tune that stripped or rewrote
+    /// `tokenizer.chat_template`) but the prompt format is one inferd
+    /// already renders. A declared value **wins** over detection.
+    ///
+    /// An unrecognised value, or a generation model whose family
+    /// neither resolves here nor detects, fails the backend's
+    /// initialisation — the daemon refuses to start rather than render
+    /// the caller's prompt in another model's turn markers, which the
+    /// model would answer fluently and wrongly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_template: Option<String>,
 }
 
 /// OpenAI-compat backend entry inside `backends:`.
@@ -524,6 +541,10 @@ pub fn default_first_boot_config() -> ConfigFile {
                 embed: false,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
+                // Detected from the GGUF's own metadata (ADR 0026);
+                // Gemma 4's template fingerprints unambiguously, so
+                // declaring it would only add a way to get it wrong.
+                chat_template: None,
             }),
             BackendEntry::Llamacpp(LlamacppEntry {
                 name: "embeddinggemma-300m".into(),
@@ -546,6 +567,10 @@ pub fn default_first_boot_config() -> ConfigFile {
                 embed: true,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
+                // EmbeddingGemma carries no `tokenizer.chat_template`
+                // and serves no generation, so it needs no renderer
+                // (ADR 0026).
+                chat_template: None,
             }),
         ]),
         listen: None,
@@ -800,6 +825,9 @@ impl ConfigFile {
             embed: false,
             embed_pooling: None,
             embed_n_ctx: default_embed_n_ctx(),
+            // Legacy configs name no family; detection from GGUF
+            // metadata applies (ADR 0026).
+            chat_template: None,
         })]
     }
 }

@@ -162,6 +162,16 @@ pub struct Cli {
     #[arg(long, default_value_t = 2048, env = "INFERD_LLAMACPP_EMBED_N_CTX")]
     pub llamacpp_embed_n_ctx: u32,
 
+    /// Prompt-grammar family for the model, e.g. `gemma4` or
+    /// `granite` (ADR 0026). Normally omitted — the family is detected
+    /// from the GGUF's own metadata at load. Declare it when the
+    /// metadata can't be fingerprinted but the prompt format is one
+    /// inferd renders; a declared value wins over detection. Applies to
+    /// the `--model-path` dev path; config-file backends carry their own
+    /// `chat_template` field.
+    #[arg(long, env = "INFERD_CHAT_TEMPLATE")]
+    pub chat_template: Option<String>,
+
     /// Base URL of the upstream OpenAI-compat endpoint, no trailing
     /// slash and no path (the adapter appends `/v1/chat/completions`).
     /// Required when `--backend openai-compat`. Examples:

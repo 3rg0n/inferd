@@ -24,7 +24,10 @@ use crate::backend::{
     GenerateError, TokenEventV2, TokenStreamV2,
 };
 use crate::ffi;
-use crate::llamacpp::chat_template::Gemma4Renderer;
+use crate::llamacpp::chat_template::{
+    ChatFamily, ChatRenderer, GGUF_KEY_ARCHITECTURE, GGUF_KEY_CHAT_TEMPLATE, detect_family,
+    template_fingerprint,
+};
 use crate::llamacpp::grammar;
 use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
 use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
@@ -71,6 +74,33 @@ pub enum LlamaCppError {
     /// Chat-template renderer failed (e.g. unknown content-block).
     #[error("chat template: {0}")]
     Render(String),
+    /// The `chat_template` config field named a family that isn't in
+    /// the registry.
+    #[error("unknown chat_template {given:?}; known families: {}", ChatFamily::NAMES.join(", "))]
+    UnknownChatFamily {
+        /// The operator-supplied value.
+        given: String,
+    },
+    /// The loaded model carries a chat template but its prompt grammar
+    /// matches no renderer in the registry (ADR 0026).
+    ///
+    /// Deliberately fatal at load: rendering it with a guessed family
+    /// would wrap the caller's prompt in another model's turn markers,
+    /// and the model would answer fluently and wrongly rather than
+    /// erroring. Per invariant #5 the generation socket is never bound,
+    /// so no consumer can reach a mis-rendering daemon.
+    #[error(
+        "no chat renderer for model (architecture {arch:?}, chat template: {fingerprint}); \
+         known families: {}; set the backend's `chat_template` config field to one of them \
+         if this model uses a supported prompt format",
+        ChatFamily::NAMES.join(", ")
+    )]
+    NoChatRenderer {
+        /// GGUF `general.architecture`, if present.
+        arch: Option<String>,
+        /// Bounded description of the unmatched template.
+        fingerprint: String,
+    },
 }
 
 impl From<LlamaCppError> for GenerateError {
@@ -123,6 +153,15 @@ pub struct LlamaCppConfig {
     /// supports up to 2048; defaults to that. Larger inputs produce
     /// `EmbedError::InvalidRequest`.
     pub embed_n_ctx: u32,
+    /// Operator-declared chat-template family (ADR 0026), one of
+    /// [`ChatFamily::NAMES`]. When set it **wins** over metadata
+    /// detection — declaration is the contract, detection is the
+    /// convenience — so an operator with an exotic GGUF whose metadata
+    /// we cannot fingerprint is never blocked on inferd shipping a
+    /// detector. When `None`, the family is detected from GGUF
+    /// metadata at load, and an unrecognised model fails the load
+    /// rather than falling back to a guess.
+    pub chat_template: Option<String>,
 }
 
 impl Default for LlamaCppConfig {
@@ -139,6 +178,7 @@ impl Default for LlamaCppConfig {
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            chat_template: None,
         }
     }
 }
@@ -176,6 +216,12 @@ pub struct LlamaCpp {
     /// Stable for the lifetime of the adapter; cached so we don't pay
     /// an FFI roundtrip per request.
     model_label: String,
+    /// Prompt-grammar renderer for the loaded model (ADR 0026),
+    /// resolved once in [`LlamaCpp::new`] and shared by every
+    /// generation. `None` only on an embed-only adapter: a model with
+    /// no chat template has no grammar to render, and `generate_v2` is
+    /// unreachable on it because `capabilities().v2` is false.
+    renderer: Option<Box<dyn ChatRenderer>>,
     /// Shared so the spawn_blocking generation task can reach the model
     /// and context. Locked for the duration of one generation; the
     /// daemon's queue serialises calls, so contention is structural
@@ -390,6 +436,18 @@ impl LlamaCpp {
         // backend's `name()` already exposes that is wrong twice).
         let model_label = read_model_label(model.as_ptr(), &config.model_path);
 
+        // Resolve the prompt-grammar renderer once, here, at load
+        // (ADR 0026). Doing it now rather than per request is what
+        // makes fail-loud possible: `new()` returning Err means the
+        // backend never reports ready, so per invariant #5 the
+        // generation socket is never bound and no consumer can reach a
+        // daemon that would mis-render.
+        let renderer = resolve_renderer(
+            model.as_ptr(),
+            config.chat_template.as_deref(),
+            config.embed,
+        )?;
+
         // Optional dedicated embedding context. Built with
         // `embeddings = true` + a configurable pooling_type (default
         // MEAN, what EmbeddingGemma expects). Kept alongside the
@@ -442,6 +500,7 @@ impl LlamaCpp {
             seed: config.seed,
             accelerator,
             model_label,
+            renderer,
             state: Arc::new(Mutex::new(State {
                 model,
                 ctx,
@@ -471,6 +530,86 @@ fn read_model_label(model: *const ffi::llama_model, path: &std::path::Path) -> S
         return stem.to_string();
     }
     "llamacpp".to_string()
+}
+
+/// Resolve the prompt-grammar renderer for a loaded model (ADR 0026).
+///
+/// Order, per the ADR's §Decision part 2:
+///
+/// 1. `declared` — the backend entry's `chat_template` config field.
+///    Operator-declared, always wins, never second-guessed against the
+///    metadata: an operator who knows their fine-tune's grammar is not
+///    overruled by our fingerprint.
+/// 2. Otherwise detect from GGUF metadata via [`detect_family`].
+/// 3. Otherwise fail — unless the model carries no chat template at
+///    all, which is the embed / base-model case handled below.
+///
+/// ## Why a missing chat template is not an error
+///
+/// The shipped first-boot config declares two llamacpp backends, and
+/// the embedding one (`embeddinggemma-300m`) reports architecture
+/// `gemma-embedding` with **no `tokenizer.chat_template` key**.
+/// Demanding a renderer of every GGUF would fail every fresh install.
+/// There is also nothing to get wrong: with no template there is no
+/// grammar, and `Backend::generate_v2` on such a model is unreachable
+/// because it advertises no generation capability. So a template-less
+/// model resolves to `None` and loads.
+///
+/// A model that *does* carry a template we cannot render is the
+/// opposite case — that is the correctness hole ADR 0026 closes, and it
+/// is fatal. The `embed_only` flag exists only to keep the diagnostic
+/// honest for a template-less model; it does not soften the fatal case.
+fn resolve_renderer(
+    model: *const ffi::llama_model,
+    declared: Option<&str>,
+    embed_only: bool,
+) -> Result<Option<Box<dyn ChatRenderer>>, LlamaCppError> {
+    if let Some(given) = declared {
+        let family = ChatFamily::parse(given).ok_or_else(|| LlamaCppError::UnknownChatFamily {
+            given: given.to_string(),
+        })?;
+        debug!(family = family.as_str(), "chat renderer declared by config");
+        return Ok(Some(family.renderer()));
+    }
+
+    let arch = read_gguf_meta_string(model, GGUF_KEY_ARCHITECTURE);
+    let template = read_gguf_meta_string(model, GGUF_KEY_CHAT_TEMPLATE);
+
+    match detect_family(arch.as_deref(), template.as_deref()) {
+        Some(family) => {
+            debug!(
+                family = family.as_str(),
+                arch = arch.as_deref().unwrap_or("<none>"),
+                "chat renderer detected from GGUF metadata"
+            );
+            Ok(Some(family.renderer()))
+        }
+        None => match template {
+            Some(t) => Err(LlamaCppError::NoChatRenderer {
+                arch,
+                fingerprint: template_fingerprint(&t),
+            }),
+            None => {
+                // No template: not a chat model. Expected for an
+                // embedding backend; worth a warning otherwise, since a
+                // generation model without a chat template will only be
+                // usable if the operator declares the family.
+                if embed_only {
+                    debug!(
+                        arch = arch.as_deref().unwrap_or("<none>"),
+                        "model carries no chat template; embed-only backend needs no renderer"
+                    );
+                } else {
+                    warn!(
+                        arch = arch.as_deref().unwrap_or("<none>"),
+                        "model carries no chat template metadata; generation will be rejected \
+                         unless the backend's `chat_template` config field names a family"
+                    );
+                }
+                Ok(None)
+            }
+        },
+    }
 }
 
 /// Look up a string-valued GGUF metadata key on a loaded model.
@@ -561,14 +700,27 @@ impl Backend for LlamaCpp {
             let guard = self.state.lock().expect("poisoned llamacpp state mutex");
             (guard.caps_v2, guard.embed.is_some())
         };
+        //
+        // The one case that *is* false: no chat renderer resolved at
+        // load (ADR 0026), i.e. the model carries no chat template and
+        // the operator declared no family. There is then no prompt
+        // grammar to render into, so generation is genuinely
+        // unsupported and saying so here is what turns an every-request
+        // rejection into one honest capability frame. Tools and
+        // thinking likewise follow the resolved family: Granite's
+        // grammar expresses neither, and a consumer should learn that
+        // from `capabilities` rather than from a rejected request.
         BackendCapabilities {
-            v2: true,
+            v2: self.renderer.is_some(),
             vision: snap.map(|c| c.vision).unwrap_or(false),
             audio: snap.map(|c| c.audio).unwrap_or(false),
             audio_sample_rate: snap.and_then(|c| c.audio_sample_rate),
             video: false,
-            tools: true,
-            thinking: true,
+            tools: self.renderer.as_deref().is_some_and(|r| r.supports_tools()),
+            thinking: self
+                .renderer
+                .as_deref()
+                .is_some_and(|r| r.supports_thinking()),
             embed,
             accelerator: self.accelerator.clone(),
         }
@@ -579,8 +731,15 @@ impl Backend for LlamaCpp {
             return Err(GenerateError::NotReady);
         }
 
-        // Render the prompt + attachment-order on the calling task.
-        let renderer = Gemma4Renderer::new();
+        // Render the prompt + attachment-order on the calling task,
+        // using the family renderer resolved at load (ADR 0026).
+        let renderer = self.renderer.as_deref().ok_or_else(|| {
+            GenerateError::InvalidRequest(
+                "model has no chat template and no `chat_template` config field, \
+                 so no prompt grammar is known for it"
+                    .to_string(),
+            )
+        })?;
         let rendered = renderer
             .render(&req)
             .map_err(|e| GenerateError::InvalidRequest(format!("render: {e}")))?;

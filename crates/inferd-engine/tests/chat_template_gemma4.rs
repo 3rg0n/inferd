@@ -10,7 +10,7 @@
 
 #![cfg(feature = "llamacpp")]
 
-use inferd_engine::llamacpp::Gemma4Renderer;
+use inferd_engine::llamacpp::{ChatRenderer, Gemma4Renderer};
 use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, RequestV2, RoleV2, Tool, ToolCallId};
 use serde_json::json;
 

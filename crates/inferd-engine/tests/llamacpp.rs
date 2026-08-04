@@ -52,6 +52,7 @@ fn req(text: &str) -> ResolvedV2 {
         max_tokens: Some(16),
         stream: Some(true),
         response_format: None,
+        thinking: None,
     }
 }
 

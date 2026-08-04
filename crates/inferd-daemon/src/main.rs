@@ -632,6 +632,19 @@ async fn build_backends(
                 e.embed_pooling = cli.llamacpp_embed_pooling;
                 e.embed_n_ctx = cli.llamacpp_embed_n_ctx;
             }
+            // Same shape for --chat-template (ADR 0026): the legacy
+            // single-model config shape has no per-backend
+            // `chat_template` field, so without this an operator on
+            // that shape whose model can't be fingerprinted has no way
+            // to declare the family short of migrating to `backends:`.
+            #[cfg(feature = "llamacpp")]
+            if cli.chat_template.is_some()
+                && cfg.model.is_some()
+                && cfg.backends.is_none()
+                && let Some(BackendEntry::Llamacpp(e)) = entries.first_mut()
+            {
+                e.chat_template = cli.chat_template.clone();
+            }
             if !entries.is_empty() {
                 let auto_pull = cfg.auto_pull;
                 let mut out: Vec<Arc<dyn Backend>> = Vec::with_capacity(entries.len());
@@ -1114,6 +1127,10 @@ async fn build_llamacpp_entry(
         embed: entry.embed,
         embed_pooling: entry.embed_pooling,
         embed_n_ctx: entry.embed_n_ctx,
+        // ADR 0026: when unset the family is detected from GGUF
+        // metadata, and a generation model we can't render fails here
+        // rather than answering in the wrong grammar.
+        chat_template: entry.chat_template.clone(),
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed for {}: {e}", entry.name))?;
@@ -1169,6 +1186,11 @@ async fn build_llamacpp_cli_only(
         embed: cli.llamacpp_embed,
         embed_pooling: cli.llamacpp_embed_pooling,
         embed_n_ctx: cli.llamacpp_embed_n_ctx,
+        // ADR 0026. This path is the one that motivated fail-loud:
+        // `--model-path` accepts any GGUF, so an unrecognised family
+        // must stop the load rather than reach a renderer that doesn't
+        // speak its grammar.
+        chat_template: cli.chat_template.clone(),
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("llamacpp init failed: {e}"))?;

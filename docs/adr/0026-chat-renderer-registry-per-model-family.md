@@ -1,6 +1,6 @@
 # 0026. Chat rendering is a registry keyed to model family, not a hardcoded Gemma renderer
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-04
 
 ## Context
