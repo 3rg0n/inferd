@@ -7,9 +7,10 @@ Go/Python/TypeScript clients use it as the source of truth.
 
 As of v0.4 the generation surface uses length-prefixed, type-tagged
 frames per [ADR 0021](https://github.com/3rg0n/inferd/blob/main/docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md);
-the v2 content shape is specified in ADR 0015 and embeddings in
-ADR 0017. This crate carries the `serde`-derived Rust types plus the
-frame codecs with the 64 MiB per-frame cap (THREAT_MODEL F-5).
+the v2 content shape is specified in ADR 0015, embeddings in ADR 0017,
+and rerank in ADR 0027. This crate carries the `serde`-derived Rust
+types plus the frame codecs with the 64 MiB per-frame cap
+(THREAT_MODEL F-5).
 
 ## What's in here
 
@@ -22,10 +23,16 @@ frame codecs with the 64 MiB per-frame cap (THREAT_MODEL F-5).
   activation, v0.5.1) are optional, backwards-additive fields.
 - `embed::{EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask,
   EmbedUsage, EmbedErrorCode}` — the embeddings surface (ADR 0017).
+- `rerank::{RerankRequest, RerankResolved, RerankResponse, RerankResult,
+  RerankUsage, RerankErrorCode, MAX_RERANK_DOCUMENTS,
+  MAX_RERANK_TOTAL_BYTES}` — the cross-encoder rerank surface
+  ([ADR 0027](https://github.com/3rg0n/inferd/blob/main/docs/adr/0027-reranking-on-a-fourth-socket.md)).
+  Single-frame request, single-frame response; `results` carry the
+  caller's document `index` and a **raw** score, never document text.
 - `frame.rs`: `read_lp_frame` / `write_lp_json` / `write_lp_blob` +
   `FrameType` / `RawFrame` — the length-prefixed type-tagged codec for
-  generation; `read_frame` / `write_frame` — bounded NDJSON for embed.
-  `MAX_FRAME_BYTES` (64 MiB) is non-negotiable.
+  generation; `read_frame` / `write_frame` — bounded NDJSON for embed
+  and rerank. `MAX_FRAME_BYTES` (64 MiB) is non-negotiable.
 - `ErrorCode`, `ProtoError` — shared error types.
 
 The text-only v1 types (`Request`/`Response`/`Resolved`/`Role`/
@@ -66,11 +73,27 @@ reference implementation — it decodes wav/mp3, downmixes to mono, and
 resamples to whatever rate the daemon reports
 ([ADR 0025](https://github.com/3rg0n/inferd/blob/main/docs/adr/0025-bridge-decodes-and-resamples-audio.md)).
 
+## Rerank scores are raw, and the bounds are on count, not bytes
+
+A `RerankResult.score` is the reranker's raw classification logit. It is
+**not** normalised, **not** a probability, and comparable only *within
+one response* — negative values are ordinary, and the scale differs per
+model. Sort/threshold within a response; never persist a score or
+compare across two.
+
+`MAX_RERANK_DOCUMENTS` (256) and `MAX_RERANK_TOTAL_BYTES` (8 MiB) are
+enforced at parse time, in addition to the frame cap, because the frame
+cap bounds the wrong thing here: rerank runs one forward pass per
+document, so a single 64 MiB-legal frame could ask for thousands of
+them. That is the same amplification class as the per-request attachment
+bounds above (THREAT_MODEL F-1).
+
 ## Versioning
 
 The generation (v2) wire is **frozen** as of
 [ADR 0021](https://github.com/3rg0n/inferd/blob/main/docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md);
-embeddings as of ADR 0017. Backwards-additive changes are acceptable
+embeddings as of ADR 0017; rerank as of ADR 0027. Backwards-additive
+changes are acceptable
 (new optional fields older parsers ignore); a breaking change to the
 generation wire bumps the in-band `WIRE_VERSION` so a mismatch fails
 loudly rather than negotiating silently.

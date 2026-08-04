@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
+use inferd_proto::rerank::{RerankResolved, RerankResult as RerankScore, RerankUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, ToolCallId, ToolUseInput, UsageV2};
 use std::pin::Pin;
 use tokio_stream::Stream;
@@ -179,6 +180,17 @@ pub struct BackendCapabilities {
     /// somehow gets bound and a request arrives, dispatch returns
     /// `Error{EmbedUnsupported}`.
     pub embed: bool,
+    /// `true` if the backend implements `rerank` (per ADR 0027). When
+    /// `false` the daemon does not bind the rerank socket; if it
+    /// somehow gets bound and a request arrives, dispatch returns
+    /// `Error{RerankUnsupported}`.
+    ///
+    /// Independent of [`Self::embed`]: reranking needs a cross-encoder
+    /// with a classification head, which is a different model artefact
+    /// from a bi-encoder embedder. A model that happened to support
+    /// both would advertise both and bind both sockets; none currently
+    /// shipped does.
+    pub rerank: bool,
     /// Hardware-acceleration snapshot. `Cpu / 0` for the default
     /// trait impl; `mock` keeps the default; `llamacpp` reports the
     /// compile-time GGML backend + the configured `n_gpu_layers`.
@@ -225,6 +237,51 @@ pub enum EmbedError {
     InvalidRequest(String),
     /// Backend tried to embed and failed (model not loaded, remote
     /// API errored, etc.).
+    #[error("backend unavailable: {0}")]
+    Unavailable(String),
+    /// Anything else.
+    #[error("internal: {0}")]
+    Internal(String),
+}
+
+/// Result of a successful `Backend::rerank()` call.
+///
+/// Like [`EmbedResult`], a single complete value rather than a stream —
+/// a partial ordering is not useful.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RerankOutcome {
+    /// One score per request document, **sorted descending by score**
+    /// and already truncated to the request's `top_n`.
+    ///
+    /// Sorting and truncation happen here, in the adapter, rather than
+    /// in the daemon: the adapter is the only layer that knows the
+    /// score scale, and doing it once at the source means no consumer
+    /// (including the daemon's own lifecycle) has to re-derive an
+    /// ordering.
+    pub results: Vec<RerankScore>,
+    /// Backend-reported model name (e.g. `"bge-reranker-v2-m3"`).
+    pub model: String,
+    /// Token-count usage, summed across every query/document pair.
+    pub usage: RerankUsage,
+}
+
+/// Errors returned by `Backend::rerank()`.
+///
+/// Mirrors [`EmbedError`] — same shape, separate type so each surface's
+/// taxonomy can move independently.
+#[derive(Debug, thiserror::Error)]
+pub enum RerankError {
+    /// Backend was not ready when `rerank()` was called.
+    #[error("backend not ready")]
+    NotReady,
+    /// Backend doesn't expose reranking capability.
+    #[error("rerank not supported by this backend")]
+    Unsupported,
+    /// Backend rejected the request as malformed (a query/document pair
+    /// too long for the rerank context, etc.).
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    /// Backend tried to score and failed.
     #[error("backend unavailable: {0}")]
     Unavailable(String),
     /// Anything else.
@@ -302,6 +359,19 @@ pub trait Backend: Send + Sync {
     /// for misconfiguration.
     async fn embed(&self, _req: EmbedResolved) -> Result<EmbedResult, EmbedError> {
         Err(EmbedError::Unsupported)
+    }
+
+    /// Score each document against the query with a cross-encoder (per
+    /// ADR 0027). Default impl returns `RerankError::Unsupported` —
+    /// adapters opt in by overriding and setting
+    /// `capabilities().rerank = true`. As with `embed`, the daemon binds
+    /// the rerank socket only when the capability is `true`, so reaching
+    /// this default in production is a fail-safe for misconfiguration.
+    ///
+    /// Implementations return results already sorted descending by score
+    /// and truncated to `req.top_n`.
+    async fn rerank(&self, _req: RerankResolved) -> Result<RerankOutcome, RerankError> {
+        Err(RerankError::Unsupported)
     }
 
     /// Best-effort graceful shutdown. The daemon calls this on stop; the

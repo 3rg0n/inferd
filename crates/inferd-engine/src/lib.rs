@@ -30,7 +30,7 @@ pub mod openai_compat;
 
 pub use backend::{
     AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, EmbedError, EmbedResult,
-    GenerateError, TokenEventV2, TokenStreamV2,
+    GenerateError, RerankError, RerankOutcome, TokenEventV2, TokenStreamV2,
 };
 
 /// Default `max_tokens` for v2 requests when the consumer didn't

@@ -411,13 +411,15 @@ async fn cmd_doctor(
                     let tools = c.tools.unwrap_or(false);
                     let thinking = c.thinking.unwrap_or(false);
                     let embed = c.embed.unwrap_or(false);
+                    let rerank = c.rerank.unwrap_or(false);
                     report_problem(
                         "backend",
                         true,
                         &format!(
                             "{backend} accelerator={accel} gpu_layers={gpu_layers} \
                              wire_version={wire} v2={v2} vision={vision} audio={audio} \
-                             tools={tools} thinking={thinking} embed={embed}"
+                             tools={tools} thinking={thinking} embed={embed} \
+                             rerank={rerank}"
                         ),
                     );
                     if let Some(name) = c.device_name.as_deref() {
@@ -535,6 +537,9 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(b) = event.embed {
         obj.insert("embed".into(), json!(b));
+    }
+    if let Some(b) = event.rerank {
+        obj.insert("rerank".into(), json!(b));
     }
     if let Some(s) = &event.accelerator {
         obj.insert("accelerator".into(), Value::String(s.clone()));

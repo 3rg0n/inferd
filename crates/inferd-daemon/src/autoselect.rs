@@ -121,6 +121,10 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            // Gemma 4 has no classification head — rerank needs a
+            // cross-encoder (ADR 0027).
+            rerank: false,
+            rerank_n_ctx: 2048,
             // Detected from GGUF metadata (ADR 0026).
             chat_template: None,
         },
@@ -150,15 +154,23 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            // Gemma 4 has no classification head — rerank needs a
+            // cross-encoder (ADR 0027).
+            rerank: false,
+            rerank_n_ctx: 2048,
             // Detected from GGUF metadata (ADR 0026).
             chat_template: None,
         },
     }
 }
 
-/// True if the entry is the generation model (llamacpp, not embed).
+/// True if the entry is the generation model — a llamacpp entry serving
+/// neither embed nor rerank. Both of the non-generation capabilities have
+/// to be excluded here: a rerank-only cross-encoder is not a generation
+/// backend, and treating it as one would read as an operator-pinned
+/// generation model and suppress auto-select entirely (ADR 0027).
 fn is_gen_llamacpp(e: &BackendEntry) -> bool {
-    matches!(e, BackendEntry::Llamacpp(l) if !l.embed)
+    matches!(e, BackendEntry::Llamacpp(l) if !l.embed && !l.rerank)
 }
 
 /// Apply ADR 0023 auto-selection to a config in place.
@@ -269,6 +281,9 @@ fn default_embed_entry() -> LlamacppEntry {
         embed: true,
         embed_pooling: None,
         embed_n_ctx: 2048,
+        // Bi-encoder: no classification head, so no rerank (ADR 0027).
+        rerank: false,
+        rerank_n_ctx: 2048,
         // Embedding model: no chat template, no renderer (ADR 0026).
         chat_template: None,
     }

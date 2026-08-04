@@ -46,7 +46,8 @@ host. It:
 - Loads a model once, keeps it warm.
 - Exposes a small IPC protocol on a Unix socket or Windows named pipe
   (no inbound network listener, ADR 0022) — length-prefixed, type-tagged
-  frames for generation (ADR 0021), NDJSON for embeddings (ADR 0017).
+  frames for generation (ADR 0021), NDJSON for embeddings (ADR 0017) and
+  rerank (ADR 0027).
 - Enforces per-caller identity via kernel-attested peer credentials
   (UID on Unix, SID on Windows).
 - Multiplexes requests through a single engine or across a pool of
@@ -87,12 +88,19 @@ What ships today (v0.6):
   `model_autoselect: "auto"` and the daemon picks the Gemma 4 variant by
   the accelerator's total memory — ≥ 20 GiB → 12B, else E4B — with a
   pre-load fit check and CPU fallback for embeddings under memory pressure.
-- **Two frozen wire surfaces**, each on its own socket: generation
+- **Three frozen wire surfaces**, each on its own socket: generation
   (v2 — typed content blocks / attachments / tools, ADR 0015) on the
   length-prefixed, type-tagged framing introduced in v0.4 (ADR 0021,
-  with raw BLOB media and an in-band `wire_version`), and embeddings
-  (ADR 0017, NDJSON). The original text-only v1 surface was folded into
-  v2 and removed in v0.4.
+  with raw BLOB media and an in-band `wire_version`), embeddings
+  (ADR 0017, NDJSON), and rerank (ADR 0027, NDJSON). The original
+  text-only v1 surface was folded into v2 and removed in v0.4.
+- **Cross-encoder rerank** (ADR 0027): a fourth socket that scores a
+  query against each candidate document *jointly* — one forward pass per
+  document, so nothing is precomputable. It sits downstream of retrieval
+  (`embed → top-50 → rerank → top-5 → generate`), which is where the
+  precision gain over vector similarity alone comes from. Bound only when
+  the warm model has a classification head; a cross-encoder GGUF such as
+  `bge-reranker-v2-m3` serves it, and Gemma 4 / EmbeddingGemma do not.
 - **Structured-output grammar** (ADR 0013): a request may carry a
   `response_format` JSON Schema, which the daemon compiles to a GBNF
   grammar so output is constrained to match the schema. Reachable both on

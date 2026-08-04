@@ -277,6 +277,29 @@ pub struct LlamacppEntry {
     #[serde(default = "default_embed_n_ctx")]
     pub embed_n_ctx: u32,
 
+    /// Opt this backend into serving reranking per ADR 0027. When
+    /// `true`, the adapter allocates a *third* `llama_context`
+    /// configured with `LLAMA_POOLING_TYPE_RANK` — pooling type is
+    /// fixed at context creation, so rerank cannot be a mode on the
+    /// embed context. `capabilities().rerank` flips `true` accordingly.
+    /// Default: `false`.
+    ///
+    /// Only meaningful for a cross-encoder / reranker GGUF. The
+    /// backend refuses to initialise if the model's vocab lacks the
+    /// tokens the query/document pair format needs (BOS, plus at least
+    /// one of EOS / SEP / a `rerank` chat template).
+    #[serde(default)]
+    pub rerank: bool,
+
+    /// Context window for the dedicated rerank `llama_context`, in
+    /// tokens. Default 2048. This bounds one query+document *pair* and
+    /// is also the batch/ubatch size for that context: a pair that
+    /// tokenizes longer is rejected before the FFI call, because
+    /// libllama aborts the process when `n_ubatch < n_tokens` inside
+    /// the encoder. Ignored when `rerank = false`.
+    #[serde(default = "default_rerank_n_ctx")]
+    pub rerank_n_ctx: u32,
+
     /// Prompt-grammar family for this model (ADR 0026), e.g.
     /// `"gemma4"` or `"granite"`.
     ///
@@ -412,6 +435,10 @@ fn default_embed_n_ctx() -> u32 {
     2048
 }
 
+fn default_rerank_n_ctx() -> u32 {
+    2048
+}
+
 fn default_autoselect_min_vram_gib() -> u32 {
     20
 }
@@ -541,6 +568,10 @@ pub fn default_first_boot_config() -> ConfigFile {
                 embed: false,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
+                // Gemma 4 is a generative model with no classification
+                // head — rerank needs a cross-encoder (ADR 0027).
+                rerank: false,
+                rerank_n_ctx: default_rerank_n_ctx(),
                 // Detected from the GGUF's own metadata (ADR 0026);
                 // Gemma 4's template fingerprints unambiguously, so
                 // declaring it would only add a way to get it wrong.
@@ -567,6 +598,11 @@ pub fn default_first_boot_config() -> ConfigFile {
                 embed: true,
                 embed_pooling: None,
                 embed_n_ctx: default_embed_n_ctx(),
+                // EmbeddingGemma is a bi-encoder: no classification
+                // head, so no rerank (ADR 0027). Operators who want
+                // reranking add a cross-encoder backend of their own.
+                rerank: false,
+                rerank_n_ctx: default_rerank_n_ctx(),
                 // EmbeddingGemma carries no `tokenizer.chat_template`
                 // and serves no generation, so it needs no renderer
                 // (ADR 0026).
@@ -825,6 +861,10 @@ impl ConfigFile {
             embed: false,
             embed_pooling: None,
             embed_n_ctx: default_embed_n_ctx(),
+            // Same for ADR 0027's rerank surface: legacy single-model
+            // configs stay generation-only.
+            rerank: false,
+            rerank_n_ctx: default_rerank_n_ctx(),
             // Legacy configs name no family; detection from GGUF
             // metadata applies (ADR 0026).
             chat_template: None,

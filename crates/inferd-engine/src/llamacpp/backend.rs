@@ -21,7 +21,7 @@
 
 use crate::backend::{
     AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, EmbedError, EmbedResult,
-    GenerateError, TokenEventV2, TokenStreamV2,
+    GenerateError, RerankError, RerankOutcome, TokenEventV2, TokenStreamV2,
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::{
@@ -34,6 +34,7 @@ use crate::llamacpp::mtmd::{Bitmap, Mtmd, MtmdConfig, MtmdError};
 use crate::llamacpp::tool_parser::{Output as TokenOutput, ToolCallParser};
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
+use inferd_proto::rerank::{RerankResolved, RerankResult, RerankUsage};
 use inferd_proto::v2::{Attachment, ResolvedV2, StopReasonV2, UsageV2};
 use std::ffi::CString;
 use std::ptr::{self, NonNull};
@@ -101,6 +102,20 @@ pub enum LlamaCppError {
         /// Bounded description of the unmatched template.
         fingerprint: String,
     },
+    /// `rerank: true` was configured but the model's vocab can't express
+    /// a cross-encoder pair (ADR 0027).
+    ///
+    /// Fatal at load for the same reason [`Self::NoChatRenderer`] is:
+    /// `llama_get_embeddings_seq` under `POOLING_TYPE_RANK` returns a
+    /// float either way, so a model missing the tokens the pair format
+    /// needs produces *scores* — just meaningless ones. There is no
+    /// runtime signal to detect it, and per invariant #5 failing the
+    /// load means the rerank socket is never bound.
+    #[error("model cannot serve rerank requests: {reason}")]
+    RerankPreconditions {
+        /// Which precondition failed, naming the missing token.
+        reason: String,
+    },
 }
 
 impl From<LlamaCppError> for GenerateError {
@@ -153,6 +168,26 @@ pub struct LlamaCppConfig {
     /// supports up to 2048; defaults to that. Larger inputs produce
     /// `EmbedError::InvalidRequest`.
     pub embed_n_ctx: u32,
+    /// Enable the reranking pathway (per ADR 0027). When `true` the
+    /// adapter allocates a `llama_context` configured with
+    /// `embeddings = true` + `pooling_type = RANK` — which attaches the
+    /// model's classification head to the graph — advertises
+    /// `BackendCapabilities::rerank = true`, and serves
+    /// `Backend::rerank`. Defaults to `false`: a rerank context is a
+    /// second context plus KV cache against the model, and deployments
+    /// doing no retrieval should not pay for it.
+    ///
+    /// Setting this on a model with no classification head is caught at
+    /// load, not at request time — see
+    /// [`LlamaCppError::RerankPreconditions`].
+    pub rerank: bool,
+    /// Context window for the rerank context. Each forward pass holds
+    /// one `query`/`document` pair, so this bounds the *pair* length,
+    /// not the corpus. 2048 matches [`Self::embed_n_ctx`]; raise it for
+    /// a long-context reranker (bge-reranker-v2-m3 handles 8192) at the
+    /// cost of a larger KV allocation. Pairs that don't fit produce
+    /// `RerankError::InvalidRequest`.
+    pub rerank_n_ctx: u32,
     /// Operator-declared chat-template family (ADR 0026), one of
     /// [`ChatFamily::NAMES`]. When set it **wins** over metadata
     /// detection — declaration is the contract, detection is the
@@ -178,6 +213,8 @@ impl Default for LlamaCppConfig {
             embed: false,
             embed_pooling: None,
             embed_n_ctx: 2048,
+            rerank: false,
+            rerank_n_ctx: 2048,
             chat_template: None,
         }
     }
@@ -347,6 +384,14 @@ struct State {
     /// over `llama_set_embeddings`. Its `ContextHandle` holds an
     /// `Arc<ModelHandle>` clone — see the struct docs.
     embed: Option<EmbedContext>,
+    /// Dedicated reranking context (ADR 0027). `Some` when the adapter
+    /// was configured with `rerank = true`. A separate context rather
+    /// than a mode on `embed`'s, because `pooling_type` is fixed at
+    /// context creation: RANK attaches the classification head to the
+    /// graph, so one context cannot serve both surfaces. Its
+    /// `ContextHandle` holds an `Arc<ModelHandle>` clone — see the
+    /// struct docs.
+    rerank: Option<RerankContext>,
 }
 
 /// Owned `llama_context` reserved for embedding. Same shape as
@@ -365,6 +410,31 @@ struct EmbedContext {
     /// rejection is the only path to keep the daemon alive when a
     /// caller sends a too-long input (issue #20).
     n_ubatch: u32,
+}
+
+/// Owned `llama_context` reserved for reranking, allocated with
+/// `pooling_type = LLAMA_POOLING_TYPE_RANK` (ADR 0027).
+struct RerankContext {
+    ctx: ContextHandle,
+    /// Width of the classification head's output, from
+    /// `llama_model_n_cls_out`. Cached so `run_rerank` can size the
+    /// slice it reads from `llama_get_embeddings_seq`, which under RANK
+    /// pooling returns `float[n_cls_out]` rather than `float[n_embd]`
+    /// (`include/llama.h:1030`). Output `0` is the relevance score; a
+    /// model reporting more is not multi-label-exposed on the wire.
+    n_cls_out: u32,
+    /// Physical batch size (`n_ubatch`) of this context. Cached for the
+    /// same reason as [`EmbedContext::n_ubatch`]: libllama asserts
+    /// `n_ubatch >= n_tokens` inside `llama_encode` and aborts the
+    /// process, so an over-long query/document pair has to be rejected
+    /// before the FFI call, not after (issue #20).
+    n_ubatch: u32,
+    /// The model's `rerank` chat template, if it carries one. Read once
+    /// at load via `llama_model_chat_template(model, "rerank")`, because
+    /// the returned pointer is owned by the model and the value never
+    /// changes. `Some` selects template substitution in
+    /// [`format_rerank_pair`]; `None` selects the SEP-joined fallback.
+    prompt_template: Option<String>,
 }
 
 /// Internal capability snapshot used by `Backend::capabilities()`.
@@ -540,6 +610,71 @@ impl LlamaCpp {
             None
         };
 
+        // Optional dedicated rerank context (ADR 0027). Same shape as
+        // the embed context but with `pooling_type = RANK`, which
+        // attaches the model's classification head to the graph. The
+        // pooling type is fixed at context creation, so this genuinely
+        // needs its own context rather than a flag on the embed one.
+        let rerank = if config.rerank {
+            // SAFETY: FFI; `model.as_ptr()` valid for the model's
+            // lifetime.
+            let vocab = unsafe { ffi::llama_model_get_vocab(model.as_ptr()) };
+            let prompt_template = read_model_chat_template(model.as_ptr(), "rerank");
+            // Fail the load, not the request: see
+            // `LlamaCppError::RerankPreconditions`.
+            check_rerank_preconditions(vocab, prompt_template.is_some())?;
+
+            // SAFETY: FFI. Same contract as the embed context above.
+            let rerank_ctx_ptr = unsafe {
+                let mut params = ffi::llama_context_default_params();
+                params.n_ctx = config.rerank_n_ctx;
+                // Sized to the full context for the issue #20 reason
+                // documented on `EmbedContext::n_ubatch`: one
+                // query/document pair is encoded in a single batch, so
+                // any pair fitting in n_ctx must fit in one ubatch.
+                params.n_batch = config.rerank_n_ctx;
+                params.n_ubatch = config.rerank_n_ctx;
+                params.embeddings = true;
+                params.pooling_type = ffi::LLAMA_POOLING_TYPE_RANK;
+                ffi::llama_init_from_model(model.as_ptr(), params)
+            };
+            let rerank_ctx = NonNull::new(rerank_ctx_ptr)
+                .map(|ptr| ContextHandle {
+                    ptr,
+                    _model: Arc::clone(&model),
+                })
+                .ok_or(LlamaCppError::ContextInit)?;
+            // SAFETY: FFI; `model.as_ptr()` valid. Defaults to 1 in
+            // libllama (`llama-hparams.h:188`) for a model that declares
+            // no classifier labels, so this is never 0 in practice — the
+            // guard below is belt-and-braces against a future upstream
+            // change making a zero-width read possible.
+            let n_cls_out = unsafe { ffi::llama_model_n_cls_out(model.as_ptr()) };
+            if n_cls_out == 0 {
+                return Err(LlamaCppError::RerankPreconditions {
+                    reason: "model reports n_cls_out = 0, so it has no classification head to \
+                             score with"
+                        .to_string(),
+                });
+            }
+            // SAFETY: FFI; context just allocated and held exclusively.
+            let n_ubatch = unsafe { ffi::llama_n_ubatch(rerank_ctx.ptr.as_ptr()) };
+            debug!(
+                n_cls_out,
+                n_ubatch,
+                has_rerank_template = prompt_template.is_some(),
+                "rerank context allocated"
+            );
+            Some(RerankContext {
+                ctx: rerank_ctx,
+                n_cls_out,
+                n_ubatch,
+                prompt_template,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             name: "llamacpp",
             ready: AtomicBool::new(true),
@@ -553,6 +688,7 @@ impl LlamaCpp {
                 mtmd,
                 caps_v2,
                 embed,
+                rerank,
             })),
         })
     }
@@ -710,6 +846,157 @@ fn read_gguf_meta_string(model: *const ffi::llama_model, key: &str) -> Option<St
     cstr.to_str().ok().map(|s| s.to_string())
 }
 
+/// Read a named chat template off the model
+/// (`llama_model_chat_template(model, name)`).
+///
+/// Distinct from [`read_gguf_meta_string`] on the `tokenizer.chat_template`
+/// key: libllama resolves *named* templates (`"rerank"`, `"tool_use"`, …)
+/// from the `chat_template.<name>` metadata family, and returns a pointer
+/// it owns rather than filling a caller buffer. `None` when the model
+/// carries no template under that name.
+fn read_model_chat_template(model: *const ffi::llama_model, name: &str) -> Option<String> {
+    let name_c = CString::new(name).ok()?;
+    // SAFETY: FFI; `model` valid, `name_c` lives for the call. The
+    // returned pointer is owned by the model and valid for its lifetime;
+    // we copy out of it immediately and never retain it.
+    let ptr = unsafe { ffi::llama_model_chat_template(model, name_c.as_ptr()) };
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, NUL-terminated, owned by the model.
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr) };
+    s.to_str().ok().filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// Verify the model's vocab can express a cross-encoder pair before the
+/// rerank socket is ever bound (ADR 0027).
+///
+/// Ported from `vendor/llama.cpp/common/common.cpp:1373-1394`, which runs
+/// the same checks when `pooling_type == RANK`. Upstream logs and gives
+/// up; we return a typed error so the daemon fails the backend init.
+///
+/// - **BOS is mandatory.** Every pair format starts with it, and there is
+///   no substitute.
+/// - **At least one of EOS / SEP / a `rerank` template.** Without any of
+///   the three there is no way to mark the query/document boundary, so
+///   the model scores one undifferentiated blob.
+/// - **EOS missing but SEP present is fine** — SEP stands in as the
+///   terminator (see [`format_rerank_pair`]).
+///
+/// Takes the resolved template presence as a `bool` rather than the model
+/// pointer so the decision is unit-testable without a loaded GGUF.
+fn check_rerank_preconditions(
+    vocab: *const ffi::llama_vocab,
+    has_rerank_template: bool,
+) -> Result<(), LlamaCppError> {
+    // SAFETY: FFI; `vocab` is derived from a live model.
+    let (bos, eos, sep) = unsafe {
+        (
+            ffi::llama_vocab_bos(vocab),
+            ffi::llama_vocab_eos(vocab),
+            ffi::llama_vocab_sep(vocab),
+        )
+    };
+    decide_rerank_preconditions(bos, eos, sep, has_rerank_template)
+}
+
+/// Pure decision half of [`check_rerank_preconditions`].
+fn decide_rerank_preconditions(
+    bos: ffi::llama_token,
+    eos: ffi::llama_token,
+    sep: ffi::llama_token,
+    has_rerank_template: bool,
+) -> Result<(), LlamaCppError> {
+    if bos == ffi::LLAMA_TOKEN_NULL {
+        return Err(LlamaCppError::RerankPreconditions {
+            reason: "vocab has no BOS token, which every cross-encoder pair format requires"
+                .to_string(),
+        });
+    }
+    let has_eos = eos != ffi::LLAMA_TOKEN_NULL;
+    let has_sep = sep != ffi::LLAMA_TOKEN_NULL;
+    if !has_eos && !has_sep && !has_rerank_template {
+        return Err(LlamaCppError::RerankPreconditions {
+            reason: "vocab has no EOS token, no SEP token, and the model carries no `rerank` \
+                     chat template, so there is no way to separate query from document"
+                .to_string(),
+        });
+    }
+    if !has_eos {
+        warn!("rerank: vocab has no EOS token; using SEP as the pair terminator");
+    }
+    Ok(())
+}
+
+/// Build the token sequence for one query/document pair (ADR 0013 — the
+/// daemon owns model-specific shaping; ADR 0027 §"The daemon owns pair
+/// formatting").
+///
+/// Mirrors `vendor/llama.cpp/tools/server/server-common.cpp:1543`
+/// (`format_prompt_rerank`):
+///
+/// - With a `rerank` chat template, substitute `{query}` / `{document}`
+///   and tokenise the result with `parse_special = true` — the template
+///   is model-authored, so its control tokens are meant to be honoured.
+/// - Otherwise assemble `BOS query [EOS] [SEP] document [EOS]`, each
+///   optional piece gated on `llama_vocab_get_add_bos` / `_add_eos` /
+///   `_add_sep`, with SEP substituting for a missing EOS. Query and
+///   document are tokenised with `add_special = false` (we place the
+///   specials ourselves) and `parse_special = false` (caller-supplied
+///   text must not smuggle control tokens).
+fn format_rerank_pair(
+    vocab: *const ffi::llama_vocab,
+    template: Option<&str>,
+    query: &str,
+    document: &str,
+) -> Result<Vec<ffi::llama_token>, LlamaCppError> {
+    if let Some(tmpl) = template {
+        let prompt = tmpl
+            .replace("{query}", query)
+            .replace("{document}", document);
+        return tokenize(vocab, prompt.as_bytes(), false, true);
+    }
+
+    // SAFETY: FFI; `vocab` derived from a live model.
+    let (bos, eos, sep, add_bos, add_eos, add_sep) = unsafe {
+        (
+            ffi::llama_vocab_bos(vocab),
+            ffi::llama_vocab_eos(vocab),
+            ffi::llama_vocab_sep(vocab),
+            ffi::llama_vocab_get_add_bos(vocab),
+            ffi::llama_vocab_get_add_eos(vocab),
+            ffi::llama_vocab_get_add_sep(vocab),
+        )
+    };
+    // SEP as the EOS fallback, matching upstream. Preconditions checked
+    // at load guarantee at least one of the two exists.
+    let terminator = if eos != ffi::LLAMA_TOKEN_NULL {
+        eos
+    } else {
+        sep
+    };
+
+    let query_tokens = tokenize(vocab, query.as_bytes(), false, false)?;
+    let doc_tokens = tokenize(vocab, document.as_bytes(), false, false)?;
+
+    let mut out = Vec::with_capacity(query_tokens.len() + doc_tokens.len() + 4);
+    if add_bos {
+        out.push(bos);
+    }
+    out.extend_from_slice(&query_tokens);
+    if add_eos && terminator != ffi::LLAMA_TOKEN_NULL {
+        out.push(terminator);
+    }
+    if add_sep && sep != ffi::LLAMA_TOKEN_NULL {
+        out.push(sep);
+    }
+    out.extend_from_slice(&doc_tokens);
+    if add_eos && terminator != ffi::LLAMA_TOKEN_NULL {
+        out.push(terminator);
+    }
+    Ok(out)
+}
+
 fn ensure_backend_init() {
     LLAMA_BACKEND_INIT.call_once(|| {
         // SAFETY: FFI; documented as required-once at process start.
@@ -742,9 +1029,9 @@ impl Backend for LlamaCpp {
         // every generation-capable backend — otherwise the daemon's
         // v2-capability gate refuses every real request. Regression
         // caught by tests/echo_llamacpp.rs.)
-        let (snap, embed) = {
+        let (snap, embed, rerank) = {
             let guard = self.state.lock().expect("poisoned llamacpp state mutex");
-            (guard.caps_v2, guard.embed.is_some())
+            (guard.caps_v2, guard.embed.is_some(), guard.rerank.is_some())
         };
         //
         // The one case that *is* false: no chat renderer resolved at
@@ -768,6 +1055,7 @@ impl Backend for LlamaCpp {
                 .as_deref()
                 .is_some_and(|r| r.supports_thinking()),
             embed,
+            rerank,
             accelerator: self.accelerator.clone(),
         }
     }
@@ -848,6 +1136,20 @@ impl Backend for LlamaCpp {
         tokio::task::spawn_blocking(move || run_embed(&state, &prefixed, dimensions, label))
             .await
             .map_err(|e| EmbedError::Internal(format!("embed task join: {e}")))?
+    }
+
+    async fn rerank(&self, req: RerankResolved) -> Result<RerankOutcome, RerankError> {
+        if !self.ready() {
+            return Err(RerankError::NotReady);
+        }
+
+        let label = self.model_label.clone();
+        let state = Arc::clone(&self.state);
+        // One forward pass per document, so this is the longest-running
+        // FFI call on any surface — it must not run on a runtime worker.
+        tokio::task::spawn_blocking(move || run_rerank(&state, &req, label))
+            .await
+            .map_err(|e| RerankError::Internal(format!("rerank task join: {e}")))?
     }
 
     async fn stop(&self, _timeout: Duration) -> Result<(), GenerateError> {
@@ -1540,6 +1842,122 @@ fn run_embed(
     })
 }
 
+/// Score every document against the query with the classification head
+/// (ADR 0027).
+///
+/// One `llama_encode` per document — a cross-encoder scores the pair
+/// jointly, so there is nothing to precompute and nothing to share
+/// between documents. The KV cache is cleared between pairs so each
+/// starts at position 0.
+///
+/// Under `LLAMA_POOLING_TYPE_RANK`, `llama_get_embeddings_seq` returns
+/// `float[n_cls_out]` rather than an embedding (`include/llama.h:1030`);
+/// element `0` is the relevance score. Scores are returned raw — not
+/// normalised, not squashed — because the scale is model-specific and a
+/// fake 0..1 range would make incomparable numbers look comparable.
+///
+/// Results come back sorted descending and truncated to `top_n`, which is
+/// the contract [`RerankOutcome`] documents.
+fn run_rerank(
+    state: &Arc<Mutex<State>>,
+    req: &RerankResolved,
+    model_label: String,
+) -> Result<RerankOutcome, RerankError> {
+    let guard = state.lock().expect("poisoned llamacpp state mutex");
+    let model = guard.model.as_ptr();
+    let rerank = guard.rerank.as_ref().ok_or(RerankError::Unsupported)?;
+    let ctx = rerank.ctx.ptr.as_ptr();
+    let n_cls_out = rerank.n_cls_out as usize;
+    let n_ubatch = rerank.n_ubatch as usize;
+    let template = rerank.prompt_template.as_deref();
+
+    // SAFETY: FFI; pointers held under the lock guard.
+    let vocab = unsafe { ffi::llama_model_get_vocab(model) };
+
+    let mut input_tokens: u32 = 0;
+    let mut results: Vec<RerankResult> = Vec::with_capacity(req.documents.len());
+
+    for (i, document) in req.documents.iter().enumerate() {
+        // Reset KV cache so each pair starts at position 0.
+        // SAFETY: FFI; ctx valid in scope.
+        unsafe {
+            let mem = ffi::llama_get_memory(ctx);
+            if !mem.is_null() {
+                ffi::llama_memory_clear(mem, true);
+            }
+        }
+
+        let mut tokens = format_rerank_pair(vocab, template, &req.query, document)
+            .map_err(|e| RerankError::InvalidRequest(format!("documents[{i}]: {e}")))?;
+        if tokens.is_empty() {
+            return Err(RerankError::InvalidRequest(format!(
+                "documents[{i}]: query/document pair produced zero tokens"
+            )));
+        }
+        // Reject before the FFI call: libllama asserts
+        // `n_ubatch >= n_tokens` inside `llama_encode` and aborts the
+        // whole process (issue #20). Naming the index matters here in a
+        // way it doesn't for embed — one oversized document in a batch of
+        // 256 is the common case, and the caller needs to know which.
+        if tokens.len() > n_ubatch {
+            return Err(RerankError::InvalidRequest(format!(
+                "documents[{i}]: query/document pair exceeds rerank context: {} tokens > \
+                 n_ubatch {}",
+                tokens.len(),
+                n_ubatch
+            )));
+        }
+        input_tokens = input_tokens.saturating_add(tokens.len() as u32);
+
+        // SAFETY: FFI; tokens.as_mut_ptr() valid for the call.
+        let batch = unsafe { ffi::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32) };
+        // SAFETY: FFI; ctx valid.
+        let rc = unsafe { ffi::llama_encode(ctx, batch) };
+        if rc != 0 {
+            return Err(RerankError::Unavailable(format!(
+                "llama_encode failed on documents[{i}]: {rc}"
+            )));
+        }
+
+        // SAFETY: FFI; ctx valid. Pointer is owned by libllama and valid
+        // until the next encode/decode call, which is why the score is
+        // copied out here rather than retained.
+        let raw = unsafe { ffi::llama_get_embeddings_seq(ctx, 0) };
+        if raw.is_null() {
+            return Err(RerankError::Unavailable(format!(
+                "llama_get_embeddings_seq returned null on documents[{i}]"
+            )));
+        }
+        // SAFETY: FFI contract — under RANK pooling `raw` points to
+        // `n_cls_out` consecutive f32 values, and `n_cls_out >= 1` was
+        // established at load.
+        let score = unsafe { std::slice::from_raw_parts(raw, n_cls_out) }[0];
+
+        results.push(RerankResult {
+            // `MAX_RERANK_DOCUMENTS` (256) bounds the loop in the proto
+            // layer, so the usize -> u32 narrowing cannot truncate.
+            index: i as u32,
+            score,
+        });
+    }
+
+    // Descending by score. `total_cmp` rather than `partial_cmp().unwrap()`
+    // — a NaN from a degenerate model must not panic the daemon, and
+    // `total_cmp` is a total order over every f32 including NaN, so the
+    // sort stays deterministic instead of yielding a garbage permutation.
+    // `sort_by` is stable, so equal scores keep document order.
+    results.sort_by(|a, b| b.score.total_cmp(&a.score));
+    if let Some(n) = req.top_n {
+        results.truncate(n as usize);
+    }
+
+    Ok(RerankOutcome {
+        results,
+        model: model_label,
+        usage: RerankUsage { input_tokens },
+    })
+}
+
 /// In-place L2 normalisation. Zero-norm vectors are left unchanged
 /// (no division by zero).
 fn l2_normalise(v: &mut [f32]) {
@@ -1583,5 +2001,51 @@ mod tests {
         // An audio-capable mmproj that reports no rate gives us nothing
         // to compare against; rejecting here would break valid requests.
         assert!(check_audio_sample_rate("a1", 44_100, None).is_ok());
+    }
+
+    // ADR 0027 rerank preconditions. These are load-time gates, and the
+    // reason they're gates at all is that a model failing them still
+    // *produces* scores under RANK pooling — just meaningless ones. There
+    // is no runtime signal, so the decision has to be right here.
+
+    const BOS: ffi::llama_token = 1;
+    const EOS: ffi::llama_token = 2;
+    const SEP: ffi::llama_token = 3;
+    const NONE: ffi::llama_token = ffi::LLAMA_TOKEN_NULL;
+
+    #[test]
+    fn rerank_preconditions_accept_bos_plus_eos() {
+        assert!(decide_rerank_preconditions(BOS, EOS, SEP, false).is_ok());
+    }
+
+    #[test]
+    fn rerank_preconditions_reject_missing_bos() {
+        let err = decide_rerank_preconditions(NONE, EOS, SEP, true)
+            .expect_err("no BOS means no pair format works, template or not");
+        assert!(err.to_string().contains("BOS"), "{err}");
+    }
+
+    #[test]
+    fn rerank_preconditions_accept_sep_without_eos() {
+        // Upstream (common.cpp:1373) warns and continues here — SEP is
+        // the documented EOS fallback.
+        assert!(decide_rerank_preconditions(BOS, NONE, SEP, false).is_ok());
+    }
+
+    #[test]
+    fn rerank_preconditions_accept_template_without_eos_or_sep() {
+        // A `rerank` chat template carries its own boundary markers, so
+        // it substitutes for both.
+        assert!(decide_rerank_preconditions(BOS, NONE, NONE, true).is_ok());
+    }
+
+    #[test]
+    fn rerank_preconditions_reject_no_separator_at_all() {
+        let err = decide_rerank_preconditions(BOS, NONE, NONE, false)
+            .expect_err("with no EOS, no SEP and no template there is no query/document boundary");
+        let msg = err.to_string();
+        assert!(msg.contains("EOS"), "{msg}");
+        assert!(msg.contains("SEP"), "{msg}");
+        assert!(msg.contains("rerank"), "{msg}");
     }
 }

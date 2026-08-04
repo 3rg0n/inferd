@@ -3,12 +3,19 @@
 Rust client for the [inferd](https://github.com/3rg0n/inferd)
 local-inference daemon.
 
-Two frozen wire surfaces, each on its own socket: generation
+Three frozen wire surfaces, each on its own socket: generation
 (`ClientV2` — typed content blocks / attachments / tools, ADR 0015)
 on the length-prefixed, type-tagged framing introduced in v0.4
 ([ADR 0021](https://github.com/3rg0n/inferd/blob/main/docs/adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)),
-and embeddings (`EmbedClient`, ADR 0017, NDJSON). The original
-text-only v1 surface was folded into `ClientV2` and removed in v0.4.
+embeddings (`EmbedClient`, ADR 0017, NDJSON), and cross-encoder rerank
+(`RerankClient`, [ADR 0027](https://github.com/3rg0n/inferd/blob/main/docs/adr/0027-reranking-on-a-fourth-socket.md),
+NDJSON). The original text-only v1 surface was folded into `ClientV2`
+and removed in v0.4.
+
+A socket exists only when the warm model advertises that capability, so
+a failed connect is capability discovery, not an outage — and one daemon
+serves one model (ADR 0012), so generation + embeddings + rerank means
+three daemon processes.
 
 ## Install the daemon first
 
@@ -125,6 +132,55 @@ so point an OpenAI SDK at the bridge if you'd rather not own conversion.
 Per-request bounds: 32 attachments and 128 MiB aggregate, separate from
 the 64 MiB single-frame cap.
 
+## Rerank (cross-encoder reordering)
+
+`RerankClient` is a single round-trip like `EmbedClient`, but the model
+is a cross-encoder: query and document are scored *together*, one
+forward pass per document, so nothing is precomputable. That is why it
+belongs **downstream of retrieval** — `embed → vector search → top-50 →
+rerank → top-5 → generate` — not as a replacement for it.
+
+```rust,ignore
+use inferd_client::{RerankClient, RerankRequest, RerankResponse};
+
+let mut client = RerankClient::dial_uds(&inferd_client::default_rerank_addr()).await?;
+let resp = client
+    .rerank(RerankRequest {
+        id: "rr-1".into(),
+        query: "how do I bind a unix socket".into(),
+        documents: candidates.clone(),
+        top_n: Some(5),
+    })
+    .await?;
+
+match resp {
+    // Already sorted by score descending and truncated to `top_n`.
+    RerankResponse::Rerank { results, .. } => {
+        for r in results {
+            println!("{:.3}  {}", r.score, candidates[r.index as usize]);
+        }
+    }
+    RerankResponse::Error { code, message, .. } => eprintln!("[{code:?}] {message}"),
+}
+```
+
+Three contracts worth internalising:
+
+- **The response carries indices, not text.** `results[i].index` is an
+  offset into the `documents` you sent; resolve it against your own
+  candidate list. Ties keep input order (stable sort).
+- **`score` is a raw logit.** Not normalised, not a probability,
+  negative values ordinary, scale model-specific — ordinal *within one
+  response* only. Don't persist one or compare two.
+- **Bounds are on count, not just bytes**: 256 documents and 8 MiB
+  aggregate, enforced at parse time. The 64 MiB frame cap bounds bytes,
+  and rerank's cost is per *document*.
+
+The socket is bound only when the warm model has a classification head —
+a cross-encoder GGUF such as `bge-reranker-v2-m3`. Gemma 4 and
+EmbeddingGemma do not serve rerank, and pointing a rerank-enabled daemon
+at either fails the load rather than returning meaningless scores.
+
 ## Transports
 
 | Constructor | Platform |
@@ -133,7 +189,8 @@ the 64 MiB single-frame cap.
 | `ClientV2::dial_pipe(r"\\.\pipe\inferd")` | Windows |
 
 `default_v2_addr()` returns the platform default generation socket path.
-For embeddings, use `EmbedClient::dial_*` (ADR 0017).
+For embeddings use `EmbedClient::dial_*` (ADR 0017); for rerank
+`RerankClient::dial_*` with `default_rerank_addr()` (ADR 0027).
 
 > The daemon binds no inbound network listener — it is reachable only
 > over the local UDS / named pipe ([ADR 0022](https://github.com/3rg0n/inferd/blob/main/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md)).
@@ -158,17 +215,17 @@ Two patterns:
 
 ## Daemon endpoints (default paths)
 
-| Platform | Generation | Admin |
-|---|---|---|
-| Linux | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` | `${XDG_RUNTIME_DIR}/inferd/admin.sock` |
-| macOS | `${TMPDIR}/inferd/inferd.sock` | `${TMPDIR}/inferd/admin.sock` |
-| Windows | `\\.\pipe\inferd` | `\\.\pipe\inferd-admin` |
+| Platform | Generation | Embed | Rerank | Admin |
+|---|---|---|---|---|
+| Linux | `${XDG_RUNTIME_DIR}/inferd/inferd.sock` | `…/infer.embed.sock` | `…/infer.rerank.sock` | `…/admin.sock` |
+| macOS | `${TMPDIR}/inferd/inferd.sock` | `…/infer.embed.sock` | `…/infer.rerank.sock` | `…/admin.sock` |
+| Windows | `\\.\pipe\inferd` | `\\.\pipe\inferd-infer-embed` | `\\.\pipe\inferd-infer-rerank` | `\\.\pipe\inferd-admin` |
 
-Operators may override via `--uds` / `--pipe` / `--admin-addr` on
-the daemon. (The embed surface binds its own socket when an
-embed-capable backend is configured.) The daemon binds no inbound
-network listener (ADR 0022); network access is the `inferd-http`
-bridge's job (ADR 0020).
+Operators may override via `--uds` / `--pipe` / `--admin-addr` on the
+daemon. Each inference socket is bound only when the configured backend
+advertises the matching capability, so which of the three exist tells you
+what the warm model can do. The daemon binds no inbound network listener
+(ADR 0022); network access is the `inferd-http` bridge's job (ADR 0020).
 
 ## Versioning
 
@@ -183,8 +240,8 @@ inferd-client = "0.6"
 
 `inferd-client 0.6.x` always uses `inferd-proto 0.6.x` and talks
 to `inferd-daemon 0.6.x`. The published patch versions move in
-lockstep. The generation (v2) and embed surfaces are each frozen:
-changes within a surface are backwards-additive only; a breaking
+lockstep. The generation (v2), embed, and rerank surfaces are each
+frozen: changes within a surface are backwards-additive only; a breaking
 change to the generation wire bumps the in-band `wire_version`
 (ADR 0021), so a mismatch fails loudly rather than corrupting the
 stream. v0.6, v0.5, and v0.4 are all wire-compatible (backwards-additive

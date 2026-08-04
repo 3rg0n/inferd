@@ -251,12 +251,20 @@ you recognise; default to logging-and-ignoring otherwise.
 
 Each wire surface is frozen in the upstream repo: generation (v2) per
 ADR 0015 with the length-prefixed framing of ADR 0021, embeddings per
-ADR 0017. This module implements the generation wire
+ADR 0017, rerank per ADR 0027. This module implements the generation wire
 (`protocol_v2.go` / `client_v2.go`) and the admin stream (`admin.go`);
 the shapes are byte-compatible with the Rust `inferd-proto` crate and
 verified by tests that round-trip frames (and, when the binary is
 present, launch the Rust daemon). The text-only v1 surface was removed
 in v0.4.
+
+The embed and rerank NDJSON surfaces have no Go client yet — this module
+carries their default socket paths (`DefaultInferEmbedAddr`,
+`DefaultInferRerankAddr`) and their capability flags on the admin stream
+(`AdminEvent.Embed`, `AdminEvent.SupportsRerank`), so a consumer can
+discover them and speak NDJSON directly. Neither flag implies the other:
+rerank needs a classification head that a bi-encoder embedding model
+does not have.
 
 Any Go consumer that wants local inference imports this
 module instead of embedding its own engine. Call sites

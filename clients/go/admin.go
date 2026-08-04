@@ -64,6 +64,14 @@ type AdminEvent struct {
 	Thinking *bool  `json:"thinking,omitempty"`
 	Embed    *bool  `json:"embed,omitempty"`
 
+	// Rerank advertises the cross-encoder rerank surface (ADR 0027). It
+	// is never implied by Embed: rerank needs a classification head and a
+	// RANK-pooling context, so a bi-encoder embedding model reports
+	// Embed=true, Rerank=false. The daemon omits the key when false, and
+	// a pre-0.6.2 daemon never sent it — both arrive as nil, which means
+	// "not supported".
+	Rerank *bool `json:"rerank,omitempty"`
+
 	// AudioSampleRate is the rate in Hz that audio attachments MUST use
 	// when Audio is true. The model's audio encoder takes no rate
 	// parameter — it consumes samples at the rate it was trained for —
@@ -96,6 +104,14 @@ func (e AdminEvent) SupportsVision() bool {
 // support. False for non-capabilities frames or when the field is absent.
 func (e AdminEvent) SupportsAudio() bool {
 	return e.Audio != nil && *e.Audio
+}
+
+// SupportsRerank reports whether this capabilities frame advertises the
+// cross-encoder rerank surface. False for non-capabilities frames or when
+// the field is absent — including from a daemon predating the field, for
+// which a rerank dial would fail anyway.
+func (e AdminEvent) SupportsRerank() bool {
+	return e.Rerank != nil && *e.Rerank
 }
 
 // RequiredAudioSampleRate returns the sample rate in Hz that audio

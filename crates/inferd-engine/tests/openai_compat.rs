@@ -65,6 +65,7 @@ async fn capabilities_advertise_v2_and_tools_only() {
             video: false,
             thinking: false,
             embed: false,
+            rerank: false,
             accelerator: Default::default(),
         }
     );

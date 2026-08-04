@@ -289,6 +289,7 @@ impl Backend for BedrockInvoke {
             video: false,
             thinking: false,
             embed: false,
+            rerank: false,
             accelerator: AcceleratorInfo::default(),
         }
     }

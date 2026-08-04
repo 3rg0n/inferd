@@ -280,6 +280,42 @@ func TestCapabilitiesAudioSampleRate(t *testing.T) {
 	if embed.SupportsAudio() {
 		t.Errorf("SupportsAudio() = true for an embed-only backend")
 	}
+	// Embed does not imply rerank — a bi-encoder has no classification
+	// head, and rerank needs a RANK-pooling context it cannot share.
+	if embed.SupportsRerank() {
+		t.Errorf("SupportsRerank() = true for an embed-only backend")
+	}
+}
+
+// TestRerankCapabilityIsIndependentOfEmbed pins the discovery contract for
+// the ADR 0027 surface: rerank is advertised on its own key, absence means
+// unsupported (covering both an omitted false and a daemon predating the
+// field), and neither capability may be inferred from the other.
+func TestRerankCapabilityIsIndependentOfEmbed(t *testing.T) {
+	var rr inferd.AdminEvent
+	if err := json.Unmarshal([]byte(`{"id":"admin","type":"status",`+
+		`"status":"capabilities","backend":"bge-reranker-v2-m3","v2":false,`+
+		`"embed":false,"rerank":true}`), &rr); err != nil {
+		t.Fatalf("decode rerank frame: %v", err)
+	}
+	if !rr.SupportsRerank() {
+		t.Errorf("SupportsRerank() = false for rerank:true frame: %+v", rr)
+	}
+	if rr.Embed == nil || *rr.Embed {
+		t.Errorf("a cross-encoder must report embed:false, got %+v", rr.Embed)
+	}
+
+	var absent inferd.AdminEvent
+	if err := json.Unmarshal([]byte(`{"id":"admin","type":"status",`+
+		`"status":"capabilities","backend":"gemma-4-e4b"}`), &absent); err != nil {
+		t.Fatalf("decode generation frame: %v", err)
+	}
+	if absent.SupportsRerank() {
+		t.Errorf("SupportsRerank() = true with the key absent")
+	}
+	if absent.Rerank != nil {
+		t.Errorf("absent rerank must stay nil, not default to false: %+v", absent.Rerank)
+	}
 }
 
 // TestAudioAttachmentConstructor proves AudioAttachment produces the wire

@@ -1,14 +1,15 @@
-# inferd wire protocol — v2 generation + embeddings (normative spec)
+# inferd wire protocol — v2 generation + embeddings + rerank (normative spec)
 
 > **Status:** normative for inferd **v0.4.0 and later** (current: v0.6.1). This document is the
 > contract an implementer writes middleware against. Where this document
 > and the `inferd-proto` source disagree, the source
 > (`crates/inferd-proto/`) wins and this document is the bug — but CI
 > guards the message-body schemas against drift (see
-> [§9](#9-conformance-vectors)). Framing and sockets are specified by
+> [§10](#10-conformance-vectors)). Framing and sockets are specified by
 > [ADR 0021](adr/0021-unified-v2-wire-length-prefixed-blob-framing.md)
 > (generation), [ADR 0017](adr/0017-embeddings-on-a-third-socket.md)
-> (embeddings), and [ADR 0009](adr/0009-pre-m1-open-questions-resolved.md)
+> (embeddings), [ADR 0027](adr/0027-reranking-on-a-fourth-socket.md)
+> (rerank), and [ADR 0009](adr/0009-pre-m1-open-questions-resolved.md)
 > (admin). `docs/protocol-v1.md` describes the **removed** v1 surface and
 > is historical only.
 
@@ -22,18 +23,41 @@ are used per [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ## 1. Surfaces, sockets, and discovery
 
-inferd exposes three IPC surfaces, each on its own endpoint. A daemon
+inferd exposes four IPC surfaces, each on its own endpoint. A daemon
 binds an inference surface **only when** the active backend advertises
 that capability, and binds the inference socket **only after** the
-backend reports `ready` (so a successful connect to a generation/embed
-socket is itself the readiness signal). The admin socket is bound early,
+backend reports `ready` (so a successful connect to an inference socket
+is itself the readiness signal). The admin socket is bound early,
 during bring-up.
 
-| Surface    | Framing                          | Unix socket name      | Windows pipe                  |
-|------------|----------------------------------|-----------------------|-------------------------------|
-| generation | length-prefixed, type-tagged     | `inferd.sock`         | `\\.\pipe\inferd`             |
-| embeddings | NDJSON (newline-delimited JSON)  | `infer.embed.sock`    | `\\.\pipe\inferd-infer-embed` |
-| admin      | NDJSON                           | `admin.sock`          | `\\.\pipe\inferd-admin`       |
+| Surface    | Framing                          | Unix socket name      | Windows pipe                   |
+|------------|----------------------------------|-----------------------|--------------------------------|
+| generation | length-prefixed, type-tagged     | `inferd.sock`         | `\\.\pipe\inferd`              |
+| embeddings | NDJSON (newline-delimited JSON)  | `infer.embed.sock`    | `\\.\pipe\inferd-infer-embed`  |
+| rerank     | NDJSON                           | `infer.rerank.sock`   | `\\.\pipe\inferd-infer-rerank` |
+| admin      | NDJSON                           | `admin.sock`          | `\\.\pipe\inferd-admin`        |
+
+Which sockets exist tells you what the warm model can do: a
+generation-only model binds `inferd.sock` and nothing else, an
+embedding-only model binds only `infer.embed.sock`, a cross-encoder
+reranker binds only `infer.rerank.sock`. One inferd process holds one
+warm model ([ADR 0012](adr/0012-one-warm-model-per-inferd-process.md)),
+so a deployment wanting generation *and* embeddings *and* rerank runs
+three inferd processes.
+
+Socket presence is the ground truth, but a consumer can also read the
+capability set *before* dialling, off the admin socket's `capabilities`
+frame — one such frame per registered backend:
+
+```json
+{"status":"capabilities","backend":"bge-reranker-v2-m3","v2":false,"embed":false,"rerank":true, ...}
+```
+
+`embed` and `rerank` are independent: a bi-encoder embedding model
+reports `embed: true, rerank: false`, because rerank needs a
+classification head and a RANK-pooling context it cannot share. `rerank`
+is omitted when false — as it is by any daemon before v0.6.2 — so an
+absent key means *not supported*, never *unknown*.
 
 A connection is a **stream** (`SOCK_STREAM` UDS on Unix, a named-pipe
 byte stream on Windows). The same connection MAY carry multiple
@@ -500,12 +524,91 @@ been bound for a generation-only backend.
 
 ---
 
-## 8. Reference implementations
+## 8. Rerank surface (NDJSON)
+
+Rerank is **cross-encoder** reordering ([ADR 0027](adr/0027-reranking-on-a-fourth-socket.md)):
+query and document are scored *together*, one model forward pass per
+document. That is the whole reason it is a separate surface from embed
+rather than a flag on it — a bi-encoder embeds each text once and
+independently, so vectors can be precomputed and cached, while a
+cross-encoder can precompute nothing. Rerank therefore sits **downstream
+of retrieval**, over a candidate set embed already narrowed:
+
+```
+embed → vector search → top-50 → rerank → top-5 → generation
+```
+
+Framing matches embed: **newline-delimited JSON**, one JSON object per
+`\n`-terminated line, 64 MiB cap enforced on the line length. One request
+→ one terminal response (an ordering is not streamed — a partial ordering
+isn't usable); the connection MAY be reused.
+
+**request** (`RerankRequest`):
+
+```
+{ "id": string, "query": string, "documents": [string, ...], "top_n"?: uint32 }
+```
+
+- `query` MUST be non-empty.
+- `documents` MUST be non-empty, each entry MUST be non-empty, and
+  `results[].index` refers back into this array. The daemon never echoes
+  document text — the caller already has it, and returning it would
+  multiply the response size for nothing.
+- `documents` MUST NOT exceed **256** entries, and `query` +
+  `documents` MUST NOT exceed **8 MiB** of text in total. Both are
+  rejected with `invalid_request`. These bound *work*, not bytes: the
+  frame cap alone would let one cheap in-cap frame describe hundreds of
+  thousands of forward passes while holding the shared admission permit
+  (the THREAT_MODEL F-1 amplification class). Clients SHOULD pre-trim
+  client-side — `inferd-client` re-exports both constants for that.
+- `top_n` — return only the `n` highest-scoring results. Omitted returns
+  all of them. `0` is rejected (`invalid_request`): an empty result set
+  is never what a caller wants, and returning one silently would be
+  indistinguishable from a backend that scored nothing. A `top_n` larger
+  than `documents.len()` is **not** an error — it returns everything, so
+  a caller whose candidate set shrank need not clamp.
+
+**response** (`RerankResponse`, tagged by `type`):
+
+```
+// success
+{ "type": "rerank", "id": string,
+  "results": [{ "index": uint32, "score": f32 }, ...],
+  "model": string, "usage": { "input_tokens": uint32 }, "backend": string }
+
+// failure
+{ "type": "error", "id": string, "code": RerankErrorCode, "message": string }
+```
+
+- `results` arrives **already sorted by `score` descending and already
+  truncated to `top_n`**. The daemon owns both, because the score scale is
+  model-specific and re-deriving the ordering in each consumer invites
+  drift. Ties preserve input order (the sort is stable).
+- `score` is the **raw** model output — not normalised, not squashed into
+  `0..1`. It is **ordinal within one response only**: never compare scores
+  across requests, across models, or against a fixed threshold. Negative
+  values are ordinary (most cross-encoders emit logits). A synthetic
+  `0..1` range would make incomparable numbers look comparable, which is
+  the more expensive failure.
+- `usage.input_tokens` is summed across every query/document pair, so it
+  is roughly `documents.len() ×` the per-pair length — rerank's cost
+  profile, made visible.
+
+`RerankErrorCode` ∈ { `queue_full`, `backend_unavailable`,
+`invalid_request`, `frame_too_large`, `internal`, `rerank_unsupported` }.
+`rerank_unsupported` is a fail-safe like `embed_unsupported`: the rerank
+socket should not have been bound for a backend that cannot serve it.
+`queue_full` is shared with every other surface — one admission slot is
+one slot regardless of which socket asked for it.
+
+---
+
+## 9. Reference implementations
 
 - **Rust:** `inferd-client` (`crates/inferd-client/`) —
-  `ClientV2` + `EmbedClient`. The wire types are `inferd-proto`
-  (`crates/inferd-proto/src/v2/` and `.../embed/`), which this document
-  mirrors.
+  `ClientV2` + `EmbedClient` + `RerankClient`. The wire types are
+  `inferd-proto` (`crates/inferd-proto/src/v2/`, `.../embed/`, and
+  `.../rerank/`), which this document mirrors.
 - **Go:** `clients/go/` — the canonical non-Rust reference. The frame
   codec is `clients/go/client_v2.go`; the message types are
   `clients/go/protocol_v2.go`. ~440 lines total: a complete, idiomatic
@@ -516,7 +619,7 @@ against the live daemon.
 
 ---
 
-## 9. Conformance vectors
+## 10. Conformance vectors
 
 A future revision will ship `docs/protocol-vectors.json`: `input → exact
 wire bytes` pairs an implementer can assert their codec against,
@@ -529,13 +632,14 @@ document are kept honest against the Rust types by the
 
 ---
 
-## 10. Invariants a client author must respect
+## 11. Invariants a client author must respect
 
 1. Stamp `wire_version = 1` on every request; expect a loud
    `wire_version_unsupported` error + close on mismatch.
 2. Enforce the 64 MiB cap on the **length prefix**, before allocating.
 3. One in-flight request per connection; read until a terminal frame
-   (`done`/`error` for generation, `embeddings`/`error` for embed).
+   (`done`/`error` for generation, `embeddings`/`error` for embed,
+   `rerank`/`error` for rerank).
 4. Ignore unknown JSON fields and unknown `type`/`kind`/`code` values
    (forward-compat) — do not hard-error on them.
 5. Send attachment BLOBs in `attachments[]` order, each preceded by its

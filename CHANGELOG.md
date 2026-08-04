@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-encoder rerank on a fourth socket** ([ADR 0027](docs/adr/0027-reranking-on-a-fourth-socket.md),
+  task #171). A new inference surface — `infer.rerank.sock` /
+  `\\.\pipe\inferd-infer-rerank`, NDJSON framed like embed — that scores a
+  query against each candidate document *jointly*: one model forward pass
+  per document, nothing precomputable. It belongs downstream of retrieval
+  (`embed → top-50 → rerank → top-5 → generate`), which is where the
+  precision gain over vector similarity alone comes from. Additive: no
+  existing surface changed, `wire_version` unmoved, and a daemon whose
+  model has no classification head binds no rerank socket, so existing
+  deployments see nothing new.
+  - **A separate surface rather than a flag on embed**, because a
+    cross-encoder is a different computation, not a different pooling
+    option. `pooling_type` is fixed at `llama_context` creation, so
+    `LLAMA_POOLING_TYPE_RANK` — which attaches the model's classification
+    head to the graph — genuinely needs its own context. Requests carry
+    `{query, documents[], top_n?}` and get back `{index, score}` pairs
+    **already sorted descending and truncated to `top_n`**; the daemon
+    owns the ordering because score scales are model-specific and
+    re-deriving it per consumer invites drift.
+  - **Scores are raw, never normalised.** They are ordinal *within one
+    response only* — never comparable across models, requests, or against
+    a fixed threshold, and negative values are ordinary (most
+    cross-encoders emit logits). Squashing them into a synthetic `0..1`
+    would make incomparable numbers look comparable, which is the more
+    expensive failure.
+  - **Bounded at parse: `MAX_RERANK_DOCUMENTS` (256) and
+    `MAX_RERANK_TOTAL_BYTES` (8 MiB).** Rerank is the one surface whose
+    cost is `O(documents)` forward passes, so the 64 MiB frame cap bounds
+    the wrong thing: one cheap in-cap frame of short documents describes
+    on the order of half a million full model evaluations, all holding the
+    shared admission permit. Same amplification class as THREAT_MODEL F-1.
+    Both constants are re-exported from `inferd-client` so callers can
+    pre-trim rather than discover the cap on a rejected request.
+  - **Preconditions fail the *load*, not the request.** A model with no
+    BOS token, or with no way at all to mark the query/document boundary
+    (no EOS, no SEP, no `rerank` chat template), is rejected at
+    construction — so per invariant #5 the socket is never bound. There is
+    no runtime signal for this: the classification head returns a float
+    either way, so a wrong model produces *scores*, just meaningless ones.
+  - **Discoverable before dialling.** The admin `capabilities` frame
+    gained a `rerank` flag alongside `embed`, surfaced by `inferdctl
+    doctor`, `AdminEvent.rerank` (Rust) and `AdminEvent.SupportsRerank()`
+    (Go), plus `DefaultInferRerankAddr()` for the Go socket path. It is
+    omitted when false, so a v0.6.1 subscriber sees a byte-identical
+    frame, and the two flags are independent — a bi-encoder reports
+    `embed: true, rerank: false`.
+  - `RerankClient` in `inferd-client`; `Backend::rerank` with a default
+    `Unsupported` impl so existing adapters are unaffected;
+    `capabilities().rerank`; `Router::dispatch_rerank`; config
+    (`rerank`, `rerank_n_ctx`, default off — a rerank context is a second
+    context plus KV cache, and a deployment doing no retrieval must not
+    pay for it). `rerank_unsupported` is the fail-safe error code.
+  - Tested end-to-end at Tier 2 (12 tests over a real UDS **and** a real
+    named pipe — the first daemon integration test to cover both rather
+    than being Unix-gated) and Tier 3 against a real `bge-reranker-v2-m3`
+    (8 tests, `INFERD_TEST_RERANK_MODEL_PATH`). Tier 3 is load-bearing
+    here: the mock scores by word overlap, so a rerank path that reads the
+    wrong buffer entirely still passes every mock test with plausible
+    numbers in a plausible order. Two assertions only a real model can
+    make — the same document must score *differently* under two unrelated
+    queries (a bi-encoder-shaped bug scores it identically), and identical
+    pairs must score *identically* across a batch (drift means the KV
+    cache isn't cleared between passes).
 - **Backends advertise the audio sample rate they require.**
   `BackendCapabilities` gained `audio_sample_rate: Option<u32>`, published
   on the admin `capabilities` frame as `audio_sample_rate` (omitted when

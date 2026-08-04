@@ -214,6 +214,14 @@ impl Router {
         self.dispatch_filtered(|backend| backend.capabilities().embed)
     }
 
+    /// Pick a backend for a rerank request (ADR 0027) — same priority +
+    /// breaker rules as `dispatch`, filtered on
+    /// `capabilities().rerank` for the same reason `dispatch_embed`
+    /// filters on `embed`.
+    pub fn dispatch_rerank(&self) -> Result<Dispatch, RouterError> {
+        self.dispatch_filtered(|backend| backend.capabilities().rerank)
+    }
+
     fn dispatch_filtered<F>(&self, predicate: F) -> Result<Dispatch, RouterError>
     where
         F: Fn(&Arc<dyn Backend>) -> bool,

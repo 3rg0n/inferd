@@ -10,11 +10,12 @@
 //!   `Done` event) to exercise the mid-stream failure path.
 
 use crate::backend::{
-    Backend, BackendCapabilities, EmbedError, EmbedResult, GenerateError, TokenEventV2,
-    TokenStreamV2,
+    Backend, BackendCapabilities, EmbedError, EmbedResult, GenerateError, RerankError,
+    RerankOutcome, TokenEventV2, TokenStreamV2,
 };
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
+use inferd_proto::rerank::{RerankResolved, RerankResult, RerankUsage};
 use inferd_proto::v2::{ResolvedV2, StopReasonV2, UsageV2};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,15 +111,16 @@ impl Backend for Mock {
         self.ready.load(Ordering::SeqCst)
     }
 
-    /// Mock advertises v2 + thinking + embed so daemon-side dispatch
-    /// across all three sockets can be exercised end-to-end without a
-    /// real engine. Multimodal / tool flags stay `false` — Mock
-    /// doesn't pretend to ingest images or parse tool calls.
+    /// Mock advertises v2 + thinking + embed + rerank so daemon-side
+    /// dispatch across all four sockets can be exercised end-to-end
+    /// without a real engine. Multimodal / tool flags stay `false` —
+    /// Mock doesn't pretend to ingest images or parse tool calls.
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             v2: true,
             thinking: true,
             embed: true,
+            rerank: true,
             ..BackendCapabilities::default()
         }
     }
@@ -213,6 +215,73 @@ impl Backend for Mock {
             dimensions,
             model: "mock".into(),
             usage: EmbedUsage { input_tokens },
+        })
+    }
+
+    /// Deterministic mock rerank. Scores each document by the fraction
+    /// of the query's whitespace-separated words it contains, so a
+    /// document that repeats the query outranks one that shares nothing
+    /// — enough signal for a test to assert that the *ordering* survived
+    /// the daemon round trip, which is the property the mock exists to
+    /// exercise.
+    ///
+    /// The error knob is reused as on the embed path, so daemon-side
+    /// error mapping is exercisable on this surface too.
+    async fn rerank(&self, req: RerankResolved) -> Result<RerankOutcome, RerankError> {
+        if let Some(err) = self.config.pre_stream_error {
+            return Err(match err {
+                MockError::NotReady => RerankError::NotReady,
+                MockError::InvalidRequest => RerankError::InvalidRequest("mock".into()),
+                MockError::Unavailable => RerankError::Unavailable("mock".into()),
+            });
+        }
+        if !self.ready() {
+            return Err(RerankError::NotReady);
+        }
+
+        let query_words: Vec<&str> = req.query.split_whitespace().collect();
+        let mut input_tokens: u32 = 0;
+        let mut results: Vec<RerankResult> = req
+            .documents
+            .iter()
+            .enumerate()
+            .map(|(i, doc)| {
+                // A real cross-encoder re-encodes the query alongside
+                // every document, so usage grows with the pair count,
+                // not with the request size. Mirror that here so tests
+                // exercising usage reporting see the right shape.
+                input_tokens = input_tokens
+                    .saturating_add((req.query.len() + doc.len()).min(u32::MAX as usize) as u32);
+                let lower = doc.to_lowercase();
+                let hits = query_words
+                    .iter()
+                    .filter(|w| lower.contains(&w.to_lowercase()))
+                    .count();
+                let score = if query_words.is_empty() {
+                    0.0
+                } else {
+                    hits as f32 / query_words.len() as f32
+                };
+                RerankResult {
+                    index: i as u32,
+                    score,
+                }
+            })
+            .collect();
+
+        // Descending by score. `sort_by` is stable, so equal scores keep
+        // request order — a deterministic tie-break tests can rely on.
+        // `total_cmp` rather than `partial_cmp().unwrap()`: no panic path
+        // on a value that came off the wire.
+        results.sort_by(|a, b| b.score.total_cmp(&a.score));
+        if let Some(n) = req.top_n {
+            results.truncate(n as usize);
+        }
+
+        Ok(RerankOutcome {
+            results,
+            model: "mock".into(),
+            usage: RerankUsage { input_tokens },
         })
     }
 }

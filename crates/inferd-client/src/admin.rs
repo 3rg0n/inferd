@@ -99,6 +99,17 @@ pub struct AdminEvent {
     /// (capabilities phase).
     #[serde(default)]
     pub embed: Option<bool>,
+    /// `true` if the backend implements `rerank` per ADR 0027
+    /// (capabilities phase).
+    ///
+    /// Never implied by [`Self::embed`]: rerank needs a classification
+    /// head and a `POOLING_TYPE_RANK` context, so a bi-encoder embedding
+    /// model reports `embed: Some(true), rerank: Some(false)`. The daemon
+    /// omits the field when false, so `None` and `Some(false)` mean the
+    /// same thing — and `None` also covers a pre-0.6.2 daemon that never
+    /// sent it.
+    #[serde(default)]
+    pub rerank: Option<bool>,
     /// Active GGML accelerator: `"cpu"` / `"cuda"` / `"metal"` /
     /// `"vulkan"` / `"rocm"` (capabilities phase). Runtime-probed in
     /// `dl-backends` builds (v0.3+); compile-time in v0.2.x.
@@ -257,6 +268,31 @@ mod tests {
         let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
         assert_eq!(ev.audio, Some(true));
         assert_eq!(ev.audio_sample_rate, None);
+    }
+
+    /// Rerank is discoverable on the same frame as embed, and the two are
+    /// independent: a cross-encoder reports `rerank` without `embed`
+    /// (RANK pooling returns class logits, not a vector), so a consumer
+    /// must not infer either from the other.
+    #[test]
+    fn decodes_rerank_independently_of_embed() {
+        let raw = br#"{"id":"admin","type":"status","status":"capabilities",
+            "backend":"bge-reranker-v2-m3","v2":false,"embed":false,"rerank":true}"#;
+        let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
+        assert_eq!(ev.rerank, Some(true));
+        assert_eq!(ev.embed, Some(false));
+    }
+
+    /// The daemon omits `rerank` when false, and a pre-0.6.2 daemon never
+    /// sent it at all — both decode to `None`, which callers must treat
+    /// as "not supported" rather than "unknown, try it and see".
+    #[test]
+    fn absent_rerank_decodes_to_none() {
+        let raw = br#"{"id":"admin","type":"status","status":"capabilities",
+            "backend":"gemma-4-e4b","embed":false}"#;
+        let ev: AdminEvent = serde_json::from_slice(raw).unwrap();
+        assert_eq!(ev.rerank, None);
+        assert!(!ev.rerank.unwrap_or(false));
     }
 
     #[test]

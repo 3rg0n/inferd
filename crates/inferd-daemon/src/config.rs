@@ -162,6 +162,28 @@ pub struct Cli {
     #[arg(long, default_value_t = 2048, env = "INFERD_LLAMACPP_EMBED_N_CTX")]
     pub llamacpp_embed_n_ctx: u32,
 
+    /// Enable rerank capability on the active llamacpp backend
+    /// (ADR 0027). Same flag posture as `--llamacpp-embed`: this
+    /// enables the *capability* (which allocates a second context with
+    /// `LLAMA_POOLING_TYPE_RANK`, since pooling is fixed at context
+    /// creation); `--rerank` separately decides whether to bind the
+    /// rerank socket. Both flags are needed to serve rerank requests.
+    ///
+    /// Only meaningful for a cross-encoder / reranker GGUF — the
+    /// backend refuses to load with rerank on if the model's vocab
+    /// lacks the separator tokens the pair format needs.
+    #[arg(long, env = "INFERD_LLAMACPP_RERANK")]
+    pub llamacpp_rerank: bool,
+
+    /// Llama.cpp rerank-side context window in tokens. Default 2048.
+    /// This bounds a single query+document *pair*, and it is also the
+    /// batch/ubatch size for the rerank context — a pair that tokenizes
+    /// longer is rejected before the FFI call rather than aborting the
+    /// process (llama.cpp issue #20). Has no effect unless
+    /// `--llamacpp-rerank` is also set.
+    #[arg(long, default_value_t = 2048, env = "INFERD_LLAMACPP_RERANK_N_CTX")]
+    pub llamacpp_rerank_n_ctx: u32,
+
     /// Prompt-grammar family for the model, e.g. `gemma4` or
     /// `granite` (ADR 0026). Normally omitted — the family is detected
     /// from the GGUF's own metadata at load. Declare it when the
@@ -265,6 +287,20 @@ pub struct Cli {
     /// unless `--embed` is also set.
     #[arg(long, env = "INFERD_EMBED_ADDR")]
     pub embed_addr: Option<PathBuf>,
+
+    /// Enable the rerank inference endpoint per ADR 0027. Binds on a
+    /// socket separate from generation and embed:
+    /// `infer.rerank.sock` on Unix / `\\.\pipe\inferd-infer-rerank`
+    /// on Windows. Has no effect unless the active backend's
+    /// `capabilities().rerank` is true (capability-driven binding).
+    #[arg(long, env = "INFERD_RERANK")]
+    pub rerank: bool,
+
+    /// Override the default rerank inference endpoint path. Mirrors
+    /// `--embed-addr`; on Linux/macOS a UDS path, on Windows a
+    /// named-pipe path. Has no effect unless `--rerank` is also set.
+    #[arg(long, env = "INFERD_RERANK_ADDR")]
+    pub rerank_addr: Option<PathBuf>,
 }
 
 impl Cli {

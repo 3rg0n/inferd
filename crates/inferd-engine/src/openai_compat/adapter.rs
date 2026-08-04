@@ -166,6 +166,10 @@ impl Backend for OpenAiCompat {
             // /v1/embeddings support for openai-compat is deferred
             // per ADR 0017 §"v0.2.0 scope" — capability stays false.
             embed: false,
+            // Cloud rerank is out of scope for ADR 0027 (see its
+            // §Scope): the surface exists for a local cross-encoder, and
+            // no OpenAI-compatible rerank endpoint is standardised.
+            rerank: false,
             // Hardware acceleration is upstream-side and not
             // introspectable from here. Default `Cpu / 0` is the
             // honest answer about what *this process* contributes.

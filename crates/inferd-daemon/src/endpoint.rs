@@ -115,6 +115,34 @@ pub fn default_embed_addr() -> std::path::PathBuf {
     }
 }
 
+/// Default rerank inference endpoint per ADR 0027 §Endpoints.
+///
+/// - Linux: `${XDG_RUNTIME_DIR}/inferd/infer.rerank.sock` (same
+///   fallback chain as generation / embed)
+/// - macOS: `${TMPDIR}/inferd/infer.rerank.sock`
+/// - Windows: `\\.\pipe\inferd-infer-rerank`
+pub fn default_rerank_addr() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        linux_runtime_path("infer.rerank.sock")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut p = std::env::temp_dir();
+        p.push("inferd");
+        p.push("infer.rerank.sock");
+        p
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(DEFAULT_PIPE_RERANK_PATH)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        std::path::PathBuf::from("/tmp/inferd/infer.rerank.sock")
+    }
+}
+
 /// Resolve a Linux runtime-dir path with the fallback chain
 /// documented on `default_admin_addr`. `leaf` is the basename to
 /// append (e.g. `admin.sock`, `inferd.sock`, `inferd.lock`).
@@ -280,6 +308,12 @@ pub const DEFAULT_ADMIN_PIPE_PATH: &str = r"\\.\pipe\inferd-admin";
 /// same daemon.
 #[cfg(windows)]
 pub const DEFAULT_PIPE_EMBED_PATH: &str = r"\\.\pipe\inferd-infer-embed";
+
+/// Default Windows named-pipe path for the rerank inference endpoint
+/// per ADR 0027 §Endpoints. Distinct from the generation and embed
+/// pipes so all three surfaces can coexist on the same daemon.
+#[cfg(windows)]
+pub const DEFAULT_PIPE_RERANK_PATH: &str = r"\\.\pipe\inferd-infer-rerank";
 
 /// Bind a Windows named-pipe **server endpoint** at `path`.
 ///

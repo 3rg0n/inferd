@@ -161,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
             tools: caps.tools,
             thinking: caps.thinking,
             embed: caps.embed,
+            rerank: caps.rerank,
             accelerator: caps.accelerator.kind.as_str().to_string(),
             gpu_layers: caps.accelerator.gpu_layers,
             device_name: caps.accelerator.device_name.clone(),
@@ -180,6 +181,15 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Same capability-driven binding for rerank (ADR 0027 §"Endpoints").
+    let rerank_enabled = cli.rerank && backends.iter().any(|b| b.capabilities().rerank);
+    if cli.rerank && !rerank_enabled {
+        warn!(
+            "--rerank requested but no registered backend advertises \
+             `capabilities().rerank = true`; rerank socket will not bind"
+        );
+    }
+
     // Build router. Walks the ordered list per ADR 0007.
     let router = Arc::new(Router::new(backends));
 
@@ -196,11 +206,17 @@ async fn main() -> anyhow::Result<()> {
     broadcaster.publish(StatusEvent::Ready);
 
     // Inference shutdown channels — one for the generation listener,
-    // plus the embed listener when enabled + capability matches.
-    let fanout = 1 + usize::from(embed_enabled);
+    // plus the embed and rerank listeners when enabled + capability
+    // matches.
+    let fanout = 1 + usize::from(embed_enabled) + usize::from(rerank_enabled);
     let mut shutdown_rxs = install_shutdown_signal(fanout)?;
     let inference_shutdown_tx = shutdown_rxs.remove(0);
     let embed_shutdown_tx = if embed_enabled {
+        Some(shutdown_rxs.remove(0))
+    } else {
+        None
+    };
+    let rerank_shutdown_tx = if rerank_enabled {
         Some(shutdown_rxs.remove(0))
     } else {
         None
@@ -243,6 +259,14 @@ async fn main() -> anyhow::Result<()> {
     // Router + admission gate as v1 / v2.
     let embed_handle = if let Some(rx) = embed_shutdown_tx {
         Some(spawn_embed_listener(&cli, Arc::clone(&router), accept_ctx.clone(), rx).await?)
+    } else {
+        None
+    };
+
+    // Same for rerank (ADR 0027) — its own socket, the same Router and
+    // admission gate.
+    let rerank_handle = if let Some(rx) = rerank_shutdown_tx {
+        Some(spawn_rerank_listener(&cli, Arc::clone(&router), accept_ctx.clone(), rx).await?)
     } else {
         None
     };
@@ -298,6 +322,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Same for embed.
     if let Some(handle) = embed_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
+    // And rerank.
+    if let Some(handle) = rerank_handle {
         let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
     }
 
@@ -365,6 +394,63 @@ async fn spawn_embed_listener(
     {
         drop((path, router, accept_ctx, shutdown_rx));
         anyhow::bail!("embed endpoint requires unix or windows")
+    }
+}
+
+/// Bind the rerank inference listener and spawn its accept loop
+/// (ADR 0027). Structurally identical to `spawn_embed_listener`: its own
+/// socket, the same Router + admission gate, bound only when the router
+/// has at least one backend with `BackendCapabilities::rerank == true`.
+async fn spawn_rerank_listener(
+    cli: &Cli,
+    router: Arc<Router>,
+    accept_ctx: AcceptContext,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    use inferd_daemon::endpoint::default_rerank_addr;
+    use inferd_daemon::lifecycle_rerank;
+
+    let path = cli.rerank_addr.clone().unwrap_or_else(default_rerank_addr);
+    #[cfg(unix)]
+    {
+        let listener = bind_uds(&path, cli.group.as_deref()).await?;
+        info!(path = %path.display(), "rerank uds listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) =
+                lifecycle_rerank::serve_uds_rerank(listener, router, accept_ctx, shutdown_rx).await
+            {
+                error!(error = ?e, "rerank uds listener error");
+            }
+        }))
+    }
+    #[cfg(windows)]
+    {
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| {
+                anyhow::anyhow!("rerank pipe path is not valid utf-8: {}", path.display())
+            })?
+            .to_string();
+        let first = inferd_daemon::endpoint::bind_named_pipe(&path_str, true)?;
+        info!(path = %path_str, "rerank named pipe listener bound");
+        Ok(tokio::spawn(async move {
+            if let Err(e) = lifecycle_rerank::serve_named_pipe_rerank(
+                &path_str,
+                first,
+                router,
+                accept_ctx,
+                shutdown_rx,
+            )
+            .await
+            {
+                error!(error = ?e, "rerank named pipe listener error");
+            }
+        }))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        drop((path, router, accept_ctx, shutdown_rx));
+        anyhow::bail!("rerank endpoint requires unix or windows")
     }
 }
 
@@ -631,6 +717,16 @@ async fn build_backends(
                 e.embed = true;
                 e.embed_pooling = cli.llamacpp_embed_pooling;
                 e.embed_n_ctx = cli.llamacpp_embed_n_ctx;
+            }
+            // Same shape for --llamacpp-rerank (ADR 0027).
+            #[cfg(feature = "llamacpp")]
+            if cli.llamacpp_rerank
+                && cfg.model.is_some()
+                && cfg.backends.is_none()
+                && let Some(BackendEntry::Llamacpp(e)) = entries.first_mut()
+            {
+                e.rerank = true;
+                e.rerank_n_ctx = cli.llamacpp_rerank_n_ctx;
             }
             // Same shape for --chat-template (ADR 0026): the legacy
             // single-model config shape has no per-backend
@@ -1127,6 +1223,8 @@ async fn build_llamacpp_entry(
         embed: entry.embed,
         embed_pooling: entry.embed_pooling,
         embed_n_ctx: entry.embed_n_ctx,
+        rerank: entry.rerank,
+        rerank_n_ctx: entry.rerank_n_ctx,
         // ADR 0026: when unset the family is detected from GGUF
         // metadata, and a generation model we can't render fails here
         // rather than answering in the wrong grammar.
@@ -1186,6 +1284,10 @@ async fn build_llamacpp_cli_only(
         embed: cli.llamacpp_embed,
         embed_pooling: cli.llamacpp_embed_pooling,
         embed_n_ctx: cli.llamacpp_embed_n_ctx,
+        // Same for --llamacpp-rerank (ADR 0027), so a dev rig can point
+        // at a cross-encoder GGUF with no config file.
+        rerank: cli.llamacpp_rerank,
+        rerank_n_ctx: cli.llamacpp_rerank_n_ctx,
         // ADR 0026. This path is the one that motivated fail-loud:
         // `--model-path` accepts any GGUF, so an unrecognised family
         // must stop the load rather than reach a renderer that doesn't

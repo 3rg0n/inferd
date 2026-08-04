@@ -108,6 +108,51 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## Quickstart (rerank — cross-encoder reordering)
+//!
+//! Rerank lives on a *fourth* socket per ADR 0027. Use
+//! [`RerankClient`]. Like embed it's a single round-trip, but unlike
+//! embed it's a cross-encoder: query and document are scored *together*
+//! in one forward pass per document, so nothing is precomputable and it
+//! belongs downstream of retrieval, over a candidate set embed already
+//! narrowed.
+//!
+//! ```ignore
+//! use inferd_client::{RerankClient, RerankRequest, RerankResponse};
+//! use std::path::Path;
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut client = inferd_client::dial_and_wait_ready(
+//!     std::time::Duration::from_secs(30),
+//!     || RerankClient::dial_uds(Path::new("/tmp/inferd/infer.rerank.sock")),
+//! )
+//! .await?;
+//!
+//! let resp = client.rerank(RerankRequest {
+//!     id: "demo-1".into(),
+//!     query: "how do I bind a unix socket".into(),
+//!     documents: candidates.clone(),
+//!     top_n: Some(5),
+//! })
+//! .await?;
+//!
+//! match resp {
+//!     RerankResponse::Rerank { results, .. } => {
+//!         // Already sorted by score descending and truncated to top_n.
+//!         // `score` is raw and model-specific — ordinal within this
+//!         // response only, never comparable across models or requests.
+//!         for r in results {
+//!             println!("{:.3}  {}", r.score, candidates[r.index as usize]);
+//!         }
+//!     }
+//!     RerankResponse::Error { code, message, .. } => {
+//!         eprintln!("[rerank error {code:?}: {message}]");
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
@@ -115,12 +160,14 @@
 mod admin;
 mod client;
 mod embed_client;
+mod rerank_client;
 mod v2_client;
 mod wait;
 
 pub use admin::{AdminClient, AdminError, AdminEvent};
 pub use client::ClientError;
 pub use embed_client::{EmbedClient, default_embed_addr};
+pub use rerank_client::{RerankClient, default_rerank_addr};
 pub use v2_client::{ClientV2, FrameStreamV2, default_v2_addr};
 pub use wait::{WaitError, default_admin_addr, dial_and_wait_ready, is_transient_dial_error};
 
@@ -145,4 +192,13 @@ pub use inferd_proto::v2::{
 /// `inferd-proto` dep.
 pub use inferd_proto::embed::{
     EmbedErrorCode, EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask, EmbedUsage,
+};
+
+/// Re-exports of the rerank wire types per ADR 0027. Rerank lives on
+/// the *fourth* inferd socket; the bounds constants are re-exported too
+/// so callers can pre-trim a candidate set client-side rather than
+/// discovering the cap on a rejected request.
+pub use inferd_proto::rerank::{
+    MAX_RERANK_DOCUMENTS, MAX_RERANK_TOTAL_BYTES, RerankErrorCode, RerankRequest, RerankResolved,
+    RerankResponse, RerankResult, RerankUsage,
 };

@@ -9,6 +9,11 @@
 //! request/response over a third dedicated socket. Embed types live
 //! under [`mod@embed`].
 //!
+//! See ADR 0027 for the reranking specification — a cross-encoder
+//! scoring surface on a fourth socket, single-frame request/response
+//! like embed but returning scored indices rather than vectors. Rerank
+//! types live under [`mod@rerank`].
+//!
 //! See ADR 0021 for the v0.4 framing redesign: length-prefixed,
 //! type-tagged frames (JSON / BLOB) replace newline-delimited JSON on
 //! the generation surface. The embed surface still rides NDJSON via
@@ -20,6 +25,7 @@
 pub mod embed;
 mod error;
 mod frame;
+pub mod rerank;
 pub mod v2;
 
 pub use error::{ErrorCode, ProtoError};

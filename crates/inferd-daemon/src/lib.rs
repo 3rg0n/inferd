@@ -20,6 +20,7 @@ pub mod endpoint;
 pub mod fetch;
 pub mod lifecycle;
 pub mod lifecycle_embed;
+pub mod lifecycle_rerank;
 pub mod lifecycle_v2;
 pub mod lock;
 pub mod logx;

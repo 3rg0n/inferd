@@ -77,6 +77,15 @@ pub enum StatusEvent {
         /// Subscribers use this to decide whether to expose embedding
         /// surfaces in their UIs.
         embed: bool,
+        /// `true` if the backend implements `rerank` (per ADR 0027).
+        ///
+        /// Never implied by `embed`: rerank needs a `POOLING_TYPE_RANK`
+        /// context and a classification head, so a bi-encoder embedding
+        /// model reports `embed: true, rerank: false`. Backwards-additive
+        /// — omitted on the wire when false so a v0.6.1 subscriber sees
+        /// exactly the frame it saw before.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        rerank: bool,
         /// Active GGML accelerator: `"cpu"` / `"cuda"` / `"metal"` /
         /// `"vulkan"` / `"rocm"`. In `dl-backends` builds (v0.3+),
         /// runtime-probed; in v0.2.x static builds, compile-time.
@@ -222,6 +231,7 @@ mod tests {
             tools: true,
             thinking: true,
             embed: false,
+            rerank: false,
             accelerator: "cpu".into(),
             gpu_layers: 0,
             device_name: None,
@@ -250,6 +260,28 @@ mod tests {
         assert!(
             s.get("audio_sample_rate").is_none(),
             "audio_sample_rate must be absent, not null: {s}"
+        );
+    }
+
+    #[test]
+    fn capabilities_publishes_rerank_and_omits_it_when_false() {
+        // Socket presence is the ground truth for what a daemon serves,
+        // but a consumer that hasn't dialled yet learns it here — so
+        // rerank has to reach the admin wire the way embed does.
+        let mut c = caps(false, None);
+        if let StatusEvent::Capabilities { rerank, .. } = &mut c {
+            *rerank = true;
+        }
+        let s = serde_json::to_value(&c).unwrap();
+        assert_eq!(s["rerank"], true);
+
+        // False is *absent*, not null: a v0.6.1 subscriber must see a
+        // byte-identical frame to the one it saw before the field
+        // existed. That is what makes this addition non-breaking.
+        let off = serde_json::to_value(caps(false, None)).unwrap();
+        assert!(
+            off.get("rerank").is_none(),
+            "rerank must be omitted when false, not emitted as false: {off}"
         );
     }
 

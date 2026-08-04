@@ -46,23 +46,41 @@ config; it is the contract that the CI config implements.
 - `cargo test --all` with the daemon binary built. Runs against
   a tokio-driven test harness that opens an actual UDS / named
   pipe, sends real length-prefixed v2 frames (generation) or NDJSON
-  (embed), and asserts response framing.
+  (embed, rerank), and asserts response framing.
 - Required to pass per PR.
 - Exercises: full lifecycle (lock → ready → accept → dispatch
   → shutdown), peer-credential extraction (where feasible to
   test in a unit context), admin-socket status broadcast,
   cancellation on disconnect, queue-full behaviour, ready
   gating (asserts socket does not exist before backend ready).
+- `tests/rerank.rs` is the one file that runs on **both**
+  transports rather than being `#[cfg(unix)]`-gated: its harness
+  resolves to a UDS on Unix and a named pipe on Windows, so the
+  per-platform accept loop is covered on the platform that ships
+  it. Prefer that shape for new surface tests. Note that
+  `tests/common/mod.rs` carries only length-prefixed helpers, so
+  an NDJSON surface does its own line-oriented I/O.
 
 ### Tier 3 — engine integration with real `libllama`
 
 - `cargo test --all --features llamacpp-integration`.
 - Requires: C++ toolchain, the vendored `llama.cpp` submodule
-  built, a Gemma 4 GGUF on disk at a path read from
-  `INFERD_TEST_MODEL_PATH` (generation tests) and an
-  EmbeddingGemma 300M GGUF at `INFERD_TEST_EMBED_MODEL_PATH`
-  (embed tests). Tests for which the relevant env var is unset
-  skip themselves with an explanatory message rather than fail.
+  built, and a GGUF on disk per surface. Each surface reads its
+  own env var because each needs a genuinely different model:
+
+  | Env var | Model | Tests |
+  |---|---|---|
+  | `INFERD_TEST_MODEL_PATH` | Gemma 4 GGUF | generation, grammar, multimodal |
+  | `INFERD_TEST_EMBED_MODEL_PATH` | EmbeddingGemma 300M | embed |
+  | `INFERD_TEST_RERANK_MODEL_PATH` | cross-encoder reranker, e.g. `bge-reranker-v2-m3` (Q8_0, 636 MB, apache-2.0) | rerank |
+
+  Tests for which the relevant env var is unset skip themselves
+  with an explanatory message rather than fail. Pointing the
+  rerank var at Gemma 4 or EmbeddingGemma **fails the load** by
+  design — neither has a classification head, and ADR 0027 makes
+  that a load-time error rather than a request-time one, so the
+  socket is never bound for a model that would return meaningless
+  scores.
 - Skipped by default. Run nightly in CI on every supported
   platform; run on-demand by developers with a local model.
 - Exercises: real inference round-trip, GBNF grammar
@@ -71,10 +89,24 @@ config; it is the contract that the CI config implements.
   multi-request serialisation through the queue, the
   embed FFI path (dedicated context, MEAN pooling, MRL
   truncation, L2 renormalisation, all 8 EmbeddingGemma task
-  prefixes), and the multimodal attachment paths — an image
-  (raw RGB) and an audio clip (mono LE-f32 PCM at the
+  prefixes), the rerank FFI path (`LLAMA_POOLING_TYPE_RANK`
+  context, classification-head read, pair formatting, KV-cache
+  clearing between pairs), and the multimodal attachment paths —
+  an image (raw RGB) and an audio clip (mono LE-f32 PCM at the
   backend's advertised `audio_sample_rate`) each reaching
   libmtmd and influencing the output.
+
+**Rerank is Tier-3-load-bearing for the same reason multimodal
+is.** The mock backend scores by word overlap, so every Tier 1/2
+rerank test passes whether or not the classification head is
+wired up at all: reading the wrong buffer, or `n_embd` floats
+instead of `n_cls_out`, still yields plausible numbers in a
+plausible order. `tests/rerank_llamacpp.rs` therefore asserts two
+things only a real model can show — that the same document scores
+*differently* under two unrelated queries (a bi-encoder-shaped
+bug would score it identically), and that identical pairs score
+*identically* across a batch (drift means the KV cache isn't
+being cleared between forward passes).
 
 **The multimodal paths are Tier-3-only, and the committed tests
 under-assert them.** A mismatched-rate audio attachment is
@@ -173,8 +205,9 @@ Tier 4 runs on Linux x86_64 only, gated on a release tag.
   lifecycle/queue work. < 30 s.
 - **Engine loop**: `cargo test -p inferd-engine --features
   llamacpp-integration` after `INFERD_TEST_MODEL_PATH` is
-  set (and `INFERD_TEST_EMBED_MODEL_PATH` if you're touching
-  the embed path). Minutes; only run when touching the engine
+  set (plus `INFERD_TEST_EMBED_MODEL_PATH` /
+  `INFERD_TEST_RERANK_MODEL_PATH` if you're touching those
+  paths). Minutes; only run when touching the engine
   adapter.
 - **Full pre-push**: `cargo fmt --all && cargo clippy
   --all-targets --all-features -- -D warnings && cargo test

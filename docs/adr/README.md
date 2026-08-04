@@ -31,6 +31,8 @@ implementation choices aren't.
 | [0024](0024-wsl-relay-for-containerized-middleware.md) | Crossing a VM/container boundary is the consumer's concern — inferd ships no cross-VM bridge (consumer-owned bridging preserves app-mapping fidelity; no supported no-TCP cross-VM transport exists on WSL2; recommend daemon-per-memory-domain) | Accepted |
 | [0025](0025-bridge-decodes-and-resamples-audio.md) | The bridge decodes and resamples audio; codecs stay out of the daemon (extends 0016 — `inferd-http` links symphonia/rubato and reads the required rate off the admin socket per request; MPL-2.0 confined to the unpublished bridge binary) | Accepted |
 | [0026](0026-chat-renderer-registry-per-model-family.md) | Chat rendering is a registry keyed to model family, not a hardcoded Gemma renderer (resolve at load from operator config or GGUF metadata; fail the load when no renderer matches, rather than silently rendering a foreign model in Gemma's grammar; no jinja evaluator in the daemon) | Proposed |
+| [0027](0027-reranking-on-a-fourth-socket.md) | Reranking on a fourth socket — cross-encoder scores, not vectors (`LLAMA_POOLING_TYPE_RANK`; own NDJSON socket bound only on capability; daemon owns query/document pair formatting; ADR 0012 not relaxed — operators run a second process; runtime config flag, not a build feature) | Accepted |
+| [0028](0028-airgapped-build-profile.md) | The airgapped build is a default-on `model-fetch` feature turned *off*, not an opt-in feature turned on (cargo features cannot remove a dependency, so `--no-default-features` is the only shape where "no TLS stack linked" is provable by `cargo tree`; adds `inferdctl import`; two artifacts per platform from one code path) | Accepted |
 
 ## Writing a new ADR
 

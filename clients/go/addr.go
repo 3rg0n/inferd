@@ -7,11 +7,12 @@ import (
 
 // Default socket/pipe paths for the inference surfaces, mirroring the
 // daemon's resolution chain. As of v0.4 (ADR 0021) generation is a
-// single socket on a neutral path; embeddings keep their own socket
-// (ADR 0017):
+// single socket on a neutral path; embeddings (ADR 0017) and rerank
+// (ADR 0027) keep their own:
 //
-//	generation   inferd.sock        \\.\pipe\inferd
-//	embeddings   infer.embed.sock   \\.\pipe\inferd-infer-embed
+//	generation   inferd.sock         \\.\pipe\inferd
+//	embeddings   infer.embed.sock    \\.\pipe\inferd-infer-embed
+//	rerank       infer.rerank.sock   \\.\pipe\inferd-infer-rerank
 //
 // On Unix the resolution chain is:
 //  1. $XDG_RUNTIME_DIR/inferd/<name> (set by systemd-logind)
@@ -56,4 +57,15 @@ func DefaultInferV2Addr() string {
 // embeddings socket (ADR 0017).
 func DefaultInferEmbedAddr() string {
 	return runtimeSocketPath("infer.embed.sock", `\\.\pipe\inferd-infer-embed`)
+}
+
+// DefaultInferRerankAddr returns the platform default path for the
+// cross-encoder rerank socket (ADR 0027).
+//
+// The socket exists only when the warm model has a classification head,
+// and one daemon serves one model (ADR 0012) — so on a host doing both
+// retrieval and generation this path belongs to a different daemon
+// process than [DefaultInferAddr].
+func DefaultInferRerankAddr() string {
+	return runtimeSocketPath("infer.rerank.sock", `\\.\pipe\inferd-infer-rerank`)
 }
