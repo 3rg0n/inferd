@@ -7,25 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Validation
-
-- **macOS arm64 Metal — audio native wire + bridge validation, no
-  defects (2026-08-04):** closes the "not covered on macOS" gap from
-  tasks #199/#200. Built from `main` (`cargo build --release
-  -p inferd-daemon --features dl-backends,metal -p inferd-http`, no
-  tarball yet). Native wire: A (live rate discovery,
-  `audio_sample_rate=16000`), B (matching-rate transcription, 5/5
-  ground-truth items verbatim, `input_tokens=260`), C (mismatched-rate
-  rejection, both rates named) — all reproduce the Windows result.
-  Bridge (ADR 0025): 44.1 kHz stereo → decode+downmix+resample →
-  verbatim transcription (non-stream + streaming + multi-turn),
-  `format` hint ignored in favor of real container probing,
-  undecodable-payload / system-message-audio / clip-cap edge cases all
-  return the same 400s as Windows, text-only unaffected. Every gate
-  from the Windows validation reproduces identically on Metal — a clean
-  confirmation pass, no macOS-specific defects. See
-  `docs/v0.6-validation.md`.
-
 ### Added
 
 - **Backends advertise the audio sample rate they require.**
@@ -147,6 +128,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
+- **macOS arm64 Metal — audio native wire + bridge validation, no
+  defects (2026-08-04):** closes the "not covered on macOS" gap from
+  tasks #199/#200. Built from `main` (`cargo build --release
+  -p inferd-daemon --features dl-backends,metal -p inferd-http`, no
+  tarball yet). Native wire: A (live rate discovery,
+  `audio_sample_rate=16000`), B (matching-rate transcription, 5/5
+  ground-truth items verbatim, `input_tokens=260`), C (mismatched-rate
+  rejection, both rates named) — all reproduce the Windows result.
+  Bridge (ADR 0025): 44.1 kHz stereo → decode+downmix+resample →
+  verbatim transcription (non-stream + streaming + multi-turn),
+  `format` hint ignored in favor of real container probing,
+  undecodable-payload / system-message-audio / clip-cap edge cases all
+  return the same 400s as Windows, text-only unaffected. Every gate
+  from the Windows validation reproduces identically on Metal — a clean
+  confirmation pass, no macOS-specific defects. See
+  `docs/v0.6-validation.md`.
+- **Bridge audio green on Linux (2026-08-04, WSL2 Ubuntu 26.04, kernel
+  6.18.33.2, built from `main`, accelerator `cpu`).** Audio had only ever
+  run on Windows, and everything platform-sensitive in the path lives in
+  the decode half (`symphonia` probing, the resampler, LE-f32 byte order),
+  so a second OS is the cheap check that 16 kHz mono LE-f32 wasn't a
+  Windows-shaped assumption. Same 44.1 kHz **stereo** clip as the Windows
+  gate (sha256 `52e0e4b7…`) — wrong on both axes, a rate the daemon rejects
+  outright, so a pass can only mean the bridge converted it. Transcript
+  **verbatim, 5/5 items** at `prompt_tokens=426`; streaming 37 deltas with
+  `[DONE]`; **edge cases 8/8**. And the resampling is proven *load-bearing*
+  by bypass: the same PCM sent straight to the daemon over the UDS at
+  44100 Hz → `invalid_request` naming both rates. Not a tarball run — the
+  v0.6.1 tarball's `inferd-http` predates `input_audio`, so no tarball
+  could pass this gate; that moves to the next tag, as does any
+  non-Windows **GPU** box (this run was CPU). Details in
+  `docs/v0.6-validation.md`.
+  - **Finding: the daemon emits two `capabilities` frames and the first
+    says `audio: false`** (embed-only backend), the second
+    `audio: true, audio_sample_rate: 16000`. The bridge's non-latching
+    `AudioSupport::fold` is therefore load-bearing on real hardware, not a
+    defensive nicety — a fold that latched on the first frame would have
+    disabled audio outright. Related: `inferdctl status` shows one
+    backend's capabilities even when two are registered, so `status` alone
+    cannot confirm audio support.
+- **Audio is therefore validated on all three desktop OSes** — Windows
+  (CUDA), macOS (Metal), Linux (CPU) — validated independently, with
+  `audio_sample_rate=16000` reported identically by all three and every
+  gate reproducing. The rate contract holds across the axes it could
+  plausibly have varied on. What is still open is narrow and stated:
+  audio from a release **tarball** (no tag ships it yet) and audio on a
+  non-Windows host with a **discrete GPU**.
 - **Windows x86_64 CUDA — v0.6.1 install=work green (2026-08-02):**
   zip sha256 `b3d57ddf…3ed938` verified against the release manifest →
   the bundled `install.ps1` exercised the **upgrade-over-running** path
