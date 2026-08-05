@@ -1,0 +1,27 @@
+.github/workflows/ci.yml
+  s_126aec4081f728::t_a80d92f2efb67b 100-112
+  s_126aec4081f728::t_0d4f175436fd4d 143-146,148
+  s_126aec4081f728::t_c13236e62f5391 125,127,129
+  s_126aec4081f728::t_c603c4ee91aa7d 178-185
+CHANGELOG.md
+  s_126aec4081f728::t_b620714242f02d 225-248
+docs/airgapped.md
+  s_126aec4081f728::t_21010e112d1b1b 39,44-46
+  s_126aec4081f728::t_86d1bc6f198faf 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "9316b7e8d9b6c09a5e07fc5bef1bbc38b7da8ff9",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
