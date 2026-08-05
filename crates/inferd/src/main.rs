@@ -281,13 +281,41 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
 
 // --- import -----------------------------------------------------------
 
-/// `inferdctl import --name <n> [--expect-sha256 <hex>] <path.gguf>`.
+/// Resolve the store `import` writes into.
 ///
-/// Deliberately tolerant of a missing config file: on a fresh airgapped
+/// Deliberately tolerant of a *missing* config file: on a fresh airgapped
 /// machine the natural order is import-then-configure, and requiring a
 /// config that names a model you have not imported yet would be a
-/// chicken-and-egg. A config that *is* present is still honoured for
+/// chicken-and-egg. A config that *is* present is honoured for
 /// `models_home`, so the import lands in the store the daemon will read.
+///
+/// Tolerant of `NotFound` **only**. A config that exists but is unreadable,
+/// unparseable, or invalid is an error here for the same reason it is an
+/// error in the daemon: it may carry a `models_home` we cannot read, and the
+/// daemon rejects that same file loudly. Falling back to the platform default
+/// would import into a store the daemon will never open, and report success.
+fn store_for_import(config_path: &std::path::Path) -> anyhow::Result<ModelStore> {
+    match ConfigFile::load(config_path) {
+        Ok(cfg) => Ok(match cfg.models_home.as_ref() {
+            Some(p) => ModelStore::open(p),
+            None => ModelStore::open(inferd_daemon::store::default_models_home()),
+        }),
+        Err(inferd_daemon::config_file::ConfigError::NotFound(_)) => {
+            // No config yet. MODELS_HOME / platform default is exactly
+            // what the daemon falls back to as well.
+            Ok(ModelStore::open(inferd_daemon::store::default_models_home()))
+        }
+        Err(e) => Err(anyhow::Error::new(e).context(format!(
+            "cannot determine the model store: config {} exists but is unusable \
+             (fix it, or move it aside to import into the default store)",
+            config_path.display()
+        ))),
+    }
+}
+
+/// `inferdctl import --name <n> [--expect-sha256 <hex>] <path.gguf>`.
+///
+/// The store it writes into is resolved by [`store_for_import`].
 async fn cmd_import(
     config_path: &std::path::Path,
     name: &str,
@@ -296,17 +324,7 @@ async fn cmd_import(
 ) -> anyhow::Result<ExitCode> {
     use anyhow::Context;
 
-    let store = match ConfigFile::load(config_path) {
-        Ok(cfg) => match cfg.models_home.as_ref() {
-            Some(p) => ModelStore::open(p),
-            None => ModelStore::open(inferd_daemon::store::default_models_home()),
-        },
-        Err(_) => {
-            // No usable config yet. MODELS_HOME / platform default is
-            // exactly what the daemon falls back to as well.
-            ModelStore::open(inferd_daemon::store::default_models_home())
-        }
-    };
+    let store = store_for_import(config_path)?;
 
     eprintln!(
         "inferdctl: importing {} as {:?} -> {}",
@@ -670,4 +688,92 @@ async fn dial_admin(path: &std::path::Path) -> anyhow::Result<AdminClient> {
     AdminClient::dial_admin_pipe(s)
         .await
         .map_err(anyhow::Error::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::store_for_import;
+
+    fn write(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let p = dir.join("config.json");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    // Asserts the *fallback path is taken*, not what the default resolves
+    // to: `default_models_home()` reads `MODELS_HOME`, so pinning a literal
+    // path here would only assert the ambient environment.
+    #[test]
+    fn absent_config_falls_back_to_the_default_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-such-config.json");
+
+        let store =
+            store_for_import(&path).expect("a missing config is the import-then-configure case");
+        assert_eq!(
+            store.root(),
+            inferd_daemon::store::default_models_home().as_path()
+        );
+    }
+
+    #[test]
+    fn present_config_is_honoured_for_models_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("store");
+        let path = write(
+            dir.path(),
+            &serde_json::json!({
+                "models_home": home.to_string_lossy(),
+                "backends": [{
+                    "kind": "llamacpp",
+                    "name": "gen",
+                    "model": { "name": "m", "sha256": "0".repeat(64), "source_url": "" }
+                }]
+            })
+            .to_string(),
+        );
+
+        let store = store_for_import(&path).expect("a valid config must be accepted");
+        assert_eq!(store.root(), home.as_path());
+    }
+
+    /// The regression: an *invalid* config used to be swallowed, and the
+    /// import silently landed in the platform-default store — a store the
+    /// daemon, which rejects the same file loudly, will never open.
+    #[test]
+    fn invalid_config_is_an_error_not_a_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("store");
+        // Valid JSON, fails validation: an empty backends list without
+        // `model_autoselect: "auto"`.
+        let path = write(
+            dir.path(),
+            &serde_json::json!({ "models_home": home.to_string_lossy(), "backends": [] })
+                .to_string(),
+        );
+
+        let err = store_for_import(&path).expect_err("an invalid config must not be swallowed");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("cannot determine the model store"),
+            "unexpected error: {text}"
+        );
+        // The operator must be told *what* is wrong, not just that
+        // something is: `main` prints the anyhow chain with `{e:#}`.
+        assert!(
+            text.contains("backends list must not be empty"),
+            "the underlying config error must survive into the message: {text}"
+        );
+    }
+
+    #[test]
+    fn unparseable_config_is_an_error_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "{ not json");
+
+        let err = store_for_import(&path).expect_err("a corrupt config must not be swallowed");
+        let text = format!("{err:#}");
+        assert!(text.contains("cannot determine the model store"), "{text}");
+        assert!(text.contains("parse"), "{text}");
+    }
 }

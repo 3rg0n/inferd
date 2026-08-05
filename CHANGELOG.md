@@ -222,6 +222,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`inferdctl import` swallowed every config error and silently imported
+  into the platform-default store.** The store was resolved with
+  `match ConfigFile::load(..) { … Err(_) => default_models_home() }`. The
+  catch-all was meant for the documented import-then-configure case (no
+  config yet, which is the normal state of a fresh airgapped machine), but
+  it also caught unreadable, unparseable, and *invalid* configs — so a
+  config the daemon rejects loudly (`invalid config: backends list must
+  not be empty …`) made `import` print success while writing somewhere
+  the operator had not asked for and the daemon will never open. Worst on
+  an airgapped box, where `import` is the only way bytes get in and there
+  is no fetch to fail afterwards and reveal the mistake. The fallback now
+  matches `ConfigError::NotFound` only; anything else fails with
+  `cannot determine the model store: config <path> exists but is unusable
+  (fix it, or move it aside to import into the default store)` and writes
+  nothing. Found by the ADR 0028 cross-platform validation (issue #55,
+  step 4) rather than by a test, so the four arms — absent → default,
+  valid → honoured, invalid → error, unparseable → error — are now unit
+  tests.
 - **The airgapped `cargo tree` assertion was reading rendered output, not
   data — and matched nothing at all in CI.** The `no-network-deps` job
   extracted crate names with a `sed` pattern anchored at `^`, but the
