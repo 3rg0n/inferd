@@ -7,35 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Both Windows legs of the release workflow failed on the airgapped
-  build step.** `Build daemon + CLI (airgapped)` was the only
-  multi-line `cargo build` in the job and the only one without
-  `shell: bash`, so on the Windows runners it ran under PowerShell —
-  where `\` is not a line continuation. PowerShell parsed the second
-  line's `--bin` as a unary minus and died with *"Missing expression
-  after unary operator '--'"*. Linux and macOS default to bash and
-  passed, so the v0.7.0 run produced 3 of 5 platforms. Every other
-  build step in that job is a single line, which is why this survived
-  ADR 0028's review and CI: no PR builds the release workflow's
-  Windows path.
-
-### Changed
-
-- **The landing site documents rerank.** The three surface cards
-  (generate / embed / admin) never mentioned it, so the wire surface
-  shipping in this release was invisible on the site. A fourth card
-  now covers it, and `.grid-three` became `.grid-surfaces` with an
-  `auto-fit` track so the next surface doesn't need a CSS edit. The
-  architecture diagram's socket list and the README's "ships today"
-  and `inferdctl` subcommand lines were also stale.
-- **The README no longer implies v0.7.0 is install=work validated.**
-  It claimed validation on three platforms while pointing at
-  `docs/v0.6-validation.md` — true of the v0.6.1 tarballs, not of this
-  tag, whose archives were still building when it was written. Now says
-  which tag was validated and points at issue #56 for this one.
-
 ## [0.7.0] - 2026-08-05
 
 Minor, not patch: **a fourth wire surface**. Rerank on
@@ -287,6 +258,17 @@ archives now, across five platforms.
 
 ### Fixed
 
+- **Both Windows legs of the release workflow failed on the airgapped
+  build step.** `Build daemon + CLI (airgapped)` was the only
+  multi-line `cargo build` in the job and the only one without
+  `shell: bash`, so on the Windows runners it ran under PowerShell —
+  where `\` is not a line continuation. PowerShell parsed the second
+  line's `--bin` as a unary minus and died with *"Missing expression
+  after unary operator '--'"*. Linux and macOS default to bash and
+  passed, so the first v0.7.0 run produced 3 of 5 platforms and the tag
+  was re-cut on the fix. Every other build step in that job is a single
+  line, which is why this survived ADR 0028's review and CI: no PR
+  builds the release workflow's Windows path.
 - **`inferdctl import` swallowed every config error and silently imported
   into the platform-default store.** The store was resolved with
   `match ConfigFile::load(..) { … Err(_) => default_models_home() }`. The
@@ -416,6 +398,18 @@ archives now, across five platforms.
 
 ### Changed
 
+- **The landing site documents rerank.** The three surface cards
+  (generate / embed / admin) never mentioned it, so the wire surface
+  shipping in this release was invisible on the site. A fourth card
+  now covers it, and `.grid-three` became `.grid-surfaces` with an
+  `auto-fit` track so the next surface doesn't need a CSS edit. The
+  architecture diagram's socket list and the README's "ships today"
+  and `inferdctl` subcommand lines were also stale.
+- **The README no longer implies v0.7.0 is install=work validated.**
+  It claimed validation on three platforms while pointing at
+  `docs/v0.6-validation.md` — true of the v0.6.1 tarballs, not of this
+  tag, whose archives were still building when it was written. It now
+  says which tag was validated and points at issue #56 for this one.
 - **The chat renderer is now a registry keyed to model family, and a model
   whose prompt format inferd does not know fails to load**
   ([ADR 0026](docs/adr/0026-chat-renderer-registry-per-model-family.md),
