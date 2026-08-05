@@ -780,20 +780,24 @@ jobs:
       # 0020), and ci.yml's `no-network-deps` job asserts that rather
       # than assuming it.
       # ---------------------------------------------------------------
-      - name: Build daemon + CLI (airgapped)
-        # `shell: bash` is load-bearing, not stylistic: this is the only
-        # `cargo build` step in the job that spans lines, and on the
-        # Windows runners the default shell is PowerShell, where `\` is
-        # not a line continuation — it parsed `--bin` as a unary minus and
-        # failed both Windows legs at v0.7.0 while Linux/macOS (bash by
-        # default) passed. Every other build step here is a single line,
-        # which is why the omission went unnoticed until an arm64 leg ran.
-        shell: bash
-        run: |
-          cargo build --release --no-default-features \
-            --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}
-          cargo build --release --no-default-features \
-            --bin inferdctl --target ${{ matrix.target }}
+      # These two steps are deliberately single-line with no `shell:`
+      # override, exactly like the three networked `cargo build` steps
+      # above — and for a reason that cost both Windows legs two release
+      # runs at v0.7.0. As a multi-line `run:` with `\` continuations it
+      # failed under the Windows default shell (PowerShell, where `\` is
+      # not a continuation: `--bin` parsed as a unary minus). Adding
+      # `shell: bash` fixed the parse and broke the link instead: Git
+      # Bash puts `C:\Program Files\Git\usr\bin` ahead of the MSVC
+      # toolchain on PATH, so rustc invoked coreutils `/usr/bin/link`
+      # rather than `link.exe` and every build script failed to link
+      # ("extra operand ... .rcgu.o"). A cargo build on the Windows
+      # runners must therefore run under the same shell as its
+      # neighbours, which means the command cannot span lines.
+      - name: Build daemon (airgapped)
+        run: cargo build --release --no-default-features --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}
+
+      - name: Build inferdctl CLI (airgapped)
+        run: cargo build --release --no-default-features --bin inferdctl --target ${{ matrix.target }}
 
       # The airgapped leg passes a different feature string, so it gets
       # the same CLI-surface gate the networked leg does — a build that

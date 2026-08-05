@@ -259,15 +259,22 @@ archives now, across five platforms.
 ### Fixed
 
 - **Both Windows legs of the release workflow failed on the airgapped
-  build step.** `Build daemon + CLI (airgapped)` was the only
-  multi-line `cargo build` in the job and the only one without
-  `shell: bash`, so on the Windows runners it ran under PowerShell —
-  where `\` is not a line continuation. PowerShell parsed the second
-  line's `--bin` as a unary minus and died with *"Missing expression
-  after unary operator '--'"*. Linux and macOS default to bash and
-  passed, so the first v0.7.0 run produced 3 of 5 platforms and the tag
-  was re-cut on the fix. Every other build step in that job is a single
-  line, which is why this survived ADR 0028's review and CI: no PR
+  build step, which had never once succeeded on Windows.** ADR 0028
+  added it as the job's only *multi-line* `cargo build`, using `\`
+  continuations — which the Windows default shell (PowerShell) does not
+  honour, so it parsed `--bin` as a unary minus (*"Missing expression
+  after unary operator '--'"*). The obvious fix, `shell: bash`, then
+  fixed the parse and broke the **link** instead: Git Bash puts
+  `C:\Program Files\Git\usr\bin` ahead of the MSVC toolchain on `PATH`,
+  so rustc invoked coreutils `/usr/bin/link` rather than `link.exe` and
+  every build script died with *"extra operand … .rcgu.o"*. The step is
+  now two single-line steps with no `shell:` override at all, matching
+  the three networked `cargo build` steps that have shipped five
+  releases: on the Windows runners a `cargo build` must run under the
+  same shell as its neighbours, which means it cannot span lines. Linux
+  and macOS default to bash and were never affected, so the first two
+  v0.7.0 runs each produced 3 of 5 platforms and published nothing
+  (`publish` needs every build leg). Nothing in CI covers this: no PR
   builds the release workflow's Windows path.
 - **`inferdctl import` swallowed every config error and silently imported
   into the platform-default store.** The store was resolved with
