@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-05
+
+Minor, not patch: **a fourth wire surface**. Rerank on
+`infer.rerank.sock` ([ADR 0027](docs/adr/0027-reranking-on-a-fourth-socket.md))
+is purely additive — `wire_version` is unmoved, v0.6.x clients
+interoperate unchanged, and a daemon whose model has no classification
+head binds no rerank socket — but a shipped surface is a frozen surface,
+so this tag is what fixes its shape. Also ships a **second archive per
+platform** ([ADR 0028](docs/adr/0028-airgapped-build-profile.md)): the
+same commit built `--no-default-features`, with no HTTPS client linked
+at all, for hosts that must load models via `inferdctl import`. Ten
+archives now, across five platforms.
+
 ### Validation
 
 - **macOS arm64 Metal — airgapped build profile (ADR 0028), all 7 steps

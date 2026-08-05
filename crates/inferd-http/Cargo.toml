@@ -15,10 +15,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Consumes the daemon over IPC like any other middleware (ADR 0014).
-inferd-client      = { path = "../inferd-client", version = "=0.6.1" }
-inferd-proto       = { path = "../inferd-proto", version = "=0.6.1" }
+inferd-client      = { path = "../inferd-client", version = "=0.7.0" }
+inferd-proto       = { path = "../inferd-proto", version = "=0.7.0" }
 # One canonical OpenAI wire definition, shared with the outbound adapter.
-inferd-openai-wire = { path = "../inferd-openai-wire", version = "=0.6.1" }
+inferd-openai-wire = { path = "../inferd-openai-wire", version = "=0.7.0" }
 tokio              = { workspace = true }
 tokio-stream       = "0.1"
 futures-util       = "0.3"

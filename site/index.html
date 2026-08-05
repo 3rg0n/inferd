@@ -38,7 +38,7 @@
   </div>
   <div class="masthead-rule"></div>
   <div class="masthead-meta">
-    <span>v0.6.1</span>
+    <span>v0.7.0</span>
     <span class="dot">·</span>
     <span>MIT</span>
     <span class="dot">·</span>
@@ -59,10 +59,10 @@
     <em>Many</em> local consumers.
   </h1>
   <p class="lede">
-    <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small IPC protocol (length-prefixed frames for generation, NDJSON for embeddings). It is plumbing, not a product.
+    <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small IPC protocol (length-prefixed frames for generation, NDJSON for embeddings and rerank). It is plumbing, not a product.
   </p>
   <div class="hero-actions">
-    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.6.1</a>
+    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.7.0</a>
     <a class="btn ghost" href="https://github.com/3rg0n/inferd">Read the source</a>
   </div>
   <pre class="hero-snippet" aria-label="example session"><span class="prompt">$</span> inferdctl doctor
@@ -118,7 +118,7 @@
       </li>
       <li>
         <h3>The wire protocol is the product.</h3>
-        <p>Length-prefixed, type-tagged frames over a Unix socket on Linux/macOS, a named pipe on Windows (embeddings use NDJSON). 64&nbsp;MiB per-frame cap. Frozen, with an in-band <code>wire_version</code>. Anything on the host that can open a socket can drive it.</p>
+        <p>Length-prefixed, type-tagged frames over a Unix socket on Linux/macOS, a named pipe on Windows (embeddings and rerank use NDJSON). 64&nbsp;MiB per-frame cap. Frozen, with an in-band <code>wire_version</code>. Anything on the host that can open a socket can drive it.</p>
       </li>
     </ol>
   </div>
@@ -195,7 +195,17 @@
     </details>
 
     <aside class="callout callout-block">
-      <p class="callout-label">New in v0.6</p>
+      <p class="callout-label">New in v0.7</p>
+      <p>
+        <strong>Rerank</strong>, on a fourth socket. A cross-encoder scores your query against each candidate document <em>jointly</em> — one model pass per document, so unlike an embedding there is nothing to precompute. That is the point: it goes downstream of retrieval (<code>embed → top-50 → rerank → top-5 → generate</code>), and the precision it buys over vector similarity alone is what makes the extra passes worth paying for. Scores are raw and ordinal <em>within one response</em> — never comparable across models or against a fixed threshold — so the daemon sorts and truncates for you rather than handing out numbers that look absolute. Bound only when the warm model has a classification head, so nothing changes for existing deployments. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0027-reranking-on-a-fourth-socket.md" class="ext">ADR 0027 ↗</a>
+      </p>
+      <p>
+        And an <strong>airgapped build</strong> — a second archive per platform, same commit, with the HTTPS client stack <em>not linked at all</em>. Not a flag that skips the fetch code: the dependency is absent from the binary, which CI asserts on every PR. Models arrive via <code>inferdctl import</code> from a local file, SHA-verified into the same content-addressable store. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0028-airgapped-build-profile.md" class="ext">ADR 0028 ↗</a>
+      </p>
+    </aside>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">Since v0.6</p>
       <p>
         Point any OpenAI-SDK tool at inferd. <code>inferd-http</code> is a separate, user-launched bridge — bundled in every release — that speaks <code>/v1/chat/completions</code> and <code>/v1/embeddings</code> (streaming, embeddings, <strong>vision</strong> via <code>image_url</code>, <strong>audio</strong> via <code>input_audio</code>, and <strong>structured output</strong> via <code>response_format</code>) and translates them to the daemon's IPC. The daemon still serves no HTTP; the bridge is just another consumer. Plus <strong>Gemma 4 12B</strong> support and boot-time model auto-selection by accelerator memory. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0020-inferd-http-bridge-is-a-separate-process.md" class="ext">ADR 0020 ↗</a> · <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0023-boot-time-model-auto-selection-by-accelerator-memory.md" class="ext">ADR 0023 ↗</a>
       </p>
@@ -255,8 +265,8 @@
       <article class="install-card">
         <h3 class="os">Linux</h3>
         <p class="install-desc">systemd <code>--user</code> unit. No sudo, no system-wide service.</p>
-<pre>tar xzf inferd-v0.6.1-x86_64-unknown-linux-gnu.tar.gz
-cd  inferd-v0.6.1-x86_64-unknown-linux-gnu
+<pre>tar xzf inferd-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
+cd  inferd-v0.7.0-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin
 cp inferd-daemon inferdctl backends/* ~/.local/bin/
 mkdir -p ~/.config/systemd/user
@@ -268,16 +278,16 @@ systemctl --user enable --now inferd</pre>
       <article class="install-card">
         <h3 class="os">macOS</h3>
         <p class="install-desc">launchd <code>LaunchAgent</code>, per-user, Apple Silicon.</p>
-<pre>tar xzf inferd-v0.6.1-aarch64-apple-darwin.tar.gz
-cd  inferd-v0.6.1-aarch64-apple-darwin
+<pre>tar xzf inferd-v0.7.0-aarch64-apple-darwin.tar.gz
+cd  inferd-v0.7.0-aarch64-apple-darwin
 ./packaging/install-launchagent.sh ./inferd-daemon</pre>
       </article>
 
       <article class="install-card">
         <h3 class="os">Windows</h3>
         <p class="install-desc">Per-user Startup-folder shortcut. No SCM service.</p>
-<pre>Expand-Archive inferd-v0.6.1-x86_64-pc-windows-msvc.zip
-cd  inferd-v0.6.1-x86_64-pc-windows-msvc
+<pre>Expand-Archive inferd-v0.7.0-x86_64-pc-windows-msvc.zip
+cd  inferd-v0.7.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass `
   -File .\packaging\install.ps1 `
   -SourceBinary .\inferd-daemon.exe</pre>
@@ -325,7 +335,7 @@ powershell -ExecutionPolicy Bypass `
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Status</p>
-      <p>GA · v0.6.1</p>
+      <p>GA · v0.7.0</p>
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Set in</p>

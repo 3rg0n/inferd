@@ -6,12 +6,13 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: v0.6.1.** `inferd-proto` and `inferd-client` are on crates.io;
+**Status: v0.7.0.** `inferd-proto` and `inferd-client` are on crates.io;
 the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
 HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
-arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms. Windows
-arm64 was parked at the v0.6.0 tag and ships again from v0.6.1; install=work
-is validated on Windows x86_64 CUDA, Linux x86_64 CUDA, and macOS arm64
+arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms, and
+since v0.7.0 **two archives each**: the normal one, and an *airgapped*
+build with no HTTPS client linked at all (ADR 0028). install=work is
+validated on Windows x86_64 CUDA, Linux x86_64 CUDA, and macOS arm64
 Metal (see `docs/v0.6-validation.md`). See `context.md` for the hand-off
 brief to first-time contributors and `docs/adr/` for the design decisions.
 
@@ -66,7 +67,7 @@ inference daemon; they connect to inferd.
 
 ## Scope
 
-What ships today (v0.6):
+What ships today (v0.7):
 
 - **Local llama.cpp via FFI** (vendored `b9850`), Gemma 4 E4B as the
   reference model — multimodal by default (the projector pulled on first
@@ -128,7 +129,7 @@ What ships today (v0.6):
   client in `clients/go/` (the canonical non-Rust reference; pin it with
   the path-prefixed module tag, `go get …/clients/go@vX.Y.Z`). Python and
   TypeScript wrappers are planned (stubs in `clients/`).
-- **`inferdctl`** CLI: `status` / `watch` / `pull` / `doctor`.
+- **`inferdctl`** CLI: `status` / `watch` / `pull` / `import` / `doctor`.
 
 Everything is one host-wide daemon: apps connect to inferd instead of
 bundling their own engine. HTTP / OpenAI-compat *server* surfaces stay
@@ -146,7 +147,7 @@ inferd/
 │   ├── inferd-client/      # Rust client, published to crates.io
 │   ├── inferd-openai-wire/ # OpenAI wire types, shared by both directions
 │   ├── inferd-http/        # OpenAI-compat bridge binary (separate process)
-│   └── inferd/             # `inferdctl` CLI binary: status / watch / pull / doctor
+│   └── inferd/             # `inferdctl` CLI binary: status / watch / pull / import / doctor
 ├── clients/
 │   └── go/                 # hand-written Go client (py/ts are README stubs)
 ├── packaging/              # the per-user installers install=work exercises
@@ -188,8 +189,8 @@ installed.
 ### Linux
 
 ```sh
-tar xzf inferd-v0.6.1-x86_64-unknown-linux-gnu.tar.gz
-cd inferd-v0.6.1-x86_64-unknown-linux-gnu
+tar xzf inferd-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
+cd inferd-v0.7.0-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin ~/.config/systemd/user
 cp -f inferd-daemon inferdctl ~/.local/bin/
 cp -f backends/* ~/.local/bin/            # ggml backend modules ($ORIGIN RPATH)
@@ -233,8 +234,8 @@ and run `wsl.exe --shutdown` from Windows.
 ### macOS (Apple Silicon)
 
 ```sh
-tar xzf inferd-v0.6.1-aarch64-apple-darwin.tar.gz
-cd inferd-v0.6.1-aarch64-apple-darwin
+tar xzf inferd-v0.7.0-aarch64-apple-darwin.tar.gz
+cd inferd-v0.7.0-aarch64-apple-darwin
 ./packaging/launchd/install-launchagent.sh ./inferd-daemon
 inferdctl watch
 ```
@@ -246,8 +247,8 @@ bootstraps it. The probe picks Metal on Apple Silicon.
 ### Windows
 
 ```powershell
-Expand-Archive inferd-v0.6.1-x86_64-pc-windows-msvc.zip -DestinationPath .
-cd inferd-v0.6.1-x86_64-pc-windows-msvc
+Expand-Archive inferd-v0.7.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+cd inferd-v0.7.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
     -SourceBinary .\inferd-daemon.exe
 inferdctl watch
