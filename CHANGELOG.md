@@ -222,6 +222,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The airgapped `cargo tree` assertion was reading rendered output, not
+  data — and matched nothing at all in CI.** The `no-network-deps` job
+  extracted crate names with a `sed` pattern anchored at `^`, but the
+  workflow sets `CARGO_TERM_COLOR=always`, so every line arrived wrapped
+  in ANSI SGR escapes and the anchor never sat against the crate name.
+  All five `cargo tree` invocations therefore matched zero crates: the
+  four airgapped assertions printed `OK` while checking nothing. This is
+  precisely the failure mode ADR 0028 was written to prevent — a
+  guarantee that reads as proven and was never tested — and the only
+  reason it surfaced is the anti-vacuity control, which demands the
+  *default* build match the same pattern and went red when it didn't.
+  Fixed by asking cargo for machine-readable output once
+  (`--prefix none --format '{p}' --color never`) and reading field 1 with
+  `cut`, which removes the prefix-stripping regex rather than correcting
+  it. The `hyper`-is-server-only step got `--color never` too: its greps
+  are unanchored so the escapes did not break them, but that was luck,
+  and the next tightened pattern would have inherited the bug. Verified
+  under `CARGO_TERM_COLOR=always` locally: all four airgapped trees
+  empty, control matching `ring rustls rustls-native-certs
+  rustls-pemfile rustls-webpki ureq webpki-roots`, and
+  `inferd-engine --features openai` still caught as TLS-linking. The
+  runbook command in `docs/airgapped.md` carries the flag and the reason
+  as well, since an operator with that variable exported would have
+  reproduced the same false pass by hand.
 - **Tier 3 has not compiled since 2026-06-30 and nobody noticed.** The
   real-model integration tests (`crates/inferd-engine/tests/llamacpp.rs`)
   build a `ResolvedV2` literal directly, so the `thinking` field added by

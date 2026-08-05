@@ -97,6 +97,19 @@ jobs:
           # letting a name-based pattern make the call.
           pattern='^(ureq|reqwest|rustls|rustls-webpki|rustls-native-certs|rustls-pemfile|ring|webpki-roots|native-tls|openssl|openssl-sys)$'
           fail=0
+          # Read the tree as data, not as a rendering. Three flags, each
+          # load-bearing for the anchored pattern above:
+          #   --color never   this workflow sets CARGO_TERM_COLOR=always,
+          #                   so every line arrives wrapped in SGR escapes
+          #                   and `^` no longer sits against the crate
+          #                   name. That is what made this control fire.
+          #   --prefix none   drops the tree-drawing characters.
+          #   --format '{p}'  emits "<name> <version>" and nothing else,
+          #                   so the name is field 1 for `cut`.
+          # `cut` replaces the sed extractor it took to strip a prefix:
+          # with no prefix left to strip there is nothing to get wrong.
+          tree_of() { cargo tree --edges normal --prefix none --format '{p}' --color never "$@"; }
+          names_matching() { cut -d' ' -f1 | grep -E "$pattern" | sort -u; }
           # "<pkg>|<extra features>". `dl-backends` exists on the daemon
           # only, so the configurations are listed per package rather
           # than crossed — asking inferdctl for a feature it does not
@@ -109,13 +122,11 @@ jobs:
             label="$pkg${features:+ (+$features)}"
             echo "::group::$label"
             if [ -z "$features" ]; then
-              tree=$(cargo tree -p "$pkg" --no-default-features --edges normal)
+              tree=$(tree_of -p "$pkg" --no-default-features)
             else
-              tree=$(cargo tree -p "$pkg" --no-default-features --features "$features" --edges normal)
+              tree=$(tree_of -p "$pkg" --no-default-features --features "$features")
             fi
-            found=$(printf '%s\n' "$tree" \
-              | sed -E 's/^[^a-zA-Z]*([a-zA-Z0-9_-]+) v.*/\1/' \
-              | grep -E "$pattern" | sort -u || true)
+            found=$(printf '%s\n' "$tree" | names_matching || true)
             if [ -n "$found" ]; then
               echo "FAIL: $label links an HTTPS client stack:"
               printf '  %s\n' $found
@@ -129,11 +140,12 @@ jobs:
           # Without this, a typo'd pattern, a renamed crate, or a broken
           # extractor would make every assertion above vacuously pass and
           # report a guarantee that was never actually checked. Uses the
-          # identical extraction so it tests the extractor too.
+          # identical extraction so it tests the extractor too — and it
+          # has already earned its keep: CARGO_TERM_COLOR=always broke the
+          # extractor for every configuration at once, and this is the
+          # only reason the run went red instead of green-and-meaningless.
           echo "::group::control: default build"
-          control=$(cargo tree -p inferd-daemon --edges normal \
-            | sed -E 's/^[^a-zA-Z]*([a-zA-Z0-9_-]+) v.*/\1/' \
-            | grep -E "$pattern" | sort -u || true)
+          control=$(tree_of -p inferd-daemon | names_matching || true)
           if [ -z "$control" ]; then
             echo "FAIL: default build matched no HTTPS crate — the assertions above are vacuous"
             fail=1
@@ -163,7 +175,14 @@ jobs:
             # `-i hyper` prints the inverted feature tree for hyper; it
             # exits non-zero when hyper is absent from the tree, which is
             # itself a pass, so tolerate that.
-            feats=$(cargo tree -p "$pkg" --no-default-features --edges features -i hyper 2>/dev/null || true)
+            #
+            # `--color never` for the same reason as the step above: the
+            # workflow sets CARGO_TERM_COLOR=always, and the greps below
+            # read this output as data. They happen to be unanchored, so
+            # the escapes don't break them today — that is luck, not
+            # design, and the next tightened pattern would inherit the
+            # bug. Ask for plain text once, here.
+            feats=$(cargo tree -p "$pkg" --no-default-features --edges features -i hyper --color never 2>/dev/null || true)
             if [ -z "$feats" ]; then
               echo "OK: $pkg does not link hyper at all"
               continue

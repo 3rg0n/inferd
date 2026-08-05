@@ -36,10 +36,14 @@ but unreachable, not gated behind a runtime check. Verify it yourself
 against any tag, without reading inferd's source:
 
 ```sh
-cargo tree -p inferd-daemon --no-default-features --features dl-backends \
+cargo tree -p inferd-daemon --no-default-features --features dl-backends --color never \
   | grep -E '\b(ureq|reqwest|rustls|ring|native-tls|openssl|webpki-roots)\b'
 # no output = no HTTPS client stack linked
 ```
+
+`--color never` matters if you have `CARGO_TERM_COLOR=always` set: cargo
+then wraps every line in ANSI escapes, and a grep that anchors on the
+crate name silently matches nothing — which reads as a pass.
 
 CI runs exactly that assertion (`.github/workflows/ci.yml`, the
 `no-network-deps` job) and fails the build if anything matches, in both
