@@ -46,7 +46,15 @@ pub enum BackendKind {
 
 /// Top-level CLI for `inferd-daemon`.
 #[derive(Debug, Parser)]
-#[command(name = "inferd-daemon", version, about = "Local inference daemon")]
+// `long_version` adds the ADR 0028 build profile to `--version`, so an
+// operator can ask the binary whether it is the networked or the
+// airgapped artifact rather than inferring it from a filename.
+#[command(
+    name = "inferd-daemon",
+    version,
+    long_version = crate::LONG_VERSION,
+    about = "Local inference daemon"
+)]
 pub struct Cli {
     /// Backend to load at startup.
     ///

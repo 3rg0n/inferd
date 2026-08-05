@@ -416,7 +416,10 @@ pub struct ModelConfig {
     /// Advisory total size for progress reporting + manifest.
     #[serde(default)]
     pub size_bytes: Option<u64>,
-    /// Direct-download HTTPS endpoint. Must be `https://`.
+    /// Direct-download HTTPS endpoint. Must be `https://`, or empty to
+    /// resolve the model from the store only (no download) — the shape
+    /// an airgapped operator writes after `inferdctl import`, since they
+    /// have bytes in the CAS store and no URL to name (ADR 0028).
     pub source_url: String,
     /// SPDX-style license id when known. Recorded in the manifest.
     #[serde(default)]
@@ -876,9 +879,23 @@ fn validate_model_config(m: &ModelConfig) -> Result<(), ConfigError> {
     if m.name.is_empty() {
         return Err(ConfigError::Invalid("model.name must not be empty".into()));
     }
-    if !m.source_url.starts_with("https://") {
+    // An empty `source_url` means "resolve from the store only" —
+    // `fetch::fetch_model` has always supported it (manifest → CAS blob,
+    // no download), and it is the *only* shape an airgapped operator can
+    // write, since they have `inferdctl import`ed the bytes and have no
+    // URL to name (ADR 0028). Requiring https:// here rejected that
+    // config before the resolution path it needs ever ran.
+    //
+    // The empty case is accepted in both artifacts: the networked build
+    // resolves it locally too, and errors with `no source_url and no
+    // manifest exists` if the operator forgot the import — which names
+    // the actual mistake. Anything non-empty must still be https://:
+    // a typo'd `http://` is a downgrade, not a request for offline mode.
+    if !m.source_url.is_empty() && !m.source_url.starts_with("https://") {
         return Err(ConfigError::Invalid(format!(
-            "model.source_url must be https:// (got {:?})",
+            "model.source_url must be https:// or empty (empty = resolve from \
+             the model store only, for models placed by `inferdctl import`); \
+             got {:?}",
             m.source_url
         )));
     }
@@ -974,6 +991,38 @@ mod tests {
         let f = write_config(&bad);
         let err = ConfigFile::load(f.path()).unwrap_err();
         match err {
+            ConfigError::Invalid(msg) => assert!(msg.contains("https://")),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    // ADR 0028: the config an airgapped operator writes after
+    // `inferdctl import` has no URL to name. Before this was accepted,
+    // validation rejected the file outright and the airgapped build had
+    // no valid config at all — `fetch_model` already handled the empty
+    // case (resolve from the manifest, no download), but nothing could
+    // reach it.
+    #[test]
+    fn empty_source_url_accepted_for_imported_models() {
+        let offline = good_json().replace(
+            "\"source_url\": \"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf\"",
+            "\"source_url\": \"\"",
+        );
+        let f = write_config(&offline);
+        let cfg = ConfigFile::load(f.path()).expect("empty source_url must be valid");
+        assert_eq!(cfg.model.as_ref().unwrap().source_url, "");
+    }
+
+    // Empty is offline mode; a non-empty non-HTTPS URL is still a
+    // downgrade and still rejected. The two must not be conflated.
+    #[test]
+    fn whitespace_source_url_still_rejected() {
+        let bad = good_json().replace(
+            "\"source_url\": \"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf\"",
+            "\"source_url\": \" \"",
+        );
+        let f = write_config(&bad);
+        match ConfigFile::load(f.path()).unwrap_err() {
             ConfigError::Invalid(msg) => assert!(msg.contains("https://")),
             other => panic!("expected Invalid, got {other:?}"),
         }

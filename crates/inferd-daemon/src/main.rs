@@ -72,8 +72,14 @@ async fn main() -> anyhow::Result<()> {
     // (Phase 6B-4). clap still enforces mutual exclusion when CLI
     // flags ARE set.
 
+    // `build` names the ADR 0028 artifact ("networked" / "airgapped").
+    // It is in the *first* log line on purpose: the airgapped build's
+    // whole value is that it cannot reach the network, and the one thing
+    // an operator needs to confirm post-install is which binary is
+    // actually running.
     info!(
         version = env!("CARGO_PKG_VERSION"),
+        build = inferd_daemon::BUILD_PROFILE,
         "inferd-daemon starting"
     );
 

@@ -8,12 +8,24 @@ and the procedure a human follows when something goes wrong.
 
 Each release tag (`vX.Y.Z`) produces, on the GitHub Release page:
 
-- 5 platform archives (each containing `inferd-daemon`, `inferdctl`, and `inferd-http`):
+- 10 platform archives — **two per platform** (each containing
+  `inferd-daemon`, `inferdctl`, and `inferd-http`) across 5 targets:
   - `inferd-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`
   - `inferd-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz`
   - `inferd-vX.Y.Z-aarch64-apple-darwin.tar.gz`
   - `inferd-vX.Y.Z-x86_64-pc-windows-msvc.zip`
   - `inferd-vX.Y.Z-aarch64-pc-windows-msvc.zip`
+  - …and an `inferd-airgapped-vX.Y.Z-<target>` counterpart for each.
+
+  The airgapped set is the same commit built `--no-default-features`
+  ([ADR 0028](adr/0028-airgapped-build-profile.md)): the default-on
+  `model-fetch` feature is off, so `ureq`/`rustls`/`ring` are not
+  linked and models must arrive via `inferdctl import`. Both archives
+  contain identical `backends/`, docs, and packaging scripts — the
+  binaries are the only difference, and they say which they are
+  (`--version` prints `build profile: networked|airgapped`). The
+  `no-network-deps` CI job asserts the dependency absence on every PR;
+  the release job re-verifies it on the built binary before packing.
 - One `*.sha256` sidecar per archive (universal "did this download
   corrupt" check; verify with `shasum -a 256 -c <archive>.sha256`).
 - One `*.cosign.bundle` per archive (keyless OIDC provenance; verify
@@ -80,14 +92,19 @@ gh run watch --workflow=release.yml
 
 The expected trajectory:
 
-- 4 `build` jobs run in parallel (~5 minutes each on llama.cpp builds).
+- 5 `build` jobs run in parallel (~5 minutes each on llama.cpp builds).
+  Each does two link passes and packs two archives (ADR 0028); the
+  second pass relinks only `inferd-daemon` + `inferdctl`, so it costs
+  minutes, not another full llama.cpp build.
 - 1 `sbom` job runs in parallel (~3 minutes).
-- 1 `publish` job runs after all 5 succeed: signs archives, verifies
+- 1 `publish` job runs after all 6 succeed: signs archives, verifies
   asset completeness, extracts CHANGELOG section, creates the release.
 
 If `Verify asset completeness` fails: at least one platform build
 silently shipped fewer-than-expected outputs. Check the upstream
-build job logs.
+build job logs. That step counts the networked and airgapped archives
+**separately** — a total of 10 that happened to be 10 networked ones
+would otherwise pass while half the release was missing.
 
 ### 5. Publish to crates.io (manual, by design)
 

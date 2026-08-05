@@ -40,6 +40,144 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
 
+  airgapped:
+    name: ${{ matrix.os }} / airgapped (--no-default-features)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # ADR 0028: the airgapped artifact is the default build minus the
+      # default-on `model-fetch` feature. An unbuilt feature combination
+      # is a broken one waiting to be found — Tier 3 rotted for five
+      # weeks exactly this way — so the configuration we ship gets
+      # clippy'd and tested like any other, not just dependency-checked.
+      - run: cargo clippy -p inferd-daemon -p inferdctl --no-default-features --all-targets -- -D warnings
+      - run: cargo test -p inferd-daemon --no-default-features
+      - run: cargo test -p inferdctl --no-default-features
+
+  no-network-deps:
+    name: airgapped artifact links no HTTPS stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # THE deliverable of ADR 0028. The airgapped guarantee is a claim
+      # about the *linked artifact*, not about which code paths run, so
+      # it is asserted against the dependency tree — reproducible by any
+      # third party against a tag without reading a line of our source.
+      #
+      # Cargo features are purely additive: a feature can add a
+      # dependency, never remove one. That is why `model-fetch` is
+      # default-ON and the hardened build subtracts it. An additive
+      # `airgapped` feature would compile out the call sites and leave
+      # the TLS stack linked — passing review while being false.
+      #
+      # All three shipped binaries are checked, because all three go in
+      # the airgapped tarball. `inferdctl` links `inferd-daemon`, so a
+      # missing `default-features = false` there silently re-enables ureq
+      # for the whole archive — that defect was real, not hypothetical.
+      - name: Assert no HTTPS client stack in the airgapped trees
+        run: |
+          set -euo pipefail
+          # Crates that can *originate* an outbound request, plus every
+          # TLS implementation. `hyper` is deliberately absent: it is a
+          # protocol library with independent server/client halves, and
+          # inferd-http (a localhost listener, ADR 0020) links the server
+          # half. The next step asserts that specifically, rather than
+          # letting a name-based pattern make the call.
+          pattern='^(ureq|reqwest|rustls|rustls-webpki|rustls-native-certs|rustls-pemfile|ring|webpki-roots|native-tls|openssl|openssl-sys)$'
+          fail=0
+          # "<pkg>|<extra features>". `dl-backends` exists on the daemon
+          # only, so the configurations are listed per package rather
+          # than crossed — asking inferdctl for a feature it does not
+          # have makes `cargo tree` exit non-zero and, if its output were
+          # discarded, would read as a pass.
+          configs='inferd-daemon| inferd-daemon|dl-backends inferdctl| inferd-http|'
+          for config in $configs; do
+            pkg=${config%%|*}
+            features=${config#*|}
+            label="$pkg${features:+ (+$features)}"
+            echo "::group::$label"
+            if [ -z "$features" ]; then
+              tree=$(cargo tree -p "$pkg" --no-default-features --edges normal)
+            else
+              tree=$(cargo tree -p "$pkg" --no-default-features --features "$features" --edges normal)
+            fi
+            found=$(printf '%s\n' "$tree" \
+              | sed -E 's/^[^a-zA-Z]*([a-zA-Z0-9_-]+) v.*/\1/' \
+              | grep -E "$pattern" | sort -u || true)
+            if [ -n "$found" ]; then
+              echo "FAIL: $label links an HTTPS client stack:"
+              printf '  %s\n' $found
+              fail=1
+            else
+              echo "OK: $label links no HTTPS client stack"
+            fi
+            echo "::endgroup::"
+          done
+          # Control: the DEFAULT build must still match the pattern.
+          # Without this, a typo'd pattern, a renamed crate, or a broken
+          # extractor would make every assertion above vacuously pass and
+          # report a guarantee that was never actually checked. Uses the
+          # identical extraction so it tests the extractor too.
+          echo "::group::control: default build"
+          control=$(cargo tree -p inferd-daemon --edges normal \
+            | sed -E 's/^[^a-zA-Z]*([a-zA-Z0-9_-]+) v.*/\1/' \
+            | grep -E "$pattern" | sort -u || true)
+          if [ -z "$control" ]; then
+            echo "FAIL: default build matched no HTTPS crate — the assertions above are vacuous"
+            fail=1
+          else
+            echo "OK: default build links $(printf '%s ' $control)— assertions are meaningful"
+          fi
+          echo "::endgroup::"
+          exit $fail
+
+      # `hyper` ships in the tarball via inferd-http, so the airgapped
+      # claim has to be about what that hyper *is*, not about its name.
+      # hyper gates its client and server halves behind separate cargo
+      # features; axum enables `server` + `http1` only. Assert the
+      # `client` feature is not enabled anywhere in the workspace — with
+      # it off, hyper compiles no connect/dial code at all, so no binary
+      # in the archive can originate a request through it.
+      #
+      # A pattern-based ban on the name would have been easier and wrong:
+      # it would either fail on inferd-http (a localhost listener is not
+      # an egress path) or force excluding that binary from the check
+      # entirely, which is worse.
+      - name: Assert hyper is server-only (no client half linked)
+        run: |
+          set -euo pipefail
+          fail=0
+          for pkg in inferd-daemon inferdctl inferd-http; do
+            # `-i hyper` prints the inverted feature tree for hyper; it
+            # exits non-zero when hyper is absent from the tree, which is
+            # itself a pass, so tolerate that.
+            feats=$(cargo tree -p "$pkg" --no-default-features --edges features -i hyper 2>/dev/null || true)
+            if [ -z "$feats" ]; then
+              echo "OK: $pkg does not link hyper at all"
+              continue
+            fi
+            if printf '%s\n' "$feats" | grep -qE 'hyper feature "client"'; then
+              echo "FAIL: $pkg enables hyper's client feature — an egress path in the airgapped artifact"
+              printf '%s\n' "$feats" | grep -E 'hyper feature' | sort -u
+              fail=1
+            else
+              echo "OK: $pkg links hyper with $(printf '%s\n' "$feats" | grep -oE 'hyper feature "[a-z0-9-]+"' | sort -u | tr '\n' ' ')— no client half"
+            fi
+          done
+          exit $fail
+
   openai:
     name: ${{ matrix.os }} / openai-compat feature
     runs-on: ${{ matrix.os }}

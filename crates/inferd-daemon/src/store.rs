@@ -36,6 +36,98 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+/// A model name that cannot be used to build a store path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidModelName {
+    /// The offending name, echoed so the operator can see what was read
+    /// (a trailing space or a stray quote is otherwise invisible).
+    pub name: String,
+    /// Which rule it broke.
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for InvalidModelName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid model name {:?}: {}", self.name, self.reason)
+    }
+}
+
+impl std::error::Error for InvalidModelName {}
+
+impl From<InvalidModelName> for io::Error {
+    fn from(e: InvalidModelName) -> Self {
+        io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
+    }
+}
+
+/// Names allowed to become `manifests/<name>.json` and
+/// `locks/<name>.lock`.
+///
+/// The blob layout is content-addressed, so a digest cannot be hostile.
+/// A *name* can: it arrives from `--name` or a `config.json` field and
+/// is interpolated straight into a path. `models_home` may point at a
+/// store shared with other tools (ADR 0011), so a name containing a
+/// separator would write outside the store's own subdirectories —
+/// clobbering a neighbour's file, or escaping the store root entirely.
+///
+/// The grammar is deliberately narrower than "no traversal": ASCII
+/// alphanumerics plus `.`, `-`, `_`, non-empty, capped at 128 bytes, no
+/// leading `.` and no `..` anywhere. That is a superset of every name
+/// inferd ships and of the cross-tool convention's own naming, and
+/// being restrictive costs nothing here — a rejected name is a typo the
+/// operator fixes, not a feature they lose. NTFS alternate data streams
+/// (`name:stream`) fall out of the character set for free.
+///
+/// Windows reserved device names do **not** — `CON` is plain ASCII
+/// alphanumeric — so they are rejected explicitly. `manifests/CON.json`
+/// is not reliably a file: the Win32 layer resolves a reserved base name
+/// to the *device* regardless of extension or directory, so depending on
+/// the API in play a write there can go to the console instead of the
+/// store. It happens to behave like a normal file on some configurations,
+/// which is precisely why it makes a poor thing to leave to chance.
+pub fn validate_model_name(name: &str) -> Result<(), InvalidModelName> {
+    let bad = |reason: &'static str| InvalidModelName {
+        name: name.to_string(),
+        reason,
+    };
+    if name.is_empty() {
+        return Err(bad("must not be empty"));
+    }
+    if name.len() > 128 {
+        return Err(bad("must be at most 128 bytes"));
+    }
+    if name.starts_with('.') {
+        return Err(bad("must not start with '.'"));
+    }
+    if name.contains("..") {
+        return Err(bad("must not contain '..'"));
+    }
+    if let Some(c) = name
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+    {
+        return Err(bad(match c {
+            '/' | '\\' => "must not contain a path separator",
+            _ => "may contain only ASCII letters, digits, '.', '-' and '_'",
+        }));
+    }
+    // Windows resolves a reserved device name by its base name, before
+    // the extension and independent of the directory, so `CON` would
+    // make `manifests/CON.json` a handle to the console rather than a
+    // file. Rejected on every platform: a store is shared (ADR 0011) and
+    // may be read on Windows even when written on Linux, and a name that
+    // means something different per-OS is not a name worth keeping.
+    let stem = name.split('.').next().unwrap_or(name);
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r)) {
+        return Err(bad("must not be a Windows reserved device name"));
+    }
+    Ok(())
+}
+
 /// Default `$MODELS_HOME` for the running platform.
 ///
 /// Resolution chain documented in the module header.
@@ -168,15 +260,22 @@ impl ModelStore {
     }
 
     /// Path to a manifest by name.
-    pub fn manifest_path(&self, name: &str) -> PathBuf {
-        self.root.join("manifests").join(format!("{name}.json"))
+    ///
+    /// Fallible because `name` reaches this from operator input — a
+    /// `--name` argument or a `config.json` field — and is the only
+    /// part of the layout that is not content-addressed. See
+    /// [`validate_model_name`].
+    pub fn manifest_path(&self, name: &str) -> Result<PathBuf, InvalidModelName> {
+        validate_model_name(name)?;
+        Ok(self.root.join("manifests").join(format!("{name}.json")))
     }
 
     /// Path to the advisory lock file for `name`. Producers hold an
     /// exclusive lock on this file across blob-write + manifest-write
     /// to keep two daemons from racing on the same name.
-    pub fn lock_path(&self, name: &str) -> PathBuf {
-        self.root.join("locks").join(format!("{name}.lock"))
+    pub fn lock_path(&self, name: &str) -> Result<PathBuf, InvalidModelName> {
+        validate_model_name(name)?;
+        Ok(self.root.join("locks").join(format!("{name}.lock")))
     }
 
     /// Directory where bad blobs are quarantined. Per ADR 0011 we
@@ -189,7 +288,7 @@ impl ModelStore {
     /// callers can branch on present/missing without parsing IO
     /// kinds.
     pub fn read_manifest(&self, name: &str) -> io::Result<Option<Manifest>> {
-        let path = self.manifest_path(name);
+        let path = self.manifest_path(name)?;
         match File::open(&path) {
             Ok(file) => {
                 let manifest: Manifest =
@@ -210,9 +309,11 @@ impl ModelStore {
     /// rename. The blob it references must already exist on disk —
     /// callers are expected to write the blob first.
     pub fn write_manifest(&self, manifest: &Manifest) -> io::Result<PathBuf> {
+        // Validate before creating anything: a bad name must not even
+        // leave the `manifests/` dir behind as a side effect.
+        let final_path = self.manifest_path(&manifest.name)?;
         let dir = self.root.join("manifests");
         std::fs::create_dir_all(&dir)?;
-        let final_path = self.manifest_path(&manifest.name);
         let tmp_path = final_path.with_extension("json.tmp");
         {
             let file = File::create(&tmp_path)?;
@@ -343,10 +444,116 @@ mod tests {
     #[test]
     fn manifest_path_uses_name_dot_json() {
         let store = ModelStore::open("/x");
-        let p = store.manifest_path("gemma-4-e4b");
+        let p = store.manifest_path("gemma-4-e4b").unwrap();
         assert!(
             p.ends_with("manifests/gemma-4-e4b.json") || p.ends_with("manifests\\gemma-4-e4b.json")
         );
+    }
+
+    #[test]
+    fn model_name_grammar_accepts_every_shipped_name() {
+        for name in [
+            "gemma-4-e4b",
+            "gemma-4-e4b-mmproj",
+            "embeddinggemma-300m",
+            "Model_1.2",
+            "a",
+        ] {
+            assert!(
+                validate_model_name(name).is_ok(),
+                "{name} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn model_name_grammar_rejects_path_escapes() {
+        // A store may be shared with other tools (ADR 0011), so a name
+        // that escapes `manifests/` clobbers a neighbour's file at best
+        // and writes outside the store root at worst.
+        for name in [
+            "../../../etc/passwd",
+            "..\\..\\evil",
+            "..",
+            "sub/dir",
+            "sub\\dir",
+            ".hidden",
+            "",
+            "with space",
+            "stream:name", // NTFS alternate data stream
+            "semi;colon",
+            "n\0ul",
+        ] {
+            assert!(
+                validate_model_name(name).is_err(),
+                "{name:?} should be rejected"
+            );
+        }
+        assert!(validate_model_name(&"a".repeat(129)).is_err());
+        assert!(validate_model_name(&"a".repeat(128)).is_ok());
+    }
+
+    /// These are pure ASCII alphanumerics, so the character set alone
+    /// does not stop them — `manifests/CON.json` resolves to the console
+    /// device by base name on Windows, before the extension is even
+    /// considered. Rejected on every platform because the store is
+    /// shared and may be written on one OS and read on another.
+    #[test]
+    fn model_name_grammar_rejects_windows_device_names() {
+        for name in [
+            "CON", "con", "NUL", "nul", "PRN", "AUX", "COM1", "com9", "LPT1", "lpt9",
+            // The extension is irrelevant to the Win32 resolution, so a
+            // dotted suffix must not launder the name.
+            "con.gguf", "NUL.json",
+        ] {
+            assert!(
+                validate_model_name(name).is_err(),
+                "{name:?} should be rejected as a reserved device name"
+            );
+        }
+        // Not reserved: only an exact base-name match counts, so names
+        // that merely start with one stay usable.
+        for name in ["console", "context-7b", "nullamodel", "com10", "aux-model"] {
+            assert!(
+                validate_model_name(name).is_ok(),
+                "{name:?} is not a reserved device name and should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn path_builders_reject_traversal_rather_than_returning_a_path() {
+        let store = ModelStore::open("/x");
+        assert!(store.manifest_path("../escape").is_err());
+        assert!(store.lock_path("../escape").is_err());
+    }
+
+    #[test]
+    fn write_manifest_with_bad_name_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let store = ModelStore::open(dir.path());
+        let m = Manifest {
+            schema_version: 1,
+            name: "../escape".into(),
+            format: "gguf".into(),
+            blob: format!("sha256:{}", "aa".repeat(32)),
+            size_bytes: 1,
+            license: None,
+            source: ManifestSource {
+                registry: "local".into(),
+                repo: "local".into(),
+                revision: "local".into(),
+                filename: "x.gguf".into(),
+            },
+            produced_by: "test".into(),
+            produced_at: "2026-08-05T00:00:00Z".into(),
+        };
+        let err = store.write_manifest(&m).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        // Not even the `manifests/` dir should have been created: the
+        // name is validated before any filesystem side effect.
+        assert!(!dir.path().join("manifests").exists());
+        assert!(!dir.path().parent().unwrap().join("escape.json").exists());
     }
 
     #[test]

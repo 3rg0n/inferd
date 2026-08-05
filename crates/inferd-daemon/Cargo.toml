@@ -14,7 +14,16 @@ name = "inferd-daemon"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["model-fetch"]
+# Outbound HTTPS model bootstrap (ADR 0010). Default-ON: every existing
+# build command keeps the behaviour it has today. Building with
+# `--no-default-features` yields the airgapped artifact (ADR 0028) — the
+# ureq/rustls/native-certs tree is not linked at all, so no code path in
+# the binary can open a socket. Cargo features are purely additive, so
+# subtraction is the *only* shape in which that guarantee is real: an
+# additive `airgapped` feature would compile out the call sites while
+# leaving the TLS stack linked.
+model-fetch = ["dep:ureq"]
 # The daemon binary picks its engine adapters at compile time. CI builds
 # the full feature set; minimal builds (e.g. headless servers without GPU)
 # drop the GPU features.
@@ -62,9 +71,10 @@ subtle              = { workspace = true }
 sha2                = { workspace = true }
 # Pure-Rust HTTPS client for first-boot model bootstrap (ADR 0010).
 # Narrow scope: one URL, one SHA, one file. Operators wanting fancier
-# transports (proxies, custom DNS) wget the file themselves and drop
-# it in models_dir.
-ureq                = { version = "2", default-features = false, features = ["tls", "native-certs"] }
+# transports (proxies, custom DNS) `inferdctl import` the file
+# themselves. Optional so `--no-default-features` drops the whole TLS
+# tree from the linked artifact (ADR 0028).
+ureq                = { version = "2", default-features = false, features = ["tls", "native-certs"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["fs", "user", "socket"] }

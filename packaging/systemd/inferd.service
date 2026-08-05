@@ -16,6 +16,12 @@
 # embed llamacpp backends with `auto_pull = true`. Operators who want
 # a different posture (mock for tests, openai-compat, etc.) can either
 # edit the config file or append `--backend <kind>` to ExecStart below.
+#
+# This unit ships in both release archives. In the airgapped one (ADR
+# 0028) the same config is written but `auto_pull` cannot be honoured —
+# no HTTPS client is linked. Load models with `inferdctl import` and
+# clear each `source_url`; see airgapped.md in the archive root.
+# `inferd-daemon --version` reports which build is installed.
 
 [Unit]
 Description=inferd local inference daemon

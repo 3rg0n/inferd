@@ -131,6 +131,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sampleRate, pcmF32LE)` constructor — the Go client had one for images but
   not audio, so callers hand-built the struct and could omit `SampleRate`
   entirely. Found by running the audio path live rather than by review.
+- **An airgapped build, and a second archive per platform to ship it**
+  ([ADR 0028](docs/adr/0028-airgapped-build-profile.md), task #145). Every
+  release now publishes `inferd-airgapped-vX.Y.Z-<target>` alongside
+  `inferd-vX.Y.Z-<target>` — the same commit built
+  `--no-default-features`, in which no HTTPS client is linked at all:
+  `ureq`, `rustls`, `ring`, `webpki-roots` and the native certificate store
+  are absent from the binary rather than present-but-unreachable. Models
+  arrive instead via a new `inferdctl import`. Nothing changes for existing
+  users: the networked archive is the default build, byte-for-byte the same
+  configuration as before, and no wire surface moved.
+  - **The feature had to be `model-fetch`, default-on, rather than an
+    `airgapped` flag.** Cargo features are purely additive, so an additive
+    `airgapped` feature could only `#[cfg]`-out the *call sites* while
+    leaving the entire TLS stack linked into the artifact — the most
+    dangerous kind of wrong, because it would appear to work and pass any
+    functional test. Polarity is inverted so that removing the capability
+    removes the dependency.
+  - **The deliverable is the `cargo tree` assertion, not the `#[cfg]`
+    attributes.** A third party can reproduce the no-egress property
+    against a tag without reading inferd's source; the CI `no-network-deps`
+    job runs exactly that on every PR, over the daemon and `inferdctl`,
+    with a control check asserting the *default* tree still matches so the
+    detector cannot pass vacuously. `hyper` is deliberately not banned by
+    name: it is a protocol library with independently-gated halves, and
+    `inferd-http` (an inbound localhost listener, ADR 0020) links the
+    server half — a separate step asserts the `client` feature is absent
+    instead, which is the property that actually matters.
+  - **`inferdctl import --name <NAME> [--expect-sha256 <HEX>] <PATH>`**
+    hashes while copying into the CAS store through the same
+    partial-then-rename producer flow `pull` uses, re-reads the landed
+    bytes, and writes the manifest last. `--expect-sha256` is compared in
+    constant time before anything is written. It ships in **both**
+    archives — a subcommand shipped only in the hardened build is a
+    subcommand nobody tests, and importing a hand-downloaded GGUF is
+    useful on a networked host too.
+  - **`source_url` may now be empty**, meaning "resolve from the model
+    store only". This was a hard blocker rather than a nicety: config
+    validation required an `https://` prefix, so an airgapped operator
+    could not write a valid `config.json` at all, even though the resolver
+    already handled the manifest-only path. `sha256` stays required and is
+    still constant-time verified on every boot.
+  - **Both binaries report which build they are** — `--version` prints
+    `build profile: networked|airgapped` and the daemon logs `build=…` on
+    its first activity-log line. The string is a `concat!` const selected
+    by the same `cfg` that decides whether the HTTPS stack is linked, so
+    the two cannot disagree. The installer scripts (shared by both
+    archives) ask the binary rather than assuming, so none of them can
+    keep promising a model pull that cannot happen.
+  - Release staging was extracted to `packaging/stage-release.sh` and is
+    now called twice per platform: two archives assembled by two copies of
+    an inline script is how their *contents* start to diverge, and "the
+    two artifacts are one code path" is the premise of the ADR. Asset
+    completeness is counted per variant, not as a bare total.
+  - Not gated, deliberately: the `fetch` module's local half — manifest →
+    CAS resolution, the per-name writer lock, the constant-time re-hash,
+    quarantine on mismatch. An airgapped deployment needs all of it.
+  - New runbook: [`docs/airgapped.md`](docs/airgapped.md) (import →
+    config → run), shipped inside both archives because an operator on a
+    disconnected machine cannot open the repo to read it.
+  - **Model names are now validated where they become paths.** `import`
+    took a name from `--name` and interpolated it into the staging, lock,
+    and manifest paths; the store's name→path builders are the only
+    non-content-addressed part of the ADR 0011 layout, so that is the
+    validation boundary. `store::validate_model_name` enforces a
+    conservative grammar (ASCII alphanumeric plus `.`, `-`, `_`; no
+    leading `.`, no `..`, ≤ 128 bytes — which also excludes path
+    separators and NTFS alternate data streams), plus an explicit reject
+    of Windows reserved device names, which the character set does *not*
+    cover: `CON` is plain ASCII, and Win32 resolves a reserved base name
+    to the device regardless of extension or directory, so
+    `manifests/CON.json` is not dependably a file. Rejected on every
+    platform, because a shared store (ADR 0011) can be written on one OS
+    and read on another. `manifest_path`/`lock_path` became fallible so the
+    compiler enumerates the call sites rather than leaving each one to
+    remember. Two of the three sinks predate `import`; `write_manifest`
+    validates before `create_dir_all`, so a rejected name leaves nothing
+    behind. Any name previously written by `pull` is unaffected.
+  - **Staging writes are handle-bound, not path-bound.** The import
+    staging file is opened `create_new` after a non-following
+    `symlink_metadata` check (THREAT_MODEL F-2, the same answer
+    `endpoint::bind_uds` gives for the socket path), and the post-copy
+    re-hash and size read go through *that descriptor* instead of
+    re-opening the path — a path re-resolves on every call, so the file
+    verified would not necessarily be the file written. The rename onto
+    the CAS blob path now treats "the blob is there now" as success:
+    the writer lock is per-name but the blob path is per-content, so two
+    names importing identical bytes can race, and on Windows renaming
+    onto an existing file fails outright.
 
 ### Fixed
 

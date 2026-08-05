@@ -204,8 +204,37 @@ Write-Host "  Generation pipe: $PipePath"
 Write-Host "  Embed pipe:      $EmbedPipePath"
 Write-Host ""
 Write-Host "On first boot the daemon writes %USERPROFILE%\.inferd\config.json"
-Write-Host "(if absent) and pulls the configured generate + embed models into"
-Write-Host "the CAS store. Watch progress with: inferdctl watch"
+Write-Host "(if absent)."
+
+# One installer ships in both release archives (ADR 0028), and only one of
+# them can fetch models. Ask the binary rather than guessing: it prints its
+# own build profile, so this message cannot drift from what got installed.
+# `--version` just prints and exits — it takes no single-instance lock.
+#
+# Three outcomes, not two: if `--version` can't be read, say so rather
+# than printing the networked message on a guess. Guessing "networked"
+# on an airgapped install tells the operator to wait for a pull that
+# will never start, which is the worst of the three messages to get
+# wrong.
+$profileText = ""
+try { $profileText = (& $BinaryPath --version 2>&1 | Out-String) } catch { }
+if ($profileText -match 'build profile: airgapped') {
+    Write-Host "This is an AIRGAPPED build: no HTTPS client is linked, so it will"
+    Write-Host "not fetch models. Import them from local files, then clear each"
+    Write-Host "source_url in config.json:"
+    Write-Host "  inferdctl import --name gemma-4-e4b <path.gguf>"
+    Write-Host "See airgapped.md in the archive root for the full runbook."
+} elseif ($profileText -match 'build profile: networked') {
+    Write-Host "It then pulls the configured generate + embed models into the CAS"
+    Write-Host "store. Watch progress with: inferdctl watch"
+} else {
+    Write-Host "Could not read the build profile from '$BinaryPath --version', so"
+    Write-Host "this script can't tell whether it fetches models. Run:"
+    Write-Host "  inferd-daemon --version"
+    Write-Host "A 'networked' build pulls models on first boot (inferdctl watch);"
+    Write-Host "an 'airgapped' build needs inferdctl import (see airgapped.md in"
+    Write-Host "the archive root)."
+}
 Write-Host ""
 Write-Host "Verify status:    inferdctl status"
 Write-Host "Uninstall:        .\uninstall.ps1"

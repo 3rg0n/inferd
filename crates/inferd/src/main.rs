@@ -16,6 +16,11 @@
 //!   (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-
 //!   256 with constant-time compare, write the manifest. Bypasses
 //!   the daemon — operates directly on the store.
+//! - `inferdctl import` — import a GGUF already on disk into the CAS
+//!   store under a name, optionally checking it against an
+//!   out-of-band `--expect-sha256`. The counterpart to `pull` for
+//!   machines with no route to the internet (ADR 0028), and the only
+//!   way bytes get in on the airgapped artifact.
 //! - `inferdctl doctor`  — diagnose connectivity. Prints a punch
 //!   list of "what's there / what's missing" so consumers can
 //!   debug install issues.
@@ -28,7 +33,7 @@ use clap::{Parser, Subcommand};
 use inferd_client::AdminClient;
 use inferd_daemon::admin::StatusBroadcaster;
 use inferd_daemon::config_file::{BackendEntry, ConfigFile, LlamacppEntry};
-use inferd_daemon::fetch::{ModelSpec, fetch_model};
+use inferd_daemon::fetch::{ModelSpec, fetch_model, import_model};
 use inferd_daemon::status::StatusEvent;
 use inferd_daemon::store::ModelStore;
 use std::path::PathBuf;
@@ -36,10 +41,17 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 #[derive(Debug, Parser)]
+// `long_version` carries the ADR 0028 build profile. `inferdctl` and the
+// daemon ship in the same archive and are built with the same feature
+// flags, so reusing the daemon's const means `inferdctl --version` is a
+// truthful answer about the whole tarball — and it cannot drift, since
+// the value is fixed by the same `cfg` that decides whether `ureq` is
+// linked at all.
 #[command(
     name = "inferdctl",
-    about = "Single CLI binary for inferd. Subcommands: status, watch, pull, doctor.",
+    about = "Single CLI binary for inferd. Subcommands: status, watch, pull, import, doctor.",
     version,
+    long_version = inferd_daemon::LONG_VERSION,
     arg_required_else_help = true
 )]
 struct Cli {
@@ -73,6 +85,33 @@ enum Command {
     /// the manifest + blob already match.
     Pull,
 
+    /// Import a GGUF that is already on disk into the shared CAS
+    /// store, then write a manifest so the daemon can resolve it by
+    /// name. The offline counterpart to `pull` (ADR 0028) — on an
+    /// airgapped build this is the only way bytes get in.
+    ///
+    /// The file is hashed as it is copied and left untouched; the
+    /// store path is derived from the digest.
+    Import {
+        /// Model name to register, e.g. `gemma-4-e4b`. This is what
+        /// `~/.inferd/config.json` refers to, and it becomes
+        /// `manifests/<name>.json`.
+        #[arg(long)]
+        name: String,
+
+        /// Expected SHA-256 as 64 lowercase hex characters. When
+        /// given, the import is aborted (writing nothing) unless the
+        /// file matches, using a constant-time compare. Supply the
+        /// digest the model vendor published — without it the import
+        /// still succeeds, it just has nothing to check against.
+        #[arg(long, value_name = "HEX")]
+        expect_sha256: Option<String>,
+
+        /// Path to the GGUF file to import.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
+
     /// Diagnose connectivity. Prints a punch list of what's
     /// present and what's missing so consumers can debug install
     /// issues without grep'ing logs.
@@ -94,6 +133,11 @@ async fn main() -> ExitCode {
         Command::Status => cmd_status(&admin_addr).await,
         Command::Watch => cmd_watch(&admin_addr).await,
         Command::Pull => cmd_pull(&config_path).await,
+        Command::Import {
+            ref name,
+            ref expect_sha256,
+            ref path,
+        } => cmd_import(&config_path, name, expect_sha256.as_deref(), path).await,
         Command::Doctor => cmd_doctor(&admin_addr, &config_path).await,
     };
 
@@ -235,6 +279,61 @@ async fn cmd_pull(config_path: &std::path::Path) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+// --- import -----------------------------------------------------------
+
+/// `inferdctl import --name <n> [--expect-sha256 <hex>] <path.gguf>`.
+///
+/// Deliberately tolerant of a missing config file: on a fresh airgapped
+/// machine the natural order is import-then-configure, and requiring a
+/// config that names a model you have not imported yet would be a
+/// chicken-and-egg. A config that *is* present is still honoured for
+/// `models_home`, so the import lands in the store the daemon will read.
+async fn cmd_import(
+    config_path: &std::path::Path,
+    name: &str,
+    expect_sha256: Option<&str>,
+    path: &std::path::Path,
+) -> anyhow::Result<ExitCode> {
+    use anyhow::Context;
+
+    let store = match ConfigFile::load(config_path) {
+        Ok(cfg) => match cfg.models_home.as_ref() {
+            Some(p) => ModelStore::open(p),
+            None => ModelStore::open(inferd_daemon::store::default_models_home()),
+        },
+        Err(_) => {
+            // No usable config yet. MODELS_HOME / platform default is
+            // exactly what the daemon falls back to as well.
+            ModelStore::open(inferd_daemon::store::default_models_home())
+        }
+    };
+
+    eprintln!(
+        "inferdctl: importing {} as {:?} -> {}",
+        path.display(),
+        name,
+        store.root().display()
+    );
+
+    let src = path.to_path_buf();
+    let name_owned = name.to_string();
+    let expect_owned = expect_sha256.map(str::to_string);
+    let store_clone = store.clone();
+    let blob_path = tokio::task::spawn_blocking(move || {
+        import_model(&src, &name_owned, expect_owned.as_deref(), &store_clone)
+    })
+    .await
+    .context("import task join")?
+    .context("import failed")?;
+
+    println!("{}", blob_path.display());
+    eprintln!(
+        "inferdctl: imported; set \"model\": {{ \"name\": {name:?} }} in {} to use it",
+        config_path.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 // --- doctor -----------------------------------------------------------
 
 async fn cmd_doctor(
@@ -311,23 +410,29 @@ async fn cmd_doctor(
                 }
 
                 let manifest_label = format!("manifest[{}]", entry.name);
+                // `manifest_path` rejects names that can't become a path
+                // (ADR 0011 store layout). `read_manifest` would have
+                // surfaced that as the `Err` arm below, so this is only
+                // reached with a valid name — but doctor's job is to
+                // report, never to panic on a bad config file.
+                let manifest_where = store
+                    .manifest_path(&entry.model.name)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|e| e.to_string());
                 match store.read_manifest(&entry.model.name) {
                     Ok(Some(_)) => {
                         report_problem(
                             &manifest_label,
                             true,
-                            &format!(
-                                "present at {}",
-                                store.manifest_path(&entry.model.name).display()
-                            ),
+                            &format!("present at {manifest_where}"),
                         );
                     }
                     Ok(None) => report_problem(
                         &manifest_label,
                         false,
                         &format!(
-                            "missing at {}; daemon hasn't fetched yet, or operator skipped pull",
-                            store.manifest_path(&entry.model.name).display()
+                            "missing at {manifest_where}; daemon hasn't fetched yet, \
+                             or operator skipped pull"
                         ),
                     ),
                     Err(e) => report_problem(&manifest_label, false, &format!("read error: {e}")),

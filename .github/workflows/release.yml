@@ -5,6 +5,14 @@ name: Release
 # with cosign (keyless OIDC), generates a CycloneDX SBOM, and attaches
 # everything to a GitHub Release.
 #
+# Two archives per platform (ADR 0028):
+#   inferd-<ver>-<target>            default build, HTTPS model bootstrap
+#   inferd-airgapped-<ver>-<target>  --no-default-features, no TLS linked
+# Same crates, same tag, same `backends/` — only `inferd-daemon`'s and
+# `inferdctl`'s features differ. ci.yml's `no-network-deps` job asserts
+# the airgapped dependency tree contains no HTTPS client, which is the
+# actual deliverable; this workflow just ships what that job vouches for.
+#
 # This workflow does NOT publish to crates.io. `inferd-proto` and
 # `inferd-client` are published by hand per docs/RELEASING.md §5 — a
 # registry version is permanent, so it stays a human decision and the
@@ -720,60 +728,21 @@ jobs:
           }
           Get-ChildItem $backendsDir | Select-Object Name, Length | Format-Table -AutoSize
 
-      - name: Stage release contents
+      # Both build passes stage through `packaging/stage-release.sh`
+      # rather than an inline copy each. Two archives assembled by two
+      # copies of the same 50 lines is how their *contents* drift, and
+      # "the two artifacts are one code path" is the premise of ADR 0028
+      # — only the binaries differ.
+      - name: Stage release contents (networked)
         shell: bash
         run: |
           set -euo pipefail
-          stage="staging/inferd-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir -p "$stage"
-          cp README.md LICENSE CHANGELOG.md "$stage/"
-          # ADR 0019: bundle the dl-backends staging dir produced by
-          # build.rs (`stage_backends_dir`). The whole `backends/`
-          # subtree must ship next to the daemon binary — libllama
-          # has RPATH `$ORIGIN` / `@loader_path` baked in, so it
-          # loads MODULE libs from `<bin dir>/` and friends. Fail
-          # loudly if the dir is missing: a release tarball without
-          # backends would silently fall back to "no backend
-          # registered" at runtime.
-          backends_src="target/${{ matrix.target }}/release/backends"
-          if [ ! -d "$backends_src" ] || [ -z "$(ls -A "$backends_src" 2>/dev/null)" ]; then
-            echo "FAIL: $backends_src missing or empty — dl-backends staging didn't run" >&2
-            exit 1
-          fi
-          cp -r "$backends_src" "$stage/"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/inferd-daemon.exe" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferdctl.exe" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferd-http.exe" "$stage/"
-            mkdir -p "$stage/packaging"
-            cp packaging/windows/install.ps1 "$stage/packaging/"
-            cp packaging/windows/uninstall.ps1 "$stage/packaging/"
-            cp packaging/windows/cleanup-legacy-service.ps1 "$stage/packaging/"
-            cp packaging/README.md "$stage/packaging/"
-          else
-            cp "target/${{ matrix.target }}/release/inferd-daemon" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferdctl" "$stage/"
-            cp "target/${{ matrix.target }}/release/inferd-http" "$stage/"
-            mkdir -p "$stage/packaging"
-            cp packaging/README.md "$stage/packaging/"
-            case "${{ runner.os }}" in
-              Linux)
-                cp packaging/systemd/inferd.service "$stage/packaging/"
-                ;;
-              macOS)
-                cp packaging/launchd/io.inferd.daemon.plist "$stage/packaging/"
-                cp packaging/launchd/install-launchagent.sh "$stage/packaging/"
-                cp packaging/launchd/uninstall-launchagent.sh "$stage/packaging/"
-                chmod +x "$stage/packaging/install-launchagent.sh" "$stage/packaging/uninstall-launchagent.sh"
-                ;;
-            esac
-          fi
-          echo "--- stage root ---"
-          ls -la "$stage"
-          echo "--- backends/ ---"
-          ls -la "$stage/backends"
+          bash packaging/stage-release.sh \
+            "staging/inferd-${GITHUB_REF_NAME}-${{ matrix.target }}" \
+            "${{ matrix.target }}" \
+            "${{ runner.os }}"
 
-      - name: Pack tar.gz
+      - name: Pack tar.gz (networked)
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
@@ -782,7 +751,7 @@ jobs:
           tar czf "../inferd-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" \
             "inferd-${GITHUB_REF_NAME}-${{ matrix.target }}"
 
-      - name: Pack zip
+      - name: Pack zip (networked)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
@@ -790,21 +759,121 @@ jobs:
           $stage = "staging/inferd-$env:GITHUB_REF_NAME-${{ matrix.target }}"
           Compress-Archive -Path $stage -DestinationPath $archive
 
-      # Belt-and-braces verification: anyone who downloads a tarball can
-      # compute `shasum -a 256 -c <archive>.sha256` without any tooling
-      # beyond coreutils. Cosign bundles cover provenance; SHA256
-      # sidecars cover transit/storage corruption.
-      - name: Generate SHA256 sidecar
+      # ---------------------------------------------------------------
+      # Second pass: the airgapped artifact (ADR 0028).
+      #
+      # Same crates, same tag, same `backends/` — the ONLY difference is
+      # `--no-default-features`, which drops the default-on `model-fetch`
+      # feature and with it the entire ureq/rustls/native-certs tree.
+      # Cargo features are purely additive, so subtraction is the only
+      # shape in which "the binary cannot open a socket" is a claim about
+      # the linked artifact rather than about which code paths run.
+      #
+      # It MUST come after the networked archive is packed: both passes
+      # write `target/<target>/release/inferd-daemon`, so the second
+      # overwrites the first. `inferd-engine` is not rebuilt (its feature
+      # set is unchanged), so `backends/` and any bundled CUDA redist
+      # libs survive and both archives ship byte-identical accelerators.
+      #
+      # `inferd-http` is not rebuilt at all: it links no HTTPS client in
+      # either configuration (it is an inbound localhost listener, ADR
+      # 0020), and ci.yml's `no-network-deps` job asserts that rather
+      # than assuming it.
+      # ---------------------------------------------------------------
+      - name: Build daemon + CLI (airgapped)
+        run: |
+          cargo build --release --no-default-features \
+            --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}
+          cargo build --release --no-default-features \
+            --bin inferdctl --target ${{ matrix.target }}
+
+      # The airgapped leg passes a different feature string, so it gets
+      # the same CLI-surface gate the networked leg does — a build that
+      # compiled out `BackendKind::Llamacpp` would produce a daemon that
+      # rejects `--backend llamacpp` at runtime (the v0.1.1/0.1.3 bug).
+      # Also asserts the binary self-reports the profile, which is what
+      # an operator uses to tell the two archives apart post-install.
+      - name: Verify airgapped binary (llamacpp + profile + no import stub)
         shell: bash
         run: |
           set -euo pipefail
-          archive="inferd-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$archive" > "$archive.sha256"
+          rel="target/${{ matrix.target }}/release"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin="$rel/inferd-daemon.exe"; ctl="$rel/inferdctl.exe"
+            cp -v "$rel"/backends/*.dll "$rel/" 2>/dev/null || true
           else
-            shasum -a 256 "$archive" > "$archive.sha256"
+            bin="$rel/inferd-daemon"; ctl="$rel/inferdctl"
           fi
-          cat "$archive.sha256"
+          if ! "$bin" --help 2>&1 | grep -qE 'llamacpp'; then
+            echo "FAIL: airgapped daemon does NOT advertise --backend llamacpp" >&2
+            "$bin" --help >&2 || true
+            exit 1
+          fi
+          for b in "$bin" "$ctl"; do
+            if ! "$b" --version 2>&1 | grep -q 'build profile: airgapped'; then
+              echo "FAIL: $b does not self-report the airgapped profile" >&2
+              "$b" --version >&2 || true
+              exit 1
+            fi
+          done
+          # `import` is the only way bytes reach the CAS store without
+          # fetch, so its absence would make this archive unusable.
+          if ! "$ctl" --help 2>&1 | grep -q 'import'; then
+            echo "FAIL: inferdctl has no import subcommand — airgapped archive cannot load a model" >&2
+            "$ctl" --help >&2 || true
+            exit 1
+          fi
+          echo "OK: airgapped binaries advertise llamacpp, report their profile, and ship import"
+
+      - name: Stage release contents (airgapped)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/stage-release.sh \
+            "staging/inferd-airgapped-${GITHUB_REF_NAME}-${{ matrix.target }}" \
+            "${{ matrix.target }}" \
+            "${{ runner.os }}"
+
+      - name: Pack tar.gz (airgapped)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd staging
+          tar czf "../inferd-airgapped-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" \
+            "inferd-airgapped-${GITHUB_REF_NAME}-${{ matrix.target }}"
+
+      - name: Pack zip (airgapped)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $archive = "inferd-airgapped-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+          $stage = "staging/inferd-airgapped-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          Compress-Archive -Path $stage -DestinationPath $archive
+
+      # Belt-and-braces verification: anyone who downloads an archive can
+      # compute `shasum -a 256 -c <archive>.sha256` without any tooling
+      # beyond coreutils. Cosign bundles cover provenance; SHA256
+      # sidecars cover transit/storage corruption. One per archive, so
+      # this loops over both passes' output.
+      - name: Generate SHA256 sidecars
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in \
+            "inferd-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}" \
+            "inferd-airgapped-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.archive }}"; do
+            if [ ! -f "$archive" ]; then
+              echo "FAIL: $archive missing — a pack step did not run" >&2
+              exit 1
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$archive" > "$archive.sha256"
+            else
+              shasum -a 256 "$archive" > "$archive.sha256"
+            fi
+            cat "$archive.sha256"
+          done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
@@ -812,6 +881,8 @@ jobs:
           path: |
             inferd-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
             inferd-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
+            inferd-airgapped-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+            inferd-airgapped-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -853,8 +924,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Each `dist/inferd-...-<target>/` dir holds one archive +
-          # one .sha256 sidecar; SBOMs live under `dist/sbom/`.
+          # Each `dist/inferd-...-<target>/` dir holds TWO archives (the
+          # networked and the airgapped build of the same tag, ADR 0028)
+          # plus a .sha256 sidecar each; SBOMs live under `dist/sbom/`.
           find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \
                               -o -name '*.sha256' -o -name '*.cdx.json' \) \
             -exec mv {} release-assets/ \;
@@ -876,28 +948,37 @@ jobs:
           ls -la
 
       # Asset-completeness sanity check. The matrix builds 5 platforms
-      # (linux x86_64 + arm64, macOS arm64, windows x86_64 + arm64), each
-      # producing 1 archive + 1 SHA256 sidecar + (after signing) 1 cosign
-      # bundle. (windows arm64 rejoined the matrix once task #185 was fixed
-      # — GGML_OPENMP=OFF — so the count is back to 5.) SBOMs are .cdx.json
-      # files (one per workspace crate). If any are missing the workflow
-      # fails LOUDLY before publishing rather than shipping a
-      # half-populated release page.
+      # (linux x86_64 + arm64, macOS arm64, windows x86_64 + arm64) × 2
+      # build profiles (networked + airgapped, ADR 0028) = 10 archives,
+      # each with 1 SHA256 sidecar + (after signing) 1 cosign bundle.
+      # (windows arm64 rejoined the matrix once task #185 was fixed —
+      # GGML_OPENMP=OFF.) SBOMs are .cdx.json files (one per workspace
+      # crate). If any are missing the workflow fails LOUDLY before
+      # publishing rather than shipping a half-populated release page.
+      #
+      # The per-profile counts are checked separately rather than only in
+      # aggregate: 10 archives that happened to be 10 networked ones
+      # would satisfy a bare total, and a release page missing every
+      # airgapped asset is exactly the failure this gate exists to catch.
       - name: Verify asset completeness
         shell: bash
         run: |
           set -euo pipefail
           cd release-assets
           archives=$(ls -1 *.tar.gz *.zip 2>/dev/null | wc -l)
+          airgapped=$(ls -1 inferd-airgapped-*.tar.gz inferd-airgapped-*.zip 2>/dev/null | wc -l)
+          networked=$((archives - airgapped))
           shas=$(ls -1 *.sha256 2>/dev/null | wc -l)
           bundles=$(ls -1 *.cosign.bundle 2>/dev/null | wc -l)
           sboms=$(ls -1 *.cdx.json 2>/dev/null | wc -l)
-          echo "archives=$archives shas=$shas bundles=$bundles sboms=$sboms"
+          echo "archives=$archives (networked=$networked airgapped=$airgapped) shas=$shas bundles=$bundles sboms=$sboms"
           fail=0
-          if [ "$archives" -lt 5 ]; then echo "FAIL: expected 5 archives, got $archives" >&2; fail=1; fi
-          if [ "$shas"     -lt 5 ]; then echo "FAIL: expected 5 sha256 sidecars, got $shas" >&2; fail=1; fi
-          if [ "$bundles"  -lt 5 ]; then echo "FAIL: expected 5 cosign bundles, got $bundles" >&2; fail=1; fi
-          if [ "$sboms"    -lt 1 ]; then echo "FAIL: expected at least one SBOM, got $sboms" >&2; fail=1; fi
+          if [ "$archives"  -lt 10 ]; then echo "FAIL: expected 10 archives (5 platforms x 2 profiles), got $archives" >&2; fail=1; fi
+          if [ "$networked" -lt 5 ]; then echo "FAIL: expected 5 networked archives, got $networked" >&2; fail=1; fi
+          if [ "$airgapped" -lt 5 ]; then echo "FAIL: expected 5 airgapped archives, got $airgapped" >&2; fail=1; fi
+          if [ "$shas"      -lt 10 ]; then echo "FAIL: expected 10 sha256 sidecars, got $shas" >&2; fail=1; fi
+          if [ "$bundles"   -lt 10 ]; then echo "FAIL: expected 10 cosign bundles, got $bundles" >&2; fail=1; fi
+          if [ "$sboms"     -lt 1 ]; then echo "FAIL: expected at least one SBOM, got $sboms" >&2; fail=1; fi
           if [ "$archives" -ne "$shas" ] || [ "$archives" -ne "$bundles" ]; then
             echo "FAIL: archive/sha/bundle counts do not match" >&2
             fail=1

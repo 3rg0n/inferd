@@ -13,6 +13,10 @@
 # generate + embed, both with auto_pull = true) — no `inferd pull`
 # precondition, no `--backend` / `--model-path` argument substitution
 # required from this script.
+#
+# In the airgapped archive (ADR 0028) that config is written the same way
+# but cannot be satisfied by fetching; the closing message detects that
+# from the binary itself and points at `inferdctl import` instead.
 
 set -euo pipefail
 
@@ -115,9 +119,38 @@ echo
 echo "Sockets and lock live under: ${TMPDIR_REAL}inferd/"
 echo "Logs: $LOG_DIR/"
 echo
-echo "On first boot the daemon will write ~/.inferd/config.json (if absent)"
-echo "and pull the configured generate + embed models into the CAS store."
-echo "Watch progress with:  inferdctl watch"
+echo "On first boot the daemon will write ~/.inferd/config.json (if absent)."
+# One installer ships in both release archives (ADR 0028), and only one of
+# them can fetch models. Ask the binary rather than guessing: it prints its
+# own build profile, so this message cannot drift from what got installed.
+# `--version` just prints and exits — it takes no single-instance lock.
+#
+# Three outcomes, not two: if `--version` can't be read, say so rather
+# than printing the networked message on a guess. Guessing "networked"
+# on an airgapped install tells the operator to wait for a pull that
+# will never start, which is the worst of the three to get wrong.
+PROFILE_TEXT="$("$BIN" --version 2>&1 || true)"
+case "$PROFILE_TEXT" in
+    *"build profile: airgapped"*)
+        echo "This is an AIRGAPPED build: no HTTPS client is linked, so it will not"
+        echo "fetch models. Import them from local files, then clear each source_url"
+        echo "in config.json:"
+        echo "  inferdctl import --name gemma-4-e4b <path.gguf>"
+        echo "See airgapped.md in the archive root for the full runbook."
+        ;;
+    *"build profile: networked"*)
+        echo "It then pulls the configured generate + embed models into the CAS"
+        echo "store. Watch progress with:  inferdctl watch"
+        ;;
+    *)
+        echo "Could not read the build profile from '$BIN --version', so this"
+        echo "script can't tell whether it fetches models. Run:"
+        echo "  inferd-daemon --version"
+        echo "A 'networked' build pulls models on first boot (inferdctl watch); an"
+        echo "'airgapped' build needs inferdctl import (see airgapped.md in the"
+        echo "archive root)."
+        ;;
+esac
 echo
 echo "Status:"
 launchctl list "$LABEL" 2>/dev/null || echo "(list not available)"

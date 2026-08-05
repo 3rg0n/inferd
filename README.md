@@ -170,6 +170,21 @@ and auto-pulls the reference model + embedding model + multimodal
 projector (vision **and** audio) into the shared model store; watch with
 `inferdctl watch`.
 
+Each platform ships **two** archives, the same crates at the same tag
+with different build flags:
+
+| Archive | HTTPS client | Models |
+|---|---|---|
+| `inferd-<ver>-<target>` | linked ([ADR 0010](docs/adr/0010-narrow-https-exception-for-model-bootstrap.md)) | auto-pulled on first boot |
+| `inferd-airgapped-<ver>-<target>` | **not linked** | `inferdctl import` only |
+
+The commands below are the same for either one — the airgapped build
+just can't fetch, so you import the GGUFs instead of pulling them. See
+[docs/airgapped.md](docs/airgapped.md) for that runbook and for the
+`cargo tree` assertion that proves the TLS stack is absent rather than
+merely unused. `inferd-daemon --version` reports which build is
+installed.
+
 ### Linux
 
 ```sh

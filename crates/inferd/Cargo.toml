@@ -14,13 +14,27 @@ authors.workspace      = true
 name = "inferdctl"
 path = "src/main.rs"
 
+[features]
+default = ["model-fetch"]
+# Forwards the daemon's default-on `model-fetch` (ADR 0028). This must
+# be a forwarding feature rather than a plain dependency: `inferdctl`
+# links `inferd-daemon`, so if it enabled the daemon's defaults
+# unconditionally, building the CLI with `--no-default-features` would
+# still pull `ureq`/`rustls` into the airgapped tarball — the artifact
+# would carry a TLS stack while claiming not to. `ci.yml`'s
+# `no-network-deps` job asserts this for both binaries.
+#
+# Without it, `inferdctl pull` reports `fetch_disabled` and `inferdctl
+# import` is the way models get in.
+model-fetch = ["inferd-daemon/model-fetch"]
+
 [dependencies]
 # Reuses the daemon's internals on purpose: `inferdctl pull` writes
 # into the same CAS store the daemon reads from, and `inferdctl
 # status` consumes the admin protocol the daemon publishes.
 # Sharing the type definitions avoids drift.
 inferd-client = { path = "../inferd-client", version = "=0.6.1" }
-inferd-daemon = { path = "../inferd-daemon", version = "=0.6.1" }
+inferd-daemon = { path = "../inferd-daemon", version = "=0.6.1", default-features = false }
 tokio              = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
