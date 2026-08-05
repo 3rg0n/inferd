@@ -136,7 +136,7 @@
                     │  cli · ide plugin · agent · web app  │
                     └──────────────────────────────────────┘
                          │       │       │       │
-                         │ length-prefixed frames over uds / pipe
+                         │ generate · embed · rerank · admin
                          │ frame cap 64 MiB · wire frozen (v2)
                          ▼       ▼       ▼       ▼
                     ┌──────────────────────────────────────┐
@@ -166,7 +166,7 @@
                     │  $MODELS_HOME/blobs/sha256/aa/...    │
                     └──────────────────────────────────────┘</pre>
 
-    <div class="grid-three">
+    <div class="grid-surfaces">
       <article class="card">
         <h3>Generate</h3>
         <p>Send a <code>messages</code> array, get tokens back as they're produced, terminated by one <code>done</code> frame. No retry, no fallback, no rewriting prompts — the daemon stays out of your way.</p>
@@ -174,6 +174,10 @@
       <article class="card">
         <h3>Embed</h3>
         <p>Send text, get a 768-dim vector — or 256-dim via Matryoshka truncation. Bounded inputs return structured errors instead of crashing the daemon (issue #20, fixed in v0.3.0).</p>
+      </article>
+      <article class="card">
+        <h3>Rerank</h3>
+        <p>Send a query plus candidate documents, get back <code>{index, score}</code> pairs already sorted and truncated. A cross-encoder pass per document — expensive, and far more precise than vector similarity, which is why it goes <em>after</em> retrieval, not instead of it.</p>
       </article>
       <article class="card">
         <h3>Admin</h3>

@@ -13,8 +13,11 @@ arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms, and
 since v0.7.0 **two archives each**: the normal one, and an *airgapped*
 build with no HTTPS client linked at all (ADR 0028). install=work is
 validated on Windows x86_64 CUDA, Linux x86_64 CUDA, and macOS arm64
-Metal (see `docs/v0.6-validation.md`). See `context.md` for the hand-off
-brief to first-time contributors and `docs/adr/` for the design decisions.
+Metal — as of the v0.6.1 tarballs; the v0.7.0 pass, including the new
+airgapped archive, is tracked in
+[issue #56](https://github.com/3rg0n/inferd/issues/56) (see
+`docs/v0.6-validation.md`). See `context.md` for the hand-off brief to
+first-time contributors and `docs/adr/` for the design decisions.
 
 inferd is a single host-wide Rust service that owns the hard parts of
 running a local LLM — loading the model, holding it warm, multiplexing

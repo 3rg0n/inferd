@@ -781,6 +781,14 @@ jobs:
       # than assuming it.
       # ---------------------------------------------------------------
       - name: Build daemon + CLI (airgapped)
+        # `shell: bash` is load-bearing, not stylistic: this is the only
+        # `cargo build` step in the job that spans lines, and on the
+        # Windows runners the default shell is PowerShell, where `\` is
+        # not a line continuation — it parsed `--bin` as a unary minus and
+        # failed both Windows legs at v0.7.0 while Linux/macOS (bash by
+        # default) passed. Every other build step here is a single line,
+        # which is why the omission went unnoticed until an arm64 leg ran.
+        shell: bash
         run: |
           cargo build --release --no-default-features \
             --bin inferd-daemon --features ${{ matrix.features }} --target ${{ matrix.target }}

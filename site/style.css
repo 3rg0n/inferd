@@ -444,9 +444,11 @@ h1.display em {
   white-space: pre;
 }
 
-.grid-three {
+/* Was grid-three until v0.7 added the rerank surface — auto-fit so the
+   card count can change with the wire surfaces without a CSS edit. */
+.grid-surfaces {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 28px;
   margin-bottom: 50px;
 }
@@ -660,7 +662,7 @@ h1.display em {
 
   .two-col { grid-template-columns: 1fr; gap: 36px; }
   .numbered { grid-template-columns: 1fr; gap: 36px; }
-  .grid-three, .install-grid { grid-template-columns: 1fr; gap: 18px; }
+  .grid-surfaces, .install-grid { grid-template-columns: 1fr; gap: 18px; }
 
   .invariants .never { grid-template-columns: 1fr; gap: 0; }
 
