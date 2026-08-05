@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — airgapped build profile (ADR 0028), all 7 steps
+  green, no macOS-specific defects (2026-08-05):** completes issue #55's
+  cross-platform matrix (Windows CUDA + Linux/WSL CPU already green).
+  Built from `main` (`cargo build --release --no-default-features
+  --features inferd-daemon/dl-backends`, no airgapped tarball exists
+  yet). Step 1: all 14 `no-network-deps` assertions clean +
+  anti-vacuity control confirms the check is meaningful. Step 2: both
+  binaries self-report `build profile: airgapped`. Step 3: a
+  `source_url`-bearing config fails loudly (`fetch failed …
+  airgapped build (no model-fetch feature); import it with
+  'inferdctl import'`), Metal accelerator probe unaffected. Step 4:
+  `inferdctl import` lands both `gemma-4-e4b` and `embeddinggemma-300m`
+  into a fresh store with correct CAS layout/manifest, SHA verified,
+  idempotent re-import, deliberate mismatch rejected (exit 2, no
+  manifest written). Steps 5/6: real generate (`"AIRGAPPED"`,
+  `backend=llamacpp`) and real embed (256-dim, L2=1.0) from a store
+  only `import` filled; socket modes match invariant #6. Step 7: the
+  real `install-launchagent.sh` correctly detected the airgapped
+  profile and pointed at `import`, not `watch`. See
+  `docs/v0.6-validation.md`, issue #55.
+
 ### Added
 
 - **Cross-encoder rerank on a fourth socket** ([ADR 0027](docs/adr/0027-reranking-on-a-fourth-socket.md),
