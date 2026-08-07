@@ -1,0 +1,26 @@
+packaging/systemd/inferd.service
+  s_126aec4081f728::t_631964ad896921 53-69
+CHANGELOG.md
+  s_126aec4081f728::t_d30e91bdc46ac0 10-56
+docs/v0.6-validation.md
+  s_126aec4081f728::t_4c6fe6e5bd0d1b 1018-1042
+.github/workflows/ci.yml
+  s_126aec4081f728::t_564c611faa8c29 450-469
+  s_126aec4081f728::t_41fbcda8c5a156 589-606
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e3ef247618e61fd101cc4122d7a9d62a17b6558e",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
