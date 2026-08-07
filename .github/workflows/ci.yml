@@ -447,6 +447,26 @@ jobs:
           sed -i 's|\(ExecStart=%h/.local/bin/inferd-daemon\)|\1 --backend mock|' \
             ~/.config/systemd/user/inferd.service
 
+      - name: Assert a genuinely fresh install (issue #59)
+        # This job used to start the unit against whatever state the
+        # runner happened to be in, and never asserted that %h/.inferd
+        # and %h/.local/share/models were absent — so it could not cover
+        # the fresh-install path at all, and stayed green while the
+        # documented Linux install aborted 226/NAMESPACE on a clean box.
+        #
+        # ReadWritePaths= names both paths, and systemd resolves them
+        # during mount-namespace setup, which runs ahead of every Exec*
+        # line. Absent path => 226/NAMESPACE before anything executes.
+        # The unit's `ExecStartPre=+` creates them outside the sandbox;
+        # without the `+` the mkdir is itself sandboxed and dies first.
+        # Removing them here is what makes the next step a real test.
+        run: |
+          rm -rf ~/.inferd ~/.local/share/models
+          for p in ~/.inferd ~/.local/share/models; do
+            if [ -e "$p" ]; then echo "FAIL: $p should be absent"; exit 1; fi
+          done
+          echo "fresh: neither ReadWritePaths= target exists"
+
       - name: Start inferd via systemctl --user
         run: |
           systemctl --user daemon-reload
@@ -566,6 +586,24 @@ jobs:
             echo "FAIL: unit reported failure"
             exit 1
           fi
+          # Issue #59 specifically: namespace setup must not abort. Named
+          # separately from the generic check above because 226/NAMESPACE
+          # is a packaging bug in the unit, not a daemon crash, and the
+          # two want different fixes.
+          if grep -q "226/NAMESPACE" /tmp/inferd-journal.log; then
+            echo "FAIL: mount-namespace setup aborted (issue #59)"
+            exit 1
+          fi
+
+      - name: Verify ExecStartPre created the ReadWritePaths= targets
+        run: |
+          for p in ~/.inferd ~/.local/share/models; do
+            test -d "$p" || { echo "FAIL: $p not created"; exit 1; }
+          done
+          # And the carve-out is live, i.e. ProtectHome=read-only did not
+          # leave the daemon with a read-only config dir.
+          test -f ~/.inferd/config.json
+          echo "both ReadWritePaths= targets exist; first-boot config written"
 
       - name: Collect journal on failure
         if: failure()

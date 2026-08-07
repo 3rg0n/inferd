@@ -50,12 +50,23 @@ Type=simple
 # shares the daemon) `groupadd inferd-users` first and append
 # `--group inferd-users` to the ExecStart line below.
 # ReadWritePaths= below carves %h/.inferd and %h/.local/share/models out
-# of ProtectHome=read-only. systemd resolves those paths during namespace
-# setup *before* ExecStart runs and aborts with status=226/NAMESPACE if
-# either is missing. On a fresh install they don't exist yet (the daemon
-# normally creates them on first boot), so create them up front. mkdir -p
-# is idempotent and runs unprivileged under the user instance.
-ExecStartPre=/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
+# of ProtectHome=read-only. systemd resolves those paths during mount-
+# namespace setup and aborts with status=226/NAMESPACE if either is
+# missing. On a fresh install they don't exist yet (the daemon creates
+# them on first boot), so create them up front.
+#
+# The `+` prefix is load-bearing, not decoration. Namespace setup runs
+# per *command*, ahead of every Exec* line — including ExecStartPre — so
+# an unprefixed mkdir here is sandboxed by the very ReadWritePaths= it
+# exists to satisfy, and dies before it can create anything (the journal
+# names `(mkdir)` as the failing process, which reads like a missing
+# binary). `+` runs the command outside the sandbox, where $HOME is
+# writable. It grants no privilege: this is a `systemctl --user` unit, so
+# the command runs as the same unprivileged user either way — `+` only
+# opts out of the namespace/filesystem restrictions for this one mkdir.
+# mkdir -p is idempotent, so this is a no-op on every boot after the
+# first. See issue #59.
+ExecStartPre=+/usr/bin/mkdir -p %h/.inferd %h/.local/share/models
 # v0.4 (ADR 0021): one generation socket on the neutral path
 # (`inferd.sock`). The old `--v2` / `--v2-addr` flags are gone — v1 was
 # folded into v2. `--embed` still binds the embeddings socket when the

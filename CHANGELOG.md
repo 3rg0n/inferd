@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **systemd unit could not start on a fresh install: `ExecStartPre` ran
+  inside the mount namespace it was meant to make constructible**
+  (`packaging/systemd/inferd.service`, issue #59). `ProtectHome=read-only`
+  plus `ReadWritePaths=%h/.local/share/models %h/.inferd` means systemd
+  resolves both paths during mount-namespace setup and aborts with
+  `226/NAMESPACE` if either is missing — which on a machine that has never
+  run inferd is both of them. The unit already carried an
+  `ExecStartPre=/usr/bin/mkdir -p` for exactly this reason, but namespace
+  setup runs per *command*, ahead of every `Exec*` line including
+  `ExecStartPre`, so that mkdir was sandboxed by the very carve-out it
+  existed to satisfy and died before creating anything. The journal blames
+  `(mkdir)`, which reads like a missing binary rather than a sandbox
+  failure, and `StartLimitBurst=3` then converted the whole thing into
+  `Start request repeated too quickly` within ~9 seconds — pointing away
+  from the cause on all three counts. Fixed by prefixing the command with
+  `+`, which runs it outside the sandbox. `+` grants no privilege here:
+  this is a `systemctl --user` unit, so the mkdir runs as the same
+  unprivileged user either way; the prefix only opts that one command out
+  of the namespace restrictions. The unit's comment asserted the opposite
+  ordering ("systemd resolves those paths … *before* ExecStartPre runs")
+  and is corrected in the same change.
+
+  Verified on real systemd 255 against the shipped
+  `inferd-v0.7.0-x86_64-unknown-linux-gnu` binaries from a genuinely
+  fresh state, with the pre-fix unit as a control: unfixed → three
+  `226/NAMESPACE` aborts and neither directory created; fixed → zero
+  aborts, both directories created, unit `active`, first-boot
+  `config.json` written, all three sockets bound at the modes invariant #6
+  requires (`admin.sock` `0600`, `inferd.sock` / `infer.embed.sock`
+  `0660`), and a restart with the directories already present still clean
+  (`mkdir -p` is idempotent). Two probes confirm the sandbox was not
+  merely widened: `$HOME` outside the carve-outs is still read-only to the
+  unit, and `%h/.inferd` is writable from inside it.
+
+  Why no gate caught this: the `systemd-unit` CI job installs and starts
+  the real unit on a fresh runner, but never asserted that the two
+  `ReadWritePaths=` targets were *absent* first, so it could not
+  distinguish a fresh install from a warm one and stayed green. It now
+  deletes both paths and asserts they are gone before starting, fails on
+  `226/NAMESPACE` by name (a packaging bug in the unit, distinct from a
+  daemon crash), and asserts afterwards that `ExecStartPre` created both
+  and that the first-boot config landed. Every prior Linux validation pass
+  ran on a box that already had `~/.inferd`. Found by the issue #56
+  airgapped-archive gate.
+
 ## [0.7.0] - 2026-08-05
 
 Minor, not patch: **a fourth wire surface**. Rerank on
