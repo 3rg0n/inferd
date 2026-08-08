@@ -1,0 +1,42 @@
+docs/protocol-v2.md
+  s_126aec4081f728::t_c44f39ee1e66b1 330-332
+crates/inferd/src/main.rs
+  s_126aec4081f728::t_2cd758eb19e2b8 627-665
+  s_126aec4081f728::t_6ff029eb5c7e31 780,1067-1199,1209,1212-1214,1220-1240
+  s_126aec4081f728::t_302a364bae58d5 592
+  s_126aec4081f728::t_226185f602e177 735-738,742-744,754-756,775-779
+  s_9b8d68f5aabdc1::t_5cd9a5328c1fde 1241-1243
+  s_126aec4081f728::t_8b1c9fe0b3f835 693-701
+  s_126aec4081f728::t_a4d8118e883e80 804-807
+  s_126aec4081f728::t_48b088b99f4748 1200-1208,1210-1211,1215-1219
+CHANGELOG.md
+  s_126aec4081f728::t_c856e442b1ff26 40-75
+crates/inferd/README.md
+  s_126aec4081f728::t_a818205887012d 59
+  s_126aec4081f728::t_0591081ad1e6af 44-45,51-54
+  s_126aec4081f728::t_78ca3e544d24b5 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2c7fd87539e3d7486ec3e2cd31f86c780f3d2173",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <196864108+ecopelan_cisco@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
