@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — airgapped *archive* install=work, all 5 checklist
+  items green, no new defects (2026-08-08):** completes issue #56's
+  cross-platform matrix (Windows CUDA + Linux/WSL2 CUDA already green).
+  Ran against the published `inferd-airgapped-v0.7.0-aarch64-apple-darwin.tar.gz`,
+  both archives extracted at real default paths. `install-launchagent.sh`
+  correctly detects the airgapped profile and points at `inferdctl import`,
+  not `watch`; `--version` works pre-install with `backends/` unflattened
+  (dyld's lazy `@rpath` resolution, same shape as Linux's ELF `$ORIGIN` —
+  Windows's `0xC0000135` silent-failure trap is confirmed Windows-specific).
+  `inferdctl import` lands a model with correct CAS layout/manifest/SHA.
+  Real generate (`"AIRGAPPED070"`, `backend=llamacpp`) + real embed
+  (256-dim, L2=1.0) from the installed daemon; socket modes match
+  invariant #6. `inferd-http` from the airgapped archive — third platform
+  for this item — serves real chat (non-stream + SSE) and embeddings with
+  no addr overrides. Accelerator selection unaffected: airgapped and
+  networked archives both log `chosen="metal"` on the same box. TLS
+  control (`grep -a -o | wc -l`, anchored on crate-path patterns): 0 hits
+  for `rustls-`/`webpki`/`/ureq-`/`ring-0.` in the airgapped binary vs.
+  45/32/7/30 in the networked control. #57 and #51 both confirmed
+  cross-platform (not macOS-specific); **#58's macOS fix independently
+  verified on real hardware** — both the "CLI on PATH" and "CLI not on
+  PATH" branches print a resolvable `inferdctl` invocation, closing the
+  "unverified on hardware" note left when the fix landed. See
+  `docs/v0.6-validation.md`, issues #56/#60.
+
 ### Fixed
 
 - **`inferdctl status` exited 1 against a healthy daemon and printed the
