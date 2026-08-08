@@ -96,12 +96,22 @@ impl AcceleratorKind {
 ///
 /// `kind` is the chosen GGML backend (runtime-probed in `dl-backends`
 /// builds; compile-time-pinned in v0.2.x static builds);
-/// `gpu_layers` is the runtime configuration the adapter was
-/// constructed with. A backend that probed `Cuda` but was configured
-/// with `n_gpu_layers = 0` reports `kind = Cuda, gpu_layers = 0` —
-/// i.e. CUDA-capable but currently CPU-bound. The distinction is
-/// useful: it tells consumers the daemon *could* accelerate if
-/// reconfigured, vs. there's no GPU module loaded at all.
+/// `gpu_layers` is the number of layers actually offloaded. A backend
+/// that probed `Cuda` but was configured with `n_gpu_layers = 0` reports
+/// `kind = Cuda, gpu_layers = 0` — i.e. CUDA-capable but currently
+/// CPU-bound. The distinction is useful: it tells consumers the daemon
+/// *could* accelerate if reconfigured, vs. there's no GPU module loaded
+/// at all.
+///
+/// Because `0` carries that "configured for CPU" meaning, a configured
+/// `n_gpu_layers = -1` ("offload all") must **not** be reported as `0`:
+/// the two mean opposite things. Nor may a configured count larger than
+/// the model be echoed back, since those layers were never offloaded. The
+/// llamacpp adapter resolves both cases to libllama's own answer before
+/// they reach this struct — `min(configured, n_layer_all + 1)`, with a
+/// negative configured value meaning the ceiling (issue #51). A `0` here
+/// is therefore always a real "not offloading", whether that came from
+/// the operator's config or from ADR 0019's force-CPU escape hatch.
 ///
 /// `device_name` and `vram_total_bytes` are populated when the active
 /// backend exposes at least one device through ggml's device API —
@@ -113,7 +123,9 @@ pub struct AcceleratorInfo {
     /// GGML backend the daemon picked.
     pub kind: AcceleratorKind,
     /// Layers offloaded to the accelerator at construction time. 0
-    /// means CPU-only at runtime regardless of `kind`.
+    /// means CPU-only at runtime regardless of `kind`. A configured
+    /// "offload all" (`n_gpu_layers` negative) is resolved to the actual
+    /// count by the adapter, never reported as 0 (issue #51).
     pub gpu_layers: u32,
     /// Human-readable device name reported by ggml (`"NVIDIA GeForce
     /// RTX 4090"`, `"AMD Radeon RX 7900 XT"`, `"Apple M2 Pro"`, …).

@@ -313,8 +313,87 @@ fn pick_accelerator_kind() -> AcceleratorKind {
     }
 }
 
+/// Resolve a configured `n_gpu_layers` to the layer count libllama
+/// actually offloads, computed the same way libllama computes it.
+///
+/// Two separate corrections, both of which used to make this field lie
+/// (issue #51):
+///
+/// 1. A **negative** value means "offload everything" (`llama.h`:
+///    "a negative value means all layers"), which
+///    `llama_model::n_gpu_layers()` turns into `hparams.n_layer_all + 1`.
+///    Reporting that as `0` — which is what clamping with `.max(0)` did —
+///    collides with the one value meaning the exact opposite, CPU-only, so
+///    `gpu_layers: 0` on a fully-offloaded GPU box was indistinguishable
+///    from no offload at all.
+/// 2. A configured value **larger than the model** is not what gets
+///    offloaded: libllama caps it at the same ceiling
+///    (`act_gpu_layers = std::min(n_gpu_layers, n_layer_all + 1)`,
+///    `llama-model.cpp`). Publishing the operator's `999` would report a
+///    number of layers that were never offloaded.
+///
+/// `n_layer_all` is not exposed directly, but it is
+/// `llama_model_n_layer() + llama_model_n_layer_nextn()`
+/// (`llama_hparams::n_layer()` returns `n_layer_all - n_layer_nextn`), both
+/// of which are public. The `+ 1` is libllama's own: the output layer
+/// counts as one more offloadable unit than the transformer blocks.
+///
+/// What this deliberately does *not* mirror is libllama's
+/// `devices.empty() ? 0` clause. A no-GPU host reaches here as
+/// `AcceleratorKind::Cpu`, and `LlamaCpp::new` already forces
+/// `effective_gpu_layers = 0` for that case before calling — so the
+/// device-less answer is `0` either way, without this function needing to
+/// re-derive device state.
+///
+/// # Safety
+///
+/// `model` must be a valid, non-null `llama_model` pointer that outlives
+/// the call.
+unsafe fn resolve_gpu_layers(model: *const ffi::llama_model, n_gpu_layers: i32) -> u32 {
+    resolve_gpu_layers_with(n_gpu_layers, || {
+        // SAFETY: caller guarantees `model` is valid for the duration of
+        // the call, and this closure is only invoked within it. Both
+        // getters are pure reads of `hparams`.
+        unsafe {
+            (
+                ffi::llama_model_n_layer(model),
+                ffi::llama_model_n_layer_nextn(model),
+            )
+        }
+    })
+}
+
+/// The decision behind [`resolve_gpu_layers`], with the FFI reads
+/// supplied by the caller so the logic is testable without a loaded
+/// model. `model_layers` returns
+/// `(llama_model_n_layer(), llama_model_n_layer_nextn())`.
+fn resolve_gpu_layers_with(n_gpu_layers: i32, model_layers: impl FnOnce() -> (i32, i32)) -> u32 {
+    // Short-circuit the one value that needs no model context, so the
+    // ADR 0019 force-CPU path costs nothing and cannot be perturbed by a
+    // model reporting something odd.
+    if n_gpu_layers == 0 {
+        return 0;
+    }
+    let (n_layer, n_layer_nextn) = model_layers();
+    // The `.max(0)`s are defensive only against a model that reports
+    // nonsense: both values are unsigned in `hparams`, so neither can be
+    // negative here.
+    let n_layer_all = n_layer.max(0).saturating_add(n_layer_nextn.max(0));
+    let max_offloadable = (n_layer_all as u32).saturating_add(1);
+    if n_gpu_layers < 0 {
+        // "All layers."
+        max_offloadable
+    } else {
+        (n_gpu_layers as u32).min(max_offloadable)
+    }
+}
+
 /// Build the `AcceleratorInfo` that the adapter caches and exposes
 /// through `capabilities()`.
+///
+/// `n_gpu_layers` is the *configured* value, resolved through
+/// [`resolve_gpu_layers`] so a negative "offload all" reports the real
+/// count instead of `0` (issue #51).
 ///
 /// On `dl-backends` builds, walks the ggml device list to find the
 /// device matching `kind` and reads its name + VRAM total. The
@@ -322,8 +401,18 @@ fn pick_accelerator_kind() -> AcceleratorKind {
 /// vram_total_bytes = None`. On the static-build path the device API
 /// is not exercised (the registry only has the one compile-pinned
 /// backend), so the fields stay `None`.
-fn build_accelerator_info(kind: AcceleratorKind, n_gpu_layers: i32) -> AcceleratorInfo {
-    let gpu_layers = n_gpu_layers.max(0) as u32;
+///
+/// # Safety
+///
+/// `model` must be a valid, non-null `llama_model` pointer that outlives
+/// the call.
+unsafe fn build_accelerator_info(
+    kind: AcceleratorKind,
+    n_gpu_layers: i32,
+    model: *const ffi::llama_model,
+) -> AcceleratorInfo {
+    // SAFETY: forwarded from this function's own contract.
+    let gpu_layers = unsafe { resolve_gpu_layers(model, n_gpu_layers) };
     #[cfg(feature = "dl-backends")]
     {
         let details = super::accelerator::probe_device_for_kind(kind);
@@ -540,7 +629,10 @@ impl LlamaCpp {
             None => (None, None),
         };
 
-        let accelerator = build_accelerator_info(kind, effective_gpu_layers);
+        // SAFETY: FFI. `model` is a live `Arc<ModelHandle>` here, so the
+        // pointer is valid for the duration of the call.
+        let accelerator =
+            unsafe { build_accelerator_info(kind, effective_gpu_layers, model.as_ptr()) };
 
         // Resolve a stable, human-meaningful model label. Try GGUF
         // `general.name` metadata first; fall back to the file stem.
@@ -2047,5 +2139,92 @@ mod tests {
         assert!(msg.contains("EOS"), "{msg}");
         assert!(msg.contains("SEP"), "{msg}");
         assert!(msg.contains("rerank"), "{msg}");
+    }
+
+    // Issue #51. `gpu_layers` is reported over the admin surface and in
+    // `inferdctl doctor`, so it has to be what libllama actually
+    // offloaded. `0` is load-bearing — it's how a consumer learns the
+    // daemon is CPU-bound — so the configured `-1` ("offload all") cannot
+    // collapse onto it, and a configured over-ask cannot be echoed back as
+    // if those layers existed.
+
+    /// A 42-block model with no NextN layers, so `n_layer_all + 1` is 43.
+    /// Matches Gemma 4 E4B, which a live CUDA daemon reports as 43 — but
+    /// nothing here depends on that model: it is just a concrete pair of
+    /// getter returns.
+    const LAYERS_42: (i32, i32) = (42, 0);
+    const MAX_42: u32 = 43;
+
+    /// Panics if the model is read — for the paths that must not need it.
+    fn no_model_read() -> (i32, i32) {
+        panic!("must not read the model when the answer is 0")
+    }
+
+    #[test]
+    fn offload_all_reports_the_models_layer_count_not_zero() {
+        let n = resolve_gpu_layers_with(-1, || LAYERS_42);
+        assert_eq!(
+            n, MAX_42,
+            "`-1` must resolve to libllama's own answer, n_layer_all + 1"
+        );
+    }
+
+    #[test]
+    fn every_negative_value_means_offload_all() {
+        // llama.h says *a negative value*, not specifically -1.
+        for configured in [-1, -2, i32::MIN] {
+            assert_eq!(
+                resolve_gpu_layers_with(configured, || LAYERS_42),
+                MAX_42,
+                "n_gpu_layers = {configured} is also 'offload all'"
+            );
+        }
+    }
+
+    #[test]
+    fn nextn_layers_count_toward_the_total() {
+        // `llama_model_n_layer()` returns n_layer_all - n_layer_nextn, so
+        // the two getters have to be summed to recover n_layer_all;
+        // reading only the first under-reports on a NextN model.
+        assert_eq!(resolve_gpu_layers_with(-1, || (46, 2)), 49);
+    }
+
+    #[test]
+    fn configured_zero_stays_zero_and_reads_no_model() {
+        // The CPU path (including the ADR 0019 force-CPU hatch) must keep
+        // reporting 0, and must not need the model to say so.
+        assert_eq!(resolve_gpu_layers_with(0, no_model_read), 0);
+    }
+
+    #[test]
+    fn configured_partial_offload_is_reported_verbatim() {
+        // Below the ceiling, the operator's number *is* what libllama
+        // offloads, so it must survive untouched.
+        assert_eq!(resolve_gpu_layers_with(20, || LAYERS_42), 20);
+        assert_eq!(resolve_gpu_layers_with(43, || LAYERS_42), 43);
+    }
+
+    #[test]
+    fn configured_over_ask_is_capped_at_what_is_offloadable() {
+        // libllama caps at min(n_gpu_layers, n_layer_all + 1)
+        // (llama-model.cpp), so echoing back a configured 99 would report
+        // 56 layers that were never offloaded — the same class of lie as
+        // the original bug.
+        assert_eq!(resolve_gpu_layers_with(99, || LAYERS_42), MAX_42);
+        assert_eq!(resolve_gpu_layers_with(i32::MAX, || LAYERS_42), MAX_42);
+    }
+
+    #[test]
+    fn absurd_model_layer_counts_saturate_rather_than_wrap() {
+        // Defensive: hparams can't really report these, but the getters
+        // are i32 and an overflow here would produce a small wrong number
+        // rather than an obviously-broken large one.
+        // The i32 sum saturates at i32::MAX first, then the u32 `+ 1`
+        // lands one past it — no wrap in either step.
+        assert_eq!(
+            resolve_gpu_layers_with(-1, || (i32::MAX, i32::MAX)),
+            i32::MAX as u32 + 1
+        );
+        assert_eq!(resolve_gpu_layers_with(-1, || (-5, -5)), 1);
     }
 }

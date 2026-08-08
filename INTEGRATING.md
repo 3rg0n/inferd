@@ -359,7 +359,7 @@ Subscribe to the admin socket; the daemon emits a `capabilities` frame after bac
 
 ```sh
 inferdctl doctor
-# [ ok ] backend: llamacpp accelerator=cuda gpu_layers=99 v2=true vision=true audio=false tools=true thinking=true embed=true
+# [ ok ] backend: llamacpp accelerator=cuda gpu_layers=43 v2=true vision=true audio=false tools=true thinking=true embed=true
 ```
 
 ### Config-file shape

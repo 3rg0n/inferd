@@ -52,7 +52,7 @@ $ inferdctl doctor
 [ ok ] config:    loaded ~/.inferd/config.json (auto_pull=true)
 [ ok ] manifest:  gemma-4-e4b · embeddinggemma-300m
 [ ok ] admin:     ready
-[ ok ] backend:   llamacpp accelerator=metal gpu_layers=99 embed=true wire_version=1
+[ ok ] backend:   llamacpp accelerator=metal gpu_layers=43 embed=true wire_version=1
 [ ok ] device:    Apple M2 Pro vram=16.0 GiB
 ```
 

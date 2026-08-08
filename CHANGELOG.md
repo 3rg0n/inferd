@@ -36,6 +36,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`gpu_layers` reported `0` — "CPU-only" — on a fully-offloaded GPU**
+  (`crates/inferd-engine/src/llamacpp/backend.rs`, issue #51).
+  `build_accelerator_info` clamped the configured `n_gpu_layers` with
+  `.max(0)` before publishing it. But llama.cpp defines a **negative**
+  `n_gpu_layers` as "offload all layers" (`llama.h`), and the shipped
+  default config is `-1`, so the clamp mapped the value meaning *offload
+  everything* onto the one value meaning *offload nothing*. Every stock
+  GPU install therefore advertised `accelerator=cuda gpu_layers=0` over
+  the admin surface and in `inferdctl doctor` — a self-contradicting line
+  that reads as "GPU present, not being used". Filed against macOS Metal;
+  it was never platform-specific, and was reproduced on Windows CUDA where
+  generation was measurably running on the GPU while the report said
+  otherwise.
+
+  The adapter now computes the figure the way libllama computes it, which
+  fixes a second lie in the same line found during review: a configured
+  count *larger than the model* was also echoed back verbatim, so
+  `n_gpu_layers: 999` reported 999 offloaded layers on a 42-layer model.
+  libllama caps it — `act_gpu_layers = min(n_gpu_layers, n_layer_all + 1)`
+  (`llama-model.cpp`) — and a negative value resolves to that same ceiling
+  (`llama_model::n_gpu_layers()` → `hparams.n_layer_all + 1`).
+  `n_layer_all` has no getter of its own, but it is recoverable from two
+  public ones — `llama_model_n_layer()` returns `n_layer_all -
+  n_layer_nextn`, so summing it with `llama_model_n_layer_nextn()` restores
+  the total; the `+ 1` is libllama's own accounting for the output layer.
+  A configured value below the ceiling still reports verbatim, because
+  below the ceiling it *is* what gets offloaded. `0` keeps its existing
+  meaning, which is exactly why `-1` could not be allowed to collide with
+  it — a consumer reads `gpu_layers: 0` to learn the daemon is CPU-bound,
+  and the ADR 0019 force-CPU escape hatch deliberately sets it. The one
+  clause deliberately not mirrored is libllama's `devices.empty() ? 0`:
+  a device-less host arrives as `AcceleratorKind::Cpu`, for which
+  `LlamaCpp::new` already forces `0` before this code runs.
+
+  Reporting-only: no wire change, no field added, and no change to what is
+  actually offloaded — `load_model` always received the configured value
+  untouched. Verified live on a two-backend CUDA daemon, which now reports
+  `gpu_layers=43` for Gemma 4 E4B (42 blocks + output layer) and
+  `gpu_layers=25` for EmbeddingGemma 300M, where both previously said `0`.
+  Seven unit tests cover `-1`, other negatives (`llama.h` says *a* negative
+  value, not specifically `-1`), a NextN model where reading only the first
+  getter under-reports, configured `0` staying `0` without reading the
+  model at all, a partial offload reported verbatim, an over-ask and
+  `i32::MAX` capped at the ceiling, and absurd model-reported layer counts
+  saturating rather than wrapping.
+
 - **`inferdctl status` exited 1 against a healthy daemon and printed the
   wrong backend's capabilities** (`crates/inferd/src/main.rs`,
   `crates/inferd-client/src/admin.rs`, issue #57). `cmd_status` read a
