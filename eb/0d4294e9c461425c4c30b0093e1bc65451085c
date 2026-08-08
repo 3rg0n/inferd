@@ -1,0 +1,53 @@
+docs/v0.6-validation.md
+  s_126aec4081f728::t_bdb6dcfa17fa90 1069,1072-1086
+  s_126aec4081f728::t_d5613bfe1b1506 1054-1068,1070-1071,1087-1095
+packaging/launchd/install-launchagent.sh
+  s_126aec4081f728::t_063471bab85bcc 167,172,177-179,184-193
+  s_126aec4081f728::t_c665e461d25915 90-113,194
+  s_126aec4081f728::t_1792b9df506491 157-161
+packaging/windows/install.ps1
+  s_126aec4081f728::t_6d7f61fdc3cd68 141-151,154-156,166-167,196-207
+  s_126aec4081f728::t_3278d9ada126c2 152-153,157-165,168-195
+  s_126aec4081f728::t_b56d7087557e8a 344-346,350,352-359,365-366
+  s_126aec4081f728::t_c45b69e1fdb685 360-364
+  s_126aec4081f728::t_ee6231006009be 97-114
+  s_126aec4081f728::t_2eeff72774b4ea 286-294
+  s_126aec4081f728::t_11724db8b16ce9 315-331,336,340
+README.md
+  s_126aec4081f728::t_f572b584efb4b8 243,246-250
+  s_126aec4081f728::t_f45b513506a68d 263,266-268,273-275
+  s_126aec4081f728::t_646df41822a36f 276-283
+  s_5cd1b28ed520c1::t_ce7787340f6d8f 251,284
+CHANGELOG.md
+  s_126aec4081f728::t_1df92ead843a7c 119-122
+  s_126aec4081f728::t_2fcf22f8e3785c 57-73,100-118,123-128
+  s_126aec4081f728::t_59a70092126c34 74-99
+packaging/windows/uninstall.ps1
+  s_126aec4081f728::t_a5d5064ca39ab5 77-90,92,97,103-104
+  s_126aec4081f728::t_32f6f8d2aca660 93-95
+  s_126aec4081f728::t_40c66aefa6a280 70-76,91,96,98-102,105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "eb0d4294e9c461425c4c30b0093e1bc65451085c",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_5cd1b28ed520c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82e2267c-23d5-4c0c-8d96-7d91a00e70c4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
