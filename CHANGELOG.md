@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`inferdctl status` exited 1 against a healthy daemon and printed the
+  wrong backend's capabilities** (`crates/inferd/src/main.rs`,
+  `crates/inferd-client/src/admin.rs`, issue #57). `cmd_status` read a
+  fixed *two* admin frames and looked for one whose `status` was not
+  `capabilities` to decide readiness. But the daemon replays one
+  `capabilities` frame **per registered backend** before the lifecycle
+  snapshot (`admin::latest_capabilities`, name-sorted), so the shipped
+  two-backend default (generation + embed) sends three frames: both reads
+  were consumed by capabilities frames, `ready` was never seen → exit 1,
+  and the fallback printed whichever backend sorted first — the embed one,
+  so an operator saw `v2: false, vision: false` presented as the daemon's
+  own answer. A fixed count cannot be right when the frame count is a
+  function of backend count. Latent on a single-backend config, which is
+  why no earlier validation pass caught it; reproduced identically on
+  Windows named pipes and Linux UDS, and against the v0.6.1 CLI, so it is
+  not a v0.7.0 regression.
+
+  `status` now reads until the lifecycle frame arrives (bounded by
+  `STATUS_MAX_FRAMES = 64` and the existing 500 ms timeout) and prints
+  **every** frame — one `capabilities` line per backend, then the
+  lifecycle line. Printing all of them rather than selecting "the"
+  generation backend is deliberate: ADR 0007 lets a config register
+  several generation backends, so picking one would only relocate the
+  arbitrary choice. `doctor` already reports one line per backend for the
+  same reason. Frames keep the daemon's order, so `status | tail -1` is a
+  stable idiom for the lifecycle line alone. Readiness is keyed on a
+  `ready` frame actually being seen — `capabilities` describes a backend,
+  not the daemon — so a truncated capabilities-only burst is correctly
+  *not* ready.
+
+  Verified live against a running two-backend CUDA daemon: three frames,
+  both backend names, `ready`, exit 0. Nine new unit tests cover the
+  three-frame burst, the single-backend case, capabilities-only,
+  a pre-`ready` snapshot, stopping at the snapshot rather than eating live
+  events, the frame bound, a stalled peer, an immediately closed socket,
+  and frame ordering. Testing the read loop needed a
+  `#[doc(hidden)] AdminClient::wrap_for_test` — the same escape hatch
+  `ClientV2`, `EmbedClient` and `RerankClient` already expose;
+  `AdminClient` was the only one without it, which is why nothing
+  exercised this loop before.
+
 - **systemd unit could not start on a fresh install: `ExecStartPre` ran
   inside the mount namespace it was meant to make constructible**
   (`packaging/systemd/inferd.service`, issue #59). `ProtectHome=read-only`

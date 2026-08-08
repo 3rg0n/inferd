@@ -175,6 +175,17 @@ impl AdminClient {
         })
     }
 
+    /// Wrap an arbitrary reader as an admin subscriber. Test-only —
+    /// lets a caller drive `recv()` from an in-memory duplex instead of
+    /// a real socket, the same escape hatch `ClientV2`, `EmbedClient`
+    /// and `RerankClient` already expose.
+    #[doc(hidden)]
+    pub fn wrap_for_test(read: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+        Self {
+            reader: BufReader::with_capacity(8192, read),
+        }
+    }
+
     /// Read the next admin event. Blocks until a frame arrives or
     /// the daemon closes the connection.
     pub async fn recv(&mut self) -> Result<AdminEvent, AdminError> {

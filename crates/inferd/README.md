@@ -25,7 +25,7 @@ cargo install inferdctl
 
 | Command | What it does |
 |---|---|
-| `inferdctl status` | One-shot admin snapshot (current lifecycle state) as JSON. Exits 0 on `ready`, non-zero otherwise — useful in shell scripts. |
+| `inferdctl status` | One-shot admin snapshot as JSON: one `capabilities` line per registered backend, then the current lifecycle state on the last line. Exits 0 on `ready`, non-zero otherwise — useful in shell scripts. |
 | `inferdctl watch` | Stream admin lifecycle events forever. Useful during the first-boot model download. |
 | `inferdctl pull` | Read `~/.inferd/config.json`, fetch the configured model into the CAS store (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-256 with a constant-time compare, write the manifest. Operates directly on the store — does not require a running daemon. |
 | `inferdctl doctor` | Diagnose connectivity and install state: config, manifest, admin socket, backend readiness, accelerator, and `wire_version`. Prints a "what's there / what's missing" punch list. |
@@ -40,6 +40,14 @@ cargo install inferdctl
 ## Example
 
 ```console
+$ inferdctl status
+{"accelerator":"cuda","backend":"embeddinggemma-300m","embed":true,"id":"admin","status":"capabilities","type":"status","v2":true}
+{"accelerator":"cuda","audio":true,"backend":"gemma-4-e4b","id":"admin","status":"capabilities","type":"status","v2":true,"vision":true}
+{"id":"admin","status":"ready","type":"status"}
+
+$ inferdctl status | tail -1        # just the lifecycle line
+{"id":"admin","status":"ready","type":"status"}
+
 $ inferdctl doctor
 [ ok ] config:    loaded ~/.inferd/config.json (auto_pull=true)
 [ ok ] manifest:  gemma-4-e4b · embeddinggemma-300m

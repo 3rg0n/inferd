@@ -179,10 +179,10 @@ inferdctl status
 inferdctl doctor
 ```
 
-`status` reports the resolved backend and its capabilities; if the
-generation socket is bound and the model name matches what you
-imported, install=work is satisfied. The daemon makes no outbound
-connection at any point — it has nothing to make one with.
+`status` prints one `capabilities` line per registered backend and then
+the lifecycle state, and exits 0 on `ready`; if the model names match
+what you imported, install=work is satisfied. The daemon makes no
+outbound connection at any point — it has nothing to make one with.
 
 ## Updating
 

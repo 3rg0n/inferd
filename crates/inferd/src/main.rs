@@ -178,33 +178,98 @@ fn default_admin_addr() -> PathBuf {
 
 // --- status -----------------------------------------------------------
 
-async fn cmd_status(admin_addr: &std::path::Path) -> anyhow::Result<ExitCode> {
-    let mut admin = dial_admin(admin_addr).await?;
-    // The daemon emits a capabilities frame before the lifecycle
-    // snapshot when backend construction has completed. Read up to
-    // two frames and use the non-capabilities frame for the
-    // readiness check; fall back to whatever we got otherwise.
+/// Upper bound on admin frames `status` will read before giving up on
+/// finding the lifecycle snapshot.
+///
+/// The daemon writes one capabilities frame per registered backend and
+/// then exactly one snapshot frame (`admin::handle_admin_connection`), so
+/// the snapshot is always at index `backends`. A daemon with more than
+/// this many backends would be a very unusual deployment — ADR 0012 caps
+/// it at one *model* per process — and the bound only exists so a
+/// misbehaving or wedged peer cannot make `status` read forever.
+const STATUS_MAX_FRAMES: usize = 64;
+
+/// Read the daemon's on-connect burst: N capabilities frames followed by
+/// one lifecycle snapshot.
+///
+/// Stops at the first non-`capabilities` frame, which is the snapshot.
+/// Returns whatever arrived if the stream ends or stalls first, so a
+/// daemon that is mid-load (no capabilities yet) and one that is wedged
+/// both degrade to "report what we saw" rather than hanging.
+///
+/// Split out from [`cmd_status`] so the frame-selection logic is testable
+/// without a socket: the bug this replaced (issue #57) was a fixed
+/// two-frame read that no test could have caught, because nothing
+/// exercised the loop.
+async fn read_status_burst(admin: &mut AdminClient) -> Vec<inferd_client::AdminEvent> {
     let mut frames: Vec<inferd_client::AdminEvent> = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..STATUS_MAX_FRAMES {
         match tokio::time::timeout(Duration::from_millis(500), admin.recv()).await {
-            Ok(Ok(event)) => frames.push(event),
+            Ok(Ok(event)) => {
+                let is_capabilities = event.status == "capabilities";
+                frames.push(event);
+                // The snapshot terminates the burst. Reading past it would
+                // block for the full timeout waiting on the live event
+                // stream, which for a healthy idle daemon never fires.
+                if !is_capabilities {
+                    break;
+                }
+            }
             _ => break,
         }
     }
-    let snapshot = match frames.iter().find(|e| e.status != "capabilities") {
-        Some(e) => e,
-        None => match frames.first() {
-            Some(e) => e,
-            None => anyhow::bail!("no admin frame received within 1s"),
-        },
-    };
-    println!("{}", admin_event_to_json(snapshot));
-    let code = if snapshot.status == "ready" {
-        ExitCode::SUCCESS
+    frames
+}
+
+async fn cmd_status(admin_addr: &std::path::Path) -> anyhow::Result<ExitCode> {
+    let mut admin = dial_admin(admin_addr).await?;
+    let frames = read_status_burst(&mut admin).await;
+    if frames.is_empty() {
+        anyhow::bail!("no admin frame received within 500ms");
+    }
+    for line in render_status(&frames) {
+        println!("{line}");
+    }
+    if burst_reports_ready(&frames) {
+        Ok(ExitCode::SUCCESS)
     } else {
-        ExitCode::from(1)
-    };
-    Ok(code)
+        Ok(ExitCode::from(1))
+    }
+}
+
+/// Lines `status` prints for a burst of admin frames: every capabilities
+/// frame, then the lifecycle snapshot.
+///
+/// Printing *all* of them is the fix for the second half of issue #57.
+/// The old code printed one frame and, on the shipped two-backend default
+/// config, it was whichever backend sorted first — so an operator saw the
+/// embed backend's `v2: false, vision: false` and read it as the daemon's
+/// answer. Naming the generation backend instead would only move the
+/// arbitrary pick: a config may register several generation backends
+/// (ADR 0007 routes across them), and there is no basis for calling one
+/// of them "the" backend. `doctor` already reports one line per backend
+/// for exactly this reason; `status` now matches.
+///
+/// Frames are emitted in the order received, which is the daemon's
+/// name-sorted capabilities order followed by the snapshot — stable
+/// across runs, so `status | tail -1` is a usable idiom for the
+/// lifecycle line.
+fn render_status(frames: &[inferd_client::AdminEvent]) -> Vec<String> {
+    frames.iter().map(admin_event_to_json).collect()
+}
+
+/// Whether a burst says the daemon is ready — the `status` exit code, as
+/// a testable predicate (`ExitCode` is opaque, so asserting on it isn't).
+///
+/// Keyed on the lifecycle frame specifically. `capabilities` is not a
+/// lifecycle state — it describes a backend, not the daemon — and since
+/// `status` carries exactly one value, a capabilities frame can never
+/// match `ready`. So a burst carrying only capabilities frames (a
+/// truncated read, or a daemon that died mid-burst) is *not* ready and is
+/// not reported as such, which is the half of issue #57 that made a
+/// healthy daemon exit 1.
+fn burst_reports_ready(frames: &[inferd_client::AdminEvent]) -> bool {
+    frames.iter().any(|e| e.status == "ready")
 }
 
 // --- watch ------------------------------------------------------------
@@ -693,6 +758,9 @@ async fn dial_admin(path: &std::path::Path) -> anyhow::Result<AdminClient> {
 #[cfg(test)]
 mod tests {
     use super::store_for_import;
+    use super::{STATUS_MAX_FRAMES, burst_reports_ready, read_status_burst, render_status};
+    use inferd_client::{AdminClient, AdminEvent};
+    use tokio::io::AsyncWriteExt;
 
     fn write(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
         let p = dir.join("config.json");
@@ -775,5 +843,194 @@ mod tests {
         let text = format!("{err:#}");
         assert!(text.contains("cannot determine the model store"), "{text}");
         assert!(text.contains("parse"), "{text}");
+    }
+
+    // --- status: the #57 burst read -----------------------------------
+
+    fn caps(backend: &str) -> String {
+        serde_json::json!({
+            "id": "admin", "type": "status", "status": "capabilities",
+            "backend": backend, "v2": backend.starts_with("gemma"),
+        })
+        .to_string()
+    }
+
+    fn lifecycle(status: &str) -> String {
+        serde_json::json!({ "id": "admin", "type": "status", "status": status }).to_string()
+    }
+
+    fn event(line: &str) -> AdminEvent {
+        serde_json::from_str(line).expect("test fixture must be a valid admin frame")
+    }
+
+    /// An admin subscriber fed a canned NDJSON burst.
+    ///
+    /// `hold` keeps the writer half alive, which is what a healthy idle
+    /// daemon looks like on the wire: no EOF, just nothing further to say
+    /// until something happens. Dropping it instead gives the closed-socket
+    /// case. The distinction is the whole reason the burst read needs both
+    /// a terminator and a timeout.
+    async fn canned_admin(
+        lines: &[String],
+        hold: bool,
+    ) -> (AdminClient, Option<tokio::io::DuplexStream>) {
+        let (mut server, client) = tokio::io::duplex(256 * 1024);
+        for line in lines {
+            server.write_all(line.as_bytes()).await.unwrap();
+            server.write_all(b"\n").await.unwrap();
+        }
+        let keep = if hold { Some(server) } else { None };
+        (AdminClient::wrap_for_test(Box::new(client)), keep)
+    }
+
+    /// Issue #57. The daemon replays one capabilities frame per registered
+    /// backend before the lifecycle snapshot, so on the shipped two-backend
+    /// default the old fixed `0..2` read consumed both capabilities frames
+    /// and never saw `ready` — a healthy daemon reported exit 1 and printed
+    /// whichever backend sorted first.
+    #[tokio::test]
+    async fn status_reads_past_every_capabilities_frame() {
+        let burst = [
+            caps("embeddinggemma-300m"),
+            caps("gemma-4-e4b"),
+            lifecycle("ready"),
+        ];
+        let (mut admin, _hold) = canned_admin(&burst, false).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), 3, "all three frames must be read: {frames:?}");
+        assert!(burst_reports_ready(&frames), "a ready daemon must exit 0");
+
+        // Both backends are reported, not an arbitrary one of them.
+        let lines = render_status(&frames);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("embeddinggemma-300m"), "{lines:?}");
+        assert!(lines[1].contains("gemma-4-e4b"), "{lines:?}");
+        assert!(lines[2].contains(r#""status":"ready""#), "{lines:?}");
+        for line in &lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("status must print valid JSON, got {line}: {e}"));
+        }
+    }
+
+    /// The single-backend config the old code did handle. Latent bug, so
+    /// this is the case that kept #57 from being caught earlier.
+    #[tokio::test]
+    async fn single_backend_burst_is_ready() {
+        let burst = [caps("gemma-4-e4b"), lifecycle("ready")];
+        let (mut admin, _hold) = canned_admin(&burst, false).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), 2);
+        assert!(burst_reports_ready(&frames));
+    }
+
+    /// `capabilities` describes a backend, not the daemon. A burst that
+    /// carries only capabilities frames — daemon died mid-burst, or the
+    /// read was truncated — must not be reported as ready.
+    #[tokio::test]
+    async fn capabilities_only_burst_is_not_ready() {
+        let burst = [caps("gemma-4-e4b"), caps("embeddinggemma-300m")];
+        let (mut admin, _hold) = canned_admin(&burst, false).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), 2);
+        assert!(
+            !burst_reports_ready(&frames),
+            "no lifecycle frame arrived, so the daemon is not known-ready"
+        );
+    }
+
+    /// A pre-`ready` lifecycle state terminates the burst just as `ready`
+    /// does, and exits non-zero: the daemon is up but not serving.
+    #[tokio::test]
+    async fn loading_snapshot_terminates_the_burst_and_is_not_ready() {
+        let burst = [caps("gemma-4-e4b"), lifecycle("loading_model")];
+        let (mut admin, _hold) = canned_admin(&burst, false).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1].status, "loading_model");
+        assert!(!burst_reports_ready(&frames));
+    }
+
+    /// The snapshot ends the read. Anything after it belongs to the live
+    /// event stream, which is `watch`'s job — `status` must not consume it,
+    /// and must not sit waiting for it either.
+    #[tokio::test]
+    async fn burst_stops_at_the_snapshot() {
+        let burst = [
+            caps("gemma-4-e4b"),
+            lifecycle("ready"),
+            lifecycle("draining"),
+        ];
+        let (mut admin, _hold) = canned_admin(&burst, true).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(
+            frames.len(),
+            2,
+            "the frame after the snapshot is a live event: {frames:?}"
+        );
+    }
+
+    /// The read is bounded, so a peer that streams capabilities frames
+    /// forever cannot make `status` loop without end.
+    #[tokio::test]
+    async fn read_is_bounded_by_status_max_frames() {
+        let burst: Vec<String> = (0..STATUS_MAX_FRAMES + 8)
+            .map(|i| caps(&format!("backend-{i}")))
+            .collect();
+        let (mut admin, _hold) = canned_admin(&burst, true).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), STATUS_MAX_FRAMES);
+        assert!(!burst_reports_ready(&frames));
+    }
+
+    /// A daemon that sends some of the burst and then goes quiet without
+    /// closing: report what arrived rather than hanging. Paused clock, so
+    /// the timeout fires without a real half-second wait.
+    #[tokio::test(start_paused = true)]
+    async fn stalled_daemon_degrades_to_what_arrived() {
+        let burst = [caps("gemma-4-e4b")];
+        let (mut admin, _hold) = canned_admin(&burst, true).await;
+
+        let frames = read_status_burst(&mut admin).await;
+
+        assert_eq!(frames.len(), 1);
+        assert!(!burst_reports_ready(&frames));
+    }
+
+    /// `cmd_status` bails on an empty burst rather than printing nothing
+    /// and exiting 1, which would be indistinguishable from a real
+    /// not-ready answer.
+    #[tokio::test]
+    async fn immediately_closed_socket_yields_no_frames() {
+        let (mut admin, _hold) = canned_admin(&[], false).await;
+
+        assert!(read_status_burst(&mut admin).await.is_empty());
+    }
+
+    /// Ordering is the daemon's, not ours: capabilities in the order sent,
+    /// then the snapshot last. That is what makes `status | tail -1` a
+    /// usable idiom for the lifecycle line.
+    #[test]
+    fn render_preserves_frame_order() {
+        let frames = [
+            event(&caps("a-backend")),
+            event(&caps("z-backend")),
+            event(&lifecycle("ready")),
+        ];
+        let lines = render_status(&frames);
+        assert!(lines[0].contains("a-backend"));
+        assert!(lines[1].contains("z-backend"));
+        assert!(lines[2].contains(r#""status":"ready""#));
     }
 }
