@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **macOS arm64 Metal — airgapped *archive* install=work, all 5 checklist
   items green, no new defects (2026-08-08):** completes issue #56's
-  cross-platform matrix (Windows CUDA + Linux/WSL2 CUDA already green).
+  cross-platform matrix at 3 of 3 platforms (Windows CUDA + Linux/WSL2 CUDA
+  already green), **closing #60 and #56**.
   Ran against the published `inferd-airgapped-v0.7.0-aarch64-apple-darwin.tar.gz`,
   both archives extracted at real default paths. `install-launchagent.sh`
   correctly detects the airgapped profile and points at `inferdctl import`,
@@ -243,9 +244,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI-less archive produced the degraded message and staged nothing, a
   `REG_EXPAND_SZ` `PATH` came through both install and uninstall with its
   value kind and `%USERPROFILE%` token untouched (warning emitted, absolute
-  path printed), and `-Purge` restored the `PATH` byte-for-byte. **The macOS change is
-  unverified on hardware** — this box has none; `bash -n` passes and it is
-  covered by the #60 macOS leg of #56. The README's Linux steps already
+  path printed), and `-Purge` restored the `PATH` byte-for-byte. The macOS
+  change had no hardware coverage when it landed (`bash -n` only); the #60
+  macOS leg of #56 has since **confirmed both branches on real hardware**
+  — see the Validation entry above. The README's Linux steps already
   copied the CLI onto `PATH`; its macOS and Windows steps claimed a bare
   `inferdctl` would resolve from the archive and are corrected to match
   what each installer actually leaves behind.
