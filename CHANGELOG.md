@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AdminClient` was the only one without it, which is why nothing
   exercised this loop before.
 
+  One of those tests needs `#[tokio::test(start_paused = true)]`, which
+  required adding tokio's `test-util` as an explicit `inferdctl`
+  dev-dependency. It compiled locally without it only because feature
+  unification with the sibling crates' dev-deps supplied `test-util` by
+  accident; the airgapped `--no-default-features` CI job does not unify it
+  and failed to build the test binary. `inferd-client`, `inferd-daemon` and
+  `inferd-http` already declared the same dev-dep — `inferdctl` was the
+  omission. Any workspace crate whose tests use a tokio test feature must
+  declare it rather than rely on a sibling.
+
 - **systemd unit could not start on a fresh install: `ExecStartPre` ran
   inside the mount namespace it was meant to make constructible**
   (`packaging/systemd/inferd.service`, issue #59). `ProtectHome=read-only`

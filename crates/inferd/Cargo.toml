@@ -49,3 +49,12 @@ clap               = { workspace = true }
 # each, and shared fixed paths under `env::temp_dir()` collide under
 # cargo's parallel test threads.
 tempfile = "3"
+# `test-util` for `#[tokio::test(start_paused = true)]`, which the status
+# burst-read timeout test needs so it does not spend a real 500 ms. It has
+# to be declared here even though the runtime dep already pulls tokio in:
+# under the default build, feature unification with the sibling crates'
+# dev-deps supplies `test-util` by accident, but the airgapped
+# `--no-default-features` build does not unify it and fails to compile the
+# test binary. Declaring it matches inferd-client / inferd-daemon /
+# inferd-http, which all list the same dev-dep.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
