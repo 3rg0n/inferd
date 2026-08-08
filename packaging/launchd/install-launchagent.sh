@@ -87,6 +87,30 @@ if [[ ! -f "$BIN_DIR/libllama.dylib" ]]; then
     exit 1
 fi
 
+# Locate the CLI so the commands printed at the end actually resolve
+# (issue #58). Unlike the Windows installer there is nothing to *stage*:
+# this script deliberately never relocates the daemon — the plist points
+# launchd at wherever the operator extracted the archive, so $BIN_DIR *is*
+# the install directory, and the archive already ships inferdctl there next
+# to inferd-daemon. Copying it elsewhere would create a second copy that
+# drifts from the daemon it talks to.
+#
+# So the fix is a resolvable invocation, not a copy: prefer a bare
+# `inferdctl` when one is already on PATH, else print the absolute path.
+CLI_PATH="$BIN_DIR/inferdctl"
+if [[ -x "$CLI_PATH" ]]; then
+    # `command -v` finds an inferdctl already on PATH; only trust it if it
+    # is *this* one, otherwise a stale copy from another install would get
+    # the credit and the operator would run the wrong binary.
+    if [[ "$(command -v inferdctl 2>/dev/null || true)" == "$CLI_PATH" ]]; then
+        CLI="inferdctl"
+    else
+        CLI="$CLI_PATH"
+    fi
+else
+    CLI=""
+fi
+
 mkdir -p "$AGENTS_DIR"
 mkdir -p "$LOG_DIR"
 
@@ -130,27 +154,43 @@ echo "On first boot the daemon will write ~/.inferd/config.json (if absent)."
 # on an airgapped install tells the operator to wait for a pull that
 # will never start, which is the worst of the three to get wrong.
 PROFILE_TEXT="$("$BIN" --version 2>&1 || true)"
+# When no inferdctl was found, the commands below still have to name something.
+# Point at the path where the archive ships it rather than a bare `inferdctl`:
+# the bare name would read as "already on your PATH" in exactly the case where
+# nothing is, contradicting the NOTE printed at the end.
+CLI_SHOWN="${CLI:-$CLI_PATH}"
 case "$PROFILE_TEXT" in
     *"build profile: airgapped"*)
         echo "This is an AIRGAPPED build: no HTTPS client is linked, so it will not"
         echo "fetch models. Import them from local files, then clear each source_url"
         echo "in config.json:"
-        echo "  inferdctl import --name gemma-4-e4b <path.gguf>"
+        echo "  $CLI_SHOWN import --name gemma-4-e4b <path.gguf>"
         echo "See airgapped.md in the archive root for the full runbook."
         ;;
     *"build profile: networked"*)
         echo "It then pulls the configured generate + embed models into the CAS"
-        echo "store. Watch progress with:  inferdctl watch"
+        echo "store. Watch progress with:  $CLI_SHOWN watch"
         ;;
     *)
         echo "Could not read the build profile from '$BIN --version', so this"
         echo "script can't tell whether it fetches models. Run:"
-        echo "  inferd-daemon --version"
-        echo "A 'networked' build pulls models on first boot (inferdctl watch); an"
-        echo "'airgapped' build needs inferdctl import (see airgapped.md in the"
+        echo "  $BIN --version"
+        echo "A 'networked' build pulls models on first boot ($CLI_SHOWN watch); an"
+        echo "'airgapped' build needs '$CLI_SHOWN import' (see airgapped.md in the"
         echo "archive root)."
         ;;
 esac
+echo
+if [[ -n "$CLI" ]]; then
+    echo "Verify status:  $CLI_SHOWN status"
+    if [[ "$CLI" != "inferdctl" ]]; then
+        echo "                (add $BIN_DIR to your PATH to drop the full path)"
+    fi
+else
+    echo "NOTE: no inferdctl next to $BIN, so the commands above will not resolve."
+    echo "      The release archive ships it alongside inferd-daemon; copy it into"
+    echo "      $BIN_DIR, or run it from the unpacked archive."
+fi
 echo
 echo "Status:"
 launchctl list "$LABEL" 2>/dev/null || echo "(list not available)"

@@ -54,6 +54,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ran on a box that already had `~/.inferd`. Found by the issue #56
   airgapped-archive gate.
 
+- **Installers told the operator to run `inferdctl`, then never installed
+  it** (`packaging/windows/install.ps1`,
+  `packaging/windows/uninstall.ps1`,
+  `packaging/launchd/install-launchagent.sh`, `README.md`, issue #58). Both
+  scripted installers close by printing `inferdctl status` / `inferdctl
+  watch` / `inferdctl import` — and on an airgapped build (ADR 0028)
+  `import` is the *only* way a model reaches the store, so the CLI sits on
+  the critical path of the runbook they print. Neither script put it
+  anywhere the operator could run it from. The two platforms needed
+  different fixes because their installers have different shapes:
+
+  - **Windows** stages into a fixed `%LOCALAPPDATA%\inferd`, so the CLI is
+    staged there too, next to the daemon it talks to, and that directory
+    is appended to the **user** `PATH`. The append reads
+    `[Environment]::GetEnvironmentVariable("PATH", "User")` specifically,
+    never `$env:PATH` — the process variable is machine `PATH` plus user
+    `PATH` concatenated, so writing it back to User scope would copy every
+    system entry into the user's own `PATH` and permanently double it. It is
+    idempotent (trailing-slash-normalised membership test; `-contains` is
+    already case-insensitive) and **declines to write at all** in the two
+    cases where it cannot do so losslessly, warning and falling back to the
+    fully-qualified path in the closing message — the install is complete
+    either way, and the only thing lost is the convenience of a bare
+    `inferdctl`:
+
+    - `PATH` longer than 2000 characters, because `HKCU\Environment`'s
+      `PATH` is practically capped near 2048 and a longer write can
+      truncate and cost the user unrelated entries.
+    - `PATH` stored as **`REG_EXPAND_SZ`**, i.e. holding literal
+      `%USERPROFILE%\bin`-style tokens. The .NET accessors cannot
+      round-trip that: the getter returns the *expanded* string and the
+      setter writes `REG_SZ`, so an append would silently bake today's
+      expansion in and downgrade the value kind, permanently destroying the
+      user's indirection. Rewriting it faithfully means writing the
+      registry directly plus a `WM_SETTINGCHANGE` broadcast that
+      `SetEnvironmentVariable` performs for free — more machinery, and more
+      ways to damage `PATH`, than the convenience justifies.
+
+    `uninstall.ps1 -Purge` removes the entry again rather than stranding a
+    dead path, and declines symmetrically on `REG_EXPAND_SZ` (if the kind
+    is `ExpandString`, the installer never added the entry, so there is
+    nothing to remove and flattening the user's `%VAR%` references would be
+    pure damage).
+  - **macOS** needs no staging and gets none: `install-launchagent.sh`
+    deliberately never relocates the daemon — the plist points launchd at
+    wherever the archive was extracted, so that directory already *is* the
+    install directory and already contains `inferdctl`. Copying it
+    elsewhere would create a second CLI copy free to drift from its
+    daemon. The fix there is a resolvable invocation: prefer a bare
+    `inferdctl` only when the one already on `PATH` is *this* one, else
+    print the absolute path.
+
+  Both scripts now also degrade honestly. If no `inferdctl` is found next
+  to the daemon, they say so where they previously printed a command that
+  resolved to nothing, and the CLI is reported alongside the binary in the
+  closing summary. `inferd-http` is deliberately *not* staged: it is a
+  separate, user-launched consumer (ADR 0020 / ADR 0014) and nothing these
+  installers print asks the operator to run it.
+
+  Verified on Windows against a fake archive with every path redirected to
+  scratch: CLI staged, `PATH` grew by exactly the directory length, re-run
+  left `PATH` byte-identical with one occurrence of the entry, a
+  CLI-less archive produced the degraded message and staged nothing, a
+  `REG_EXPAND_SZ` `PATH` came through both install and uninstall with its
+  value kind and `%USERPROFILE%` token untouched (warning emitted, absolute
+  path printed), and `-Purge` restored the `PATH` byte-for-byte. **The macOS change is
+  unverified on hardware** — this box has none; `bash -n` passes and it is
+  covered by the #60 macOS leg of #56. The README's Linux steps already
+  copied the CLI onto `PATH`; its macOS and Windows steps claimed a bare
+  `inferdctl` would resolve from the archive and are corrected to match
+  what each installer actually leaves behind.
+
 ## [0.7.0] - 2026-08-05
 
 Minor, not patch: **a fourth wire surface**. Rerank on

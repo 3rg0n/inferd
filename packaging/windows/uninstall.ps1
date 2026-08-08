@@ -67,6 +67,42 @@ if ($Purge) {
     }
     [System.Environment]::SetEnvironmentVariable("INFERD_LOG",     $null, "User")
     [System.Environment]::SetEnvironmentVariable("INFERD_LOG_DIR", $null, "User")
+
+    # install.ps1 appends $installDir to the user PATH so the `inferdctl`
+    # commands it prints resolve (issue #58). Purge removes the directory, so
+    # leaving the entry behind would strand a dead path in HKCU\Environment.
+    # Read the User scope specifically — $env:PATH is machine + user
+    # concatenated, and writing that back to User scope would copy every
+    # system entry into the user's PATH.
+    # install.ps1 declines to append when PATH is REG_EXPAND_SZ, because the
+    # .NET accessors can't round-trip it (getter expands, setter writes REG_SZ).
+    # The same hazard applies to removal, so decline symmetrically: if the kind
+    # is ExpandString then this installer never added the entry in the first
+    # place, and rewriting it here would flatten the user's %VAR% references.
+    $pathKindOk = $true
+    try {
+        $envKey = Get-Item "HKCU:\Environment" -ErrorAction Stop
+        if (($envKey.GetValue("Path", $null) -ne $null) -and
+            ($envKey.GetValueKind("Path") -eq "ExpandString")) {
+            $pathKindOk = $false
+        }
+    } catch { $pathKindOk = $false }
+
+    $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($userPath -and $pathKindOk) {
+        # Remove ONLY our own entry. Empty segments are left alone even though
+        # they are junk: they belong to whoever put them there, and rewriting
+        # parts of PATH this installer did not add is not this script's job.
+        $target = $installDir.TrimEnd('\')
+        $kept = @($userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ne $target })
+        $rebuilt = $kept -join ';'
+        if ($rebuilt -ne $userPath) {
+            Write-Host "Removing $installDir from your user PATH"
+            [System.Environment]::SetEnvironmentVariable("PATH", $rebuilt, "User")
+        }
+    } elseif (-not $pathKindOk) {
+        Write-Warning "not touching your user PATH: it is stored as REG_EXPAND_SZ, which these scripts cannot rewrite without flattening its %VAR% references. If $installDir is on it, remove the entry yourself."
+    }
     Write-Host "Purge complete. Models in %LOCALAPPDATA%\models\ left intact."
 } else {
     Write-Host ""

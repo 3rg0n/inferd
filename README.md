@@ -240,8 +240,14 @@ and run `wsl.exe --shutdown` from Windows.
 tar xzf inferd-v0.7.0-aarch64-apple-darwin.tar.gz
 cd inferd-v0.7.0-aarch64-apple-darwin
 ./packaging/launchd/install-launchagent.sh ./inferd-daemon
-inferdctl watch
+./inferdctl watch
 ```
+
+`inferdctl` is invoked from the archive because this installer
+deliberately does not relocate anything — the LaunchAgent points
+launchd at wherever you extracted, so the archive *is* the install
+directory. Add it to `PATH` (or copy both binaries into `~/.local/bin`
+as the Linux steps do) to drop the `./`.
 
 The script flattens the `backends/` modules next to the daemon
 (`@loader_path` RPATH resolves them), installs the LaunchAgent, and
@@ -254,14 +260,27 @@ Expand-Archive inferd-v0.7.0-x86_64-pc-windows-msvc.zip -DestinationPath .
 cd inferd-v0.7.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
     -SourceBinary .\inferd-daemon.exe
-inferdctl watch
+.\inferdctl watch
 ```
 
-Per-user, **no elevation**: the installer stages the binary +
-`backends\` DLLs into `%LOCALAPPDATA%\inferd`, registers a Startup-
+Per-user, **no elevation**: the installer stages the daemon binary,
+`inferdctl.exe`, and the `backends\` DLLs into `%LOCALAPPDATA%\inferd`,
+appends that directory to your **user** `PATH`, registers a Startup-
 folder shortcut, and launches the daemon (named pipes, default DACL
 granting the current user). The CUDA build resolves its redist DLLs
 next to the exe; no system-wide CUDA install needed.
+
+The `PATH` change only reaches shells opened *after* the install, which
+is why the command above runs the archive copy. In a new terminal, or
+once you have restarted the current one, plain `inferdctl watch` works.
+`uninstall.ps1 -Purge` removes the entry again.
+
+The installer declines the `PATH` append if your user `PATH` is over 2000
+characters or is stored as `REG_EXPAND_SZ` (it contains `%VAR%`
+references) — in both cases it cannot be rewritten without risking
+existing entries, so it is left alone and you get a warning. Nothing else
+about the install changes; the closing message then prints the CLI's full
+path, and every command it shows is correct for whichever case you are in.
 
 ## License
 
