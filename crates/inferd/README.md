@@ -25,7 +25,7 @@ cargo install inferdctl
 
 | Command | What it does |
 |---|---|
-| `inferdctl status` | One-shot admin snapshot as JSON: one `capabilities` line per registered backend, then the current lifecycle state on the last line. Exits 0 on `ready`, non-zero otherwise — useful in shell scripts. |
+| `inferdctl status` | One-shot admin snapshot as JSON: one `capabilities` line per registered backend, then the current lifecycle state on the last line. Relays every field the daemon sends, so it is never less informative than `doctor`. Exits 0 on `ready`, non-zero otherwise — useful in shell scripts. |
 | `inferdctl watch` | Stream admin lifecycle events forever. Useful during the first-boot model download. |
 | `inferdctl pull` | Read `~/.inferd/config.json`, fetch the configured model into the CAS store (`$MODELS_HOME/blobs/sha256/<aa>/<hash>/data`), verify SHA-256 with a constant-time compare, write the manifest. Operates directly on the store — does not require a running daemon. |
 | `inferdctl doctor` | Diagnose connectivity and install state: config, manifest, admin socket, backend readiness, accelerator, and `wire_version`. Prints a "what's there / what's missing" punch list. |
@@ -41,18 +41,22 @@ cargo install inferdctl
 
 ```console
 $ inferdctl status
-{"accelerator":"cuda","backend":"embeddinggemma-300m","embed":true,"id":"admin","status":"capabilities","type":"status","v2":true}
-{"accelerator":"cuda","audio":true,"backend":"gemma-4-e4b","id":"admin","status":"capabilities","type":"status","v2":true,"vision":true}
+{"accelerator":"cuda","backend":"embeddinggemma-300m","device_name":"CUDA0","embed":true,"gpu_layers":25,"id":"admin","status":"capabilities","type":"status","v2":false,"vram_total_bytes":17094475776,"wire_version":1}
+{"accelerator":"cuda","audio":true,"audio_sample_rate":16000,"backend":"gemma-4-e4b","device_name":"CUDA0","gpu_layers":43,"id":"admin","status":"capabilities","type":"status","v2":true,"vision":true,"vram_total_bytes":17094475776,"wire_version":1}
 {"id":"admin","status":"ready","type":"status"}
 
 $ inferdctl status | tail -1        # just the lifecycle line
 {"id":"admin","status":"ready","type":"status"}
 
+$ # the sample rate audio attachments must arrive at (ADR 0016/0025)
+$ inferdctl status | jq -r 'select(.audio) | .audio_sample_rate'
+16000
+
 $ inferdctl doctor
 [ ok ] config:    loaded ~/.inferd/config.json (auto_pull=true)
 [ ok ] manifest:  gemma-4-e4b · embeddinggemma-300m
 [ ok ] admin:     ready
-[ ok ] backend:   llamacpp accelerator=metal gpu_layers=43 embed=true wire_version=1
+[ ok ] backend:   gemma-4-e4b accelerator=metal gpu_layers=43 wire_version=1 v2=true vision=true audio=true audio_sample_rate=16000 tools=true thinking=true embed=false rerank=false
 [ ok ] device:    Apple M2 Pro vram=16.0 GiB
 ```
 

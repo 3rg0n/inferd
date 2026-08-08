@@ -327,6 +327,9 @@ Discover the required rate from the admin socket's `capabilities` frame:
 `audio_sample_rate` is omitted when the backend ingests no audio or
 reports no rate; when it is absent, no rate check is applied. Consumers
 MUST resample to the advertised value rather than hardcoding 16000.
+`inferdctl status` relays it (as it does every other field on the frame),
+so the rate is readable without writing an admin-socket client:
+`inferdctl status | jq -r 'select(.audio) | .audio_sample_rate'`.
 
 `inferd-http` is the reference implementation of that obligation (ADR
 0025): it decodes the client's wav/mp3, downmixes to mono, and resamples

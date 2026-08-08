@@ -589,27 +589,7 @@ async fn cmd_doctor(
                 // generate backend AND an embed backend, instead of
                 // whichever frame happened to arrive first.
                 for c in &caps_frames {
-                    let backend = c.backend.as_deref().unwrap_or("?");
-                    let accel = c.accelerator.as_deref().unwrap_or("?");
-                    let gpu_layers = c.gpu_layers.unwrap_or(0);
-                    let wire = c.wire_version.unwrap_or(0);
-                    let v2 = c.v2.unwrap_or(false);
-                    let vision = c.vision.unwrap_or(false);
-                    let audio = c.audio.unwrap_or(false);
-                    let tools = c.tools.unwrap_or(false);
-                    let thinking = c.thinking.unwrap_or(false);
-                    let embed = c.embed.unwrap_or(false);
-                    let rerank = c.rerank.unwrap_or(false);
-                    report_problem(
-                        "backend",
-                        true,
-                        &format!(
-                            "{backend} accelerator={accel} gpu_layers={gpu_layers} \
-                             wire_version={wire} v2={v2} vision={vision} audio={audio} \
-                             tools={tools} thinking={thinking} embed={embed} \
-                             rerank={rerank}"
-                        ),
-                    );
+                    report_problem("backend", true, &doctor_backend_line(c));
                     if let Some(name) = c.device_name.as_deref() {
                         let vram = c
                             .vram_total_bytes
@@ -644,6 +624,45 @@ async fn cmd_doctor(
 
 // --- helpers ----------------------------------------------------------
 
+/// The `backend:` line `doctor` prints for one capabilities frame.
+///
+/// Extracted from [`cmd_doctor`] so the field coverage is assertable
+/// without a live daemon — the same reason `render_status` is its own
+/// function. Absent fields read as their false-y default (`?` / `false` /
+/// `0`) because `doctor` is a punch list: a fixed set of columns an
+/// operator can scan across backends is worth more than eliding the ones
+/// a given backend didn't send.
+///
+/// `audio_sample_rate` is the exception, and appends rather than taking a
+/// column: it is the rate audio attachments must *already* be at, since
+/// the daemon rejects any other rather than resampling (ADR 0016 /
+/// ADR 0025). There is no meaningful default to print for a backend that
+/// ingests no audio, so it says nothing instead (issue #61).
+fn doctor_backend_line(c: &inferd_client::AdminEvent) -> String {
+    let backend = c.backend.as_deref().unwrap_or("?");
+    let accel = c.accelerator.as_deref().unwrap_or("?");
+    let gpu_layers = c.gpu_layers.unwrap_or(0);
+    let wire = c.wire_version.unwrap_or(0);
+    let v2 = c.v2.unwrap_or(false);
+    let vision = c.vision.unwrap_or(false);
+    let audio = c.audio.unwrap_or(false);
+    let tools = c.tools.unwrap_or(false);
+    let thinking = c.thinking.unwrap_or(false);
+    let embed = c.embed.unwrap_or(false);
+    let rerank = c.rerank.unwrap_or(false);
+    let audio_rate = c
+        .audio_sample_rate
+        .map(|r| format!(" audio_sample_rate={r}"))
+        .unwrap_or_default();
+    format!(
+        "{backend} accelerator={accel} gpu_layers={gpu_layers} \
+         wire_version={wire} v2={v2} vision={vision} \
+         audio={audio}{audio_rate} \
+         tools={tools} thinking={thinking} embed={embed} \
+         rerank={rerank}"
+    )
+}
+
 /// Render a byte count as a short human string (e.g. `"24.0 GiB"`,
 /// `"512 MiB"`). Used by `doctor` to print VRAM totals; the binary
 /// (1024-based) form matches what GPU vendors quote.
@@ -671,6 +690,15 @@ fn format_bytes_short(n: u64) -> String {
 /// view, and rebuilding the JSON from its fields keeps the CLI's
 /// output schema-aligned with the spec rather than the daemon's
 /// exact encoder choices (key order, whitespace).
+///
+/// The cost of that choice is that it must be kept complete: rebuilding
+/// means a field added to `AdminEvent` is silently dropped here until
+/// someone adds an arm (issue #61 — `wire_version`, `audio_sample_rate`,
+/// `device_name` and `vram_total_bytes` were all carried by the typed view
+/// and printed by `doctor`, but missing from the scriptable output).
+/// `admin_json_covers_every_capabilities_field` in the tests below is the
+/// guard: adding an `Option` field to `AdminEvent` without an arm here
+/// fails it.
 fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     use serde_json::{Map, Value, json};
     let mut obj: Map<String, Value> = Map::new();
@@ -704,9 +732,15 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     if let Some(n) = event.n_ctx {
         obj.insert("n_ctx".into(), json!(n));
     }
-    // capabilities frame (#77) — pass through every set field.
+    // capabilities frame (#77) — pass through every set field. Every
+    // `Option` on `AdminEvent` must have an arm here: a field the typed
+    // view carries but this function drops is invisible to the scriptable
+    // surface while `doctor` prints it, which is what issue #61 was.
     if let Some(s) = &event.backend {
         obj.insert("backend".into(), Value::String(s.clone()));
+    }
+    if let Some(n) = event.wire_version {
+        obj.insert("wire_version".into(), json!(n));
     }
     if let Some(b) = event.v2 {
         obj.insert("v2".into(), json!(b));
@@ -716,6 +750,9 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(b) = event.audio {
         obj.insert("audio".into(), json!(b));
+    }
+    if let Some(n) = event.audio_sample_rate {
+        obj.insert("audio_sample_rate".into(), json!(n));
     }
     if let Some(b) = event.tools {
         obj.insert("tools".into(), json!(b));
@@ -734,6 +771,12 @@ fn admin_event_to_json(event: &inferd_client::AdminEvent) -> String {
     }
     if let Some(n) = event.gpu_layers {
         obj.insert("gpu_layers".into(), json!(n));
+    }
+    if let Some(s) = &event.device_name {
+        obj.insert("device_name".into(), Value::String(s.clone()));
+    }
+    if let Some(n) = event.vram_total_bytes {
+        obj.insert("vram_total_bytes".into(), json!(n));
     }
     serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
 }
@@ -758,7 +801,10 @@ async fn dial_admin(path: &std::path::Path) -> anyhow::Result<AdminClient> {
 #[cfg(test)]
 mod tests {
     use super::store_for_import;
-    use super::{STATUS_MAX_FRAMES, burst_reports_ready, read_status_burst, render_status};
+    use super::{
+        STATUS_MAX_FRAMES, admin_event_to_json, burst_reports_ready, doctor_backend_line,
+        read_status_burst, render_status,
+    };
     use inferd_client::{AdminClient, AdminEvent};
     use tokio::io::AsyncWriteExt;
 
@@ -1016,6 +1062,183 @@ mod tests {
         let (mut admin, _hold) = canned_admin(&[], false).await;
 
         assert!(read_status_burst(&mut admin).await.is_empty());
+    }
+
+    // --- status/doctor: the #61 field coverage -------------------------
+
+    /// Every field the daemon puts on a capabilities frame, so a single
+    /// fixture can assert both renderers see all of them.
+    fn full_caps() -> String {
+        serde_json::json!({
+            "id": "admin", "type": "status", "status": "capabilities",
+            "backend": "gemma-4-e4b", "wire_version": 1,
+            "v2": true, "vision": true,
+            "audio": true, "audio_sample_rate": 16_000,
+            "tools": true, "thinking": true, "embed": false, "rerank": false,
+            "accelerator": "cuda", "gpu_layers": 43,
+            "device_name": "NVIDIA GeForce RTX 5080",
+            "vram_total_bytes": 16u64 * 1024 * 1024 * 1024,
+        })
+        .to_string()
+    }
+
+    /// Issue #61. `status` rebuilds its JSON from the typed view rather
+    /// than relaying the raw line, so a field `AdminEvent` carries but
+    /// `admin_event_to_json` has no arm for is dropped — and `status`, the
+    /// scriptable surface, ends up strictly less informative than
+    /// `doctor`. Four fields had gone missing that way.
+    ///
+    /// The exhaustive destructuring is the actual guard, and it is a
+    /// compile-time one: `AdminEvent` is not `#[non_exhaustive]`, so
+    /// adding a field to it without adding a match arm here fails to
+    /// build. Without that, this test would only ever check the fields
+    /// someone remembered to list.
+    #[test]
+    fn admin_json_covers_every_capabilities_field() {
+        let ev = event(&full_caps());
+        let out: serde_json::Value =
+            serde_json::from_str(&admin_event_to_json(&ev)).expect("valid JSON");
+
+        let AdminEvent {
+            id,
+            kind,
+            status,
+            phase,
+            path,
+            downloaded_bytes,
+            total_bytes,
+            source_url,
+            expected_sha256,
+            actual_sha256,
+            quarantine_path,
+            n_ctx,
+            backend,
+            wire_version,
+            v2,
+            vision,
+            audio,
+            audio_sample_rate,
+            tools,
+            thinking,
+            embed,
+            rerank,
+            accelerator,
+            gpu_layers,
+            device_name,
+            vram_total_bytes,
+        } = ev;
+
+        // Envelope.
+        assert_eq!(out["id"], id);
+        assert_eq!(out["type"], kind);
+        assert_eq!(out["status"], status);
+        assert!(phase.is_empty() && out.get("phase").is_none());
+
+        // Load-phase detail: absent on a capabilities frame, and absent
+        // from the output rather than rendered as `null`.
+        for (name, present) in [
+            ("path", path.is_some()),
+            ("downloaded_bytes", downloaded_bytes.is_some()),
+            ("total_bytes", total_bytes.is_some()),
+            ("source_url", source_url.is_some()),
+            ("expected_sha256", expected_sha256.is_some()),
+            ("actual_sha256", actual_sha256.is_some()),
+            ("quarantine_path", quarantine_path.is_some()),
+            ("n_ctx", n_ctx.is_some()),
+        ] {
+            assert!(!present, "fixture should not set {name}");
+            assert!(out.get(name).is_none(), "{name} must be omitted, not null");
+        }
+
+        // Capabilities: every one present, and equal to what came in.
+        assert_eq!(out["backend"], backend.unwrap());
+        assert_eq!(out["wire_version"], wire_version.unwrap());
+        assert_eq!(out["v2"], v2.unwrap());
+        assert_eq!(out["vision"], vision.unwrap());
+        assert_eq!(out["audio"], audio.unwrap());
+        assert_eq!(out["audio_sample_rate"], audio_sample_rate.unwrap());
+        assert_eq!(out["tools"], tools.unwrap());
+        assert_eq!(out["thinking"], thinking.unwrap());
+        assert_eq!(out["embed"], embed.unwrap());
+        assert_eq!(out["rerank"], rerank.unwrap());
+        assert_eq!(out["accelerator"], accelerator.unwrap());
+        assert_eq!(out["gpu_layers"], gpu_layers.unwrap());
+        assert_eq!(out["device_name"], device_name.unwrap());
+        assert_eq!(out["vram_total_bytes"], vram_total_bytes.unwrap());
+    }
+
+    /// A field the daemon omitted stays omitted rather than becoming
+    /// `null` — the frame `status` prints must be one a consumer can
+    /// deserialise the same way it deserialises the daemon's own, and
+    /// `AdminEvent` distinguishes absent from present-and-null.
+    #[test]
+    fn unset_capabilities_fields_are_omitted_not_nulled() {
+        let out: serde_json::Value =
+            serde_json::from_str(&admin_event_to_json(&event(&caps("mock")))).expect("valid JSON");
+        for absent in [
+            "wire_version",
+            "audio_sample_rate",
+            "device_name",
+            "vram_total_bytes",
+        ] {
+            assert!(
+                out.get(absent).is_none(),
+                "{absent} was not sent, so it must not appear: {out}"
+            );
+        }
+    }
+
+    /// `status`'s JSON must not be *less* informative than `doctor`'s
+    /// human line from the identical frame — that asymmetry is what #61
+    /// was, and it is the wrong way round for the scriptable surface.
+    #[test]
+    fn status_json_says_everything_doctors_line_does() {
+        let ev = event(&full_caps());
+        let json = admin_event_to_json(&ev);
+        let line = doctor_backend_line(&ev);
+
+        // Paired per field, and matched on `key=value` / `"key":value`
+        // rather than the bare value — a lone `43` or `1` would pass by
+        // colliding with some other number in the line.
+        for (in_line, in_json) in [
+            ("gemma-4-e4b", r#""backend":"gemma-4-e4b""#),
+            ("accelerator=cuda", r#""accelerator":"cuda""#),
+            ("gpu_layers=43", r#""gpu_layers":43"#),
+            ("audio_sample_rate=16000", r#""audio_sample_rate":16000"#),
+            ("wire_version=1", r#""wire_version":1"#),
+        ] {
+            assert!(line.contains(in_line), "doctor line lost {in_line}: {line}");
+            assert!(json.contains(in_json), "status json lost {in_json}: {json}");
+        }
+        // `doctor` prints these on its own `device:` line; `status` has
+        // no second line, so they belong in the JSON.
+        assert!(
+            json.contains(r#""device_name":"NVIDIA GeForce RTX 5080""#),
+            "{json}"
+        );
+        assert!(json.contains(r#""vram_total_bytes":17179869184"#), "{json}");
+    }
+
+    /// The audio rate qualifies `audio`, so it appears only when the
+    /// daemon sent one: a text-only backend printing
+    /// `audio_sample_rate=0` would read as a real requirement.
+    #[test]
+    fn doctor_omits_the_audio_rate_when_the_backend_sent_none() {
+        let with = doctor_backend_line(&event(&full_caps()));
+        assert!(
+            with.contains("audio=true audio_sample_rate=16000"),
+            "{with}"
+        );
+
+        let without = doctor_backend_line(&event(&caps("mock")));
+        assert!(
+            !without.contains("audio_sample_rate"),
+            "no rate was sent, so none must be printed: {without}"
+        );
+        // The columns either side are still there, so the line stays
+        // scannable across backends.
+        assert!(without.contains("audio=false"), "{without}");
+        assert!(without.contains("tools=false"), "{without}");
     }
 
     /// Ordering is the daemon's, not ours: capabilities in the order sent,

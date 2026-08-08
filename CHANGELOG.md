@@ -37,6 +37,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`inferdctl status` dropped four capabilities fields that `doctor`
+  printed, leaving the scriptable surface the less informative of the two**
+  (`crates/inferd/src/main.rs`, issue #61). `admin_event_to_json` rebuilds
+  its JSON from the typed `AdminEvent` rather than relaying the raw admin
+  line — deliberately, so the CLI's output tracks the spec rather than the
+  daemon's encoder choices — but that only works if it stays complete, and
+  it had no arms for `wire_version`, `audio_sample_rate`, `device_name` or
+  `vram_total_bytes`. All four are carried by the typed view and sent by
+  the daemon; `doctor` printed `wire_version` on its `backend:` line and
+  the other two device fields on a `device:` line, so `status | jq` — the
+  machine-readable path — saw strictly less than the human punch list.
+
+  `audio_sample_rate` was the one that cost real time: it is the rate audio
+  attachments must already be at, since the daemon rejects any other rather
+  than resampling (ADR 0016 / ADR 0025), and it was not printed by
+  `doctor` either — so the required rate was unreachable from the CLI
+  entirely, discoverable only from a raw admin-socket read or
+  `inferdctl watch`. It now appears in `status`'s JSON and, next to
+  `audio=` on `doctor`'s backend line, appended rather than columned so a
+  backend that ingests no audio prints nothing instead of a meaningless
+  `audio_sample_rate=0`.
+
+  Additive to the CLI's output, not to any wire surface: the daemon already
+  sent all four. The guard against a repeat is compile-time — the new
+  `admin_json_covers_every_capabilities_field` test destructures
+  `AdminEvent` exhaustively, so adding a field to it without a matching arm
+  in the renderer now fails to build (verified by planting a field:
+  `E0027 pattern does not mention field`). Four tests in total, and
+  `doctor`'s backend line moved into `doctor_backend_line` so its field
+  coverage is assertable without a live daemon — the same extraction
+  `render_status` got for #57. Verified live on Windows x86_64 CUDA against
+  a current daemon: `status` now emits `wire_version=1`,
+  `device_name=CUDA0`, `vram_total_bytes=17094475776` on both backends and
+  `audio_sample_rate=16000` on the audio-capable one only, matching
+  `doctor` field for field.
+
 - **`gpu_layers` reported `0` — "CPU-only" — on a fully-offloaded GPU**
   (`crates/inferd-engine/src/llamacpp/backend.rs`, issue #51).
   `build_accelerator_info` clamped the configured `n_gpu_layers` with
