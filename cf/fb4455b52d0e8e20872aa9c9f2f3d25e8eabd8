@@ -1,0 +1,28 @@
+docs/protocol-v2.md
+  s_126aec4081f728::t_bbdcf1b613a9cf 310-319
+crates/inferd-engine/src/llamacpp/chat_template/gemma4.rs
+  s_126aec4081f728::t_586786415f52fc 447-464,466-467,469-473
+  s_126aec4081f728::t_4c2fef55d21745 465
+CHANGELOG.md
+  s_126aec4081f728::t_700a74b21d406e 10-29
+crates/inferd-engine/tests/chat_template_gemma4.rs
+  s_126aec4081f728::t_98723940751fec 477-500,503-525
+crates/inferd-engine/src/llamacpp/chat_template/mod.rs
+  s_126aec4081f728::t_e66a6103141ae1 112-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cffb4455b52d0e8e20872aa9c9f2f3d25e8eabd8",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
