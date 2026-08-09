@@ -1,0 +1,31 @@
+docs/protocol-v2.md
+  s_126aec4081f728::t_95e4e5b555dc00 264-273
+  s_126aec4081f728::t_f7e60ce8dbb1a6 250
+CHANGELOG.md
+  s_126aec4081f728::t_f090358b9ea6c5 23-37
+crates/inferd-engine/tests/tool_choice_llamacpp.rs
+  s_126aec4081f728::t_1925b90adb692b 10-17
+  s_126aec4081f728::t_5c4ff3cf59d182 157-160,168-171,173,176-186
+  s_126aec4081f728::t_8435c96d455474 108-138,140
+crates/inferd-proto/src/v2/request.rs
+  s_126aec4081f728::t_73495f2bc5a2d5 59-68,71-74
+docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md
+  s_126aec4081f728::t_1d3ba86d195d2c 128-134
+  s_126aec4081f728::t_db59d891471ecd 154-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f5c9d2c87cc0ba4ff86916021f932623fc8a9530",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
