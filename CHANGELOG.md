@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tool_choice` on the v2 generation wire — enforced by grammar, not
+  advertised as a hint** (issue #38, [ADR 0029](docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md)).
+  `RequestV2.tool_choice` accepts `"auto"` / `"required"` / `"none"` as a
+  bare string, omitted when absent. Additive: `wire_version` does not move
+  and a v0.7.0 client interoperates unchanged.
+
+  The point of the field is that it is a **constraint**. On the llamacpp
+  backend the loaded family's tool-call syntax is compiled to GBNF and
+  installed on the sampler, so `required` is not a request the model can
+  decline: the eager grammar's root demands a complete call, and
+  `llama_grammar_apply_impl` masks every end-of-generation token while no
+  stack is empty — ending the turn with prose is not a reachable sampling
+  path. The Tier-3 test proves it adversarially, prompting "do not use any
+  tools, just say hi" and asserting a call comes back anyway; an advisory
+  implementation fails that test.
+
+  `auto` installs a *lazy* grammar armed on `<|tool_call>`. It cannot force
+  a call, but once the model starts one the body syntax is pinned — which
+  fixes a pre-existing failure for free, where a model-emitted malformed
+  call body aborted an otherwise good generation. `none` excludes the
+  opener **as text** rather than as a token id: a `!<|tool_call>` token
+  rule is fail-open, because `<`, `|tool`, `_call>` spells the same opener
+  in ordinary pieces and inferd's parser scans detokenised text. Upstream
+  llama.cpp builds no grammar for `none` at all; this is a deliberate
+  divergence.
+
+  Enforcement hangs off the ADR 0026 renderer registry as
+  `ChatRenderer::tool_call_grammar`, whose **default implementation
+  refuses every mode**. A family opts in deliberately; inheriting a
+  silently-unenforced `required` is exactly the failure the field exists to
+  close. Gemma 4 is the one family that opts in — its call syntax is not
+  JSON, so `json_schema_to_gbnf` cannot express it and the grammar is
+  hand-written, which is why #38's own proposal to reuse the JSON-Schema
+  path is superseded.
+
+  Surfaces: `inferd-http` maps OpenAI's three string forms and returns
+  **400** for anything else — including the named-function form
+  `{"type":"function","function":{"name":…}}`, which is rejected rather
+  than widened to `required` (widening would let the model call a
+  *different* declared tool while the caller believed it had pinned one;
+  the workaround is `required` with only that tool declared). The cloud
+  adapters forward rather than drop — `openai-compat` sends the modes
+  verbatim, `bedrock-invoke` maps `required` to Anthropic's `any` — and
+  both error on a value they cannot express, because omitting the field
+  would leave a `required` request best-effort upstream while the caller
+  believed it held a guarantee. `clients/go` gains `ToolChoice` plus the
+  three constants.
+
+  Two deliberate rejections, both `invalid_request`: a `tool_choice` with
+  no `tools` (there is nothing to constrain), and `response_format`
+  together with `tool_choice` — only one grammar can be installed, so
+  honouring either silently drops the other. Upstream drops the *tool*
+  constraint in that case, which is the precise fail-open this field
+  exists to close; nothing regresses from refusing, since `tool_choice` is
+  new. Scope limit, matching upstream's own live TODO: enforcement pins
+  call syntax and masks tool *names* to the declared table, but argument
+  values are not constrained by each tool's `input_schema` — callers
+  still validate arguments.
+
 ### Validation
 
 - **macOS arm64 Metal — airgapped *archive* install=work, all 5 checklist

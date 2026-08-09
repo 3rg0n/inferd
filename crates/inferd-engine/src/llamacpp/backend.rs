@@ -25,8 +25,8 @@ use crate::backend::{
 };
 use crate::ffi;
 use crate::llamacpp::chat_template::{
-    ChatFamily, ChatRenderer, GGUF_KEY_ARCHITECTURE, GGUF_KEY_CHAT_TEMPLATE, detect_family,
-    template_fingerprint,
+    ChatFamily, ChatRenderer, GGUF_KEY_ARCHITECTURE, GGUF_KEY_CHAT_TEMPLATE, GRAMMAR_ROOT,
+    ToolGrammar, detect_family, template_fingerprint,
 };
 use crate::llamacpp::grammar;
 use crate::llamacpp::loader::{ModelHandle, ModelLoadError, load_model};
@@ -1170,6 +1170,37 @@ impl Backend for LlamaCpp {
             .render(&req)
             .map_err(|e| GenerateError::InvalidRequest(format!("render: {e}")))?;
 
+        // `response_format` and `tool_choice` are both constrained
+        // decoding, and the engine installs exactly one grammar, so a
+        // request carrying both has no honest answer: satisfying either
+        // one means the other was dropped. Upstream resolves this by
+        // letting `response_format` win and leaving the tools
+        // unconstrained (`chat.cpp` returns before the tool rules when
+        // `has_response_format`), which is the silent downgrade of
+        // `required` this field exists to prevent — so inferd refuses
+        // the pair instead. Nothing regresses: `tool_choice` is new, so
+        // no request that worked before is newly rejected.
+        if req.response_format.is_some() && req.tool_choice.is_some() {
+            return Err(GenerateError::InvalidRequest(
+                "response_format and tool_choice are mutually exclusive: both constrain \
+                 decoding and only one grammar can be installed, so honouring either \
+                 would silently drop the other"
+                    .to_string(),
+            ));
+        }
+
+        // Compile `tool_choice` to this family's constrained-decoding
+        // grammar, on the calling task and for the same reason as the
+        // prompt: only the renderer knows the syntax. A family that
+        // cannot enforce the mode refuses here, so a caller never gets
+        // a `required` that was silently downgraded to a hint.
+        let tool_grammar = match req.tool_choice {
+            Some(choice) => renderer
+                .tool_call_grammar(choice, &req.tools)
+                .map_err(|e| GenerateError::InvalidRequest(format!("tool_choice: {e}")))?,
+            None => None,
+        };
+
         // Rate the loaded mmproj's audio encoder requires, for the
         // per-attachment check in `build_bitmap`. Read once here rather
         // than per attachment so we take the state lock a single time.
@@ -1195,8 +1226,16 @@ impl Backend for LlamaCpp {
         let req_clone = req;
 
         tokio::task::spawn_blocking(move || {
-            let outcome =
-                run_generation_v2(&state, &prompt, &bitmaps, &req_clone, max_new, seed, &tx);
+            let outcome = run_generation_v2(
+                &state,
+                &prompt,
+                &bitmaps,
+                &req_clone,
+                tool_grammar.as_ref(),
+                max_new,
+                seed,
+                &tx,
+            );
             if let Err(e) = outcome {
                 warn!(error = %e, "v2 generation aborted mid-stream");
             }
@@ -1457,19 +1496,30 @@ fn build_sampler_chain_v2(
     Ok(chain)
 }
 
-/// Build the standalone grammar sampler for a `response_format`
-/// constraint, or `None` when the request carries no constraint.
+/// Build the standalone grammar sampler for whichever constrained-decoding
+/// constraint the request carries — a `response_format` schema or a
+/// `tool_choice` grammar — or `None` when it carries neither.
+///
+/// The two are mutually exclusive by the time they get here
+/// (`generate_v2` rejects the pair), because only one grammar sampler
+/// exists and satisfying either would silently drop the other.
 ///
 /// Kept separate from the sampler chain on purpose (ADR 0013 + the
 /// llama.cpp `common_sampler` pattern): the grammar sampler is applied
 /// to the candidate logits and `accept`-ed manually in the decode loop,
-/// never sampled via `llama_sampler_sample`. A bad schema returns an
-/// error here — it must never reach a throw-across-FFI that would abort
-/// the daemon.
+/// never sampled via `llama_sampler_sample`. A bad schema or a
+/// malformed GBNF returns an error here — `llama_grammar_init_impl`
+/// answers with NULL, so neither can reach a throw-across-FFI that
+/// would abort the daemon.
 fn build_grammar_sampler_v2(
     vocab: *const ffi::llama_vocab,
     req: &ResolvedV2,
+    tool_grammar: Option<&ToolGrammar>,
 ) -> Result<Option<*mut ffi::llama_sampler>, LlamaCppError> {
+    if let Some(tg) = tool_grammar {
+        return build_gbnf_sampler(vocab, &tg.gbnf, &tg.triggers).map(Some);
+    }
+
     let Some(format) = &req.response_format else {
         return Ok(None);
     };
@@ -1478,16 +1528,70 @@ fn build_grammar_sampler_v2(
     // Compile JSON Schema → GBNF (the shim catches C++ exceptions and
     // returns an error rather than unwinding into Rust).
     let gbnf = grammar::json_schema_to_gbnf(schema).map_err(|_| LlamaCppError::Sampler)?;
-    let gbnf_cstr = CString::new(gbnf).map_err(|_| LlamaCppError::Sampler)?;
-    let root = CString::new("root").map_err(|_| LlamaCppError::Sampler)?;
+    build_gbnf_sampler(vocab, &gbnf, &[]).map(Some)
+}
 
-    // SAFETY: FFI; vocab valid for the lock's lifetime. init_grammar
-    // returns NULL (never throws) on a malformed grammar.
-    let grmr = unsafe { ffi::llama_sampler_init_grammar(vocab, gbnf_cstr.as_ptr(), root.as_ptr()) };
+/// Instantiate a grammar sampler from GBNF source.
+///
+/// `triggers` empty selects the eager entry point: the grammar
+/// constrains from the first sampled token, which is what makes
+/// `tool_choice: "required"` a guarantee —
+/// `llama_grammar_apply_impl` masks every end-of-generation token
+/// while no stack is empty, so the model cannot finish its turn until
+/// the grammar's root is satisfied.
+///
+/// A non-empty `triggers` selects the lazy entry point: nothing is
+/// masked until one of the patterns matches the detokenised output, at
+/// which point `llama_grammar_accept_impl` replays the overlapping
+/// tokens into the grammar and constrains from there. The patterns are
+/// ECMAScript regexes compiled by `std::regex` inside
+/// `llama_grammar_init_impl`, so the caller supplies them already
+/// escaped.
+fn build_gbnf_sampler(
+    vocab: *const ffi::llama_vocab,
+    gbnf: &str,
+    triggers: &[String],
+) -> Result<*mut ffi::llama_sampler, LlamaCppError> {
+    let gbnf_cstr = CString::new(gbnf).map_err(|_| LlamaCppError::Sampler)?;
+    let root = CString::new(GRAMMAR_ROOT).map_err(|_| LlamaCppError::Sampler)?;
+
+    let grmr = if triggers.is_empty() {
+        // SAFETY: FFI; vocab valid for the lock's lifetime. init_grammar
+        // returns NULL (never throws) on a malformed grammar.
+        unsafe { ffi::llama_sampler_init_grammar(vocab, gbnf_cstr.as_ptr(), root.as_ptr()) }
+    } else {
+        // Owned CStrings kept alive across the call; the pointer array
+        // borrows from them. `llama_grammar_init_impl` copies each
+        // pattern into a `std::string` before returning, so nothing
+        // here needs to outlive the call.
+        let owned: Vec<CString> = triggers
+            .iter()
+            .map(|p| CString::new(p.as_str()).map_err(|_| LlamaCppError::Sampler))
+            .collect::<Result<_, _>>()?;
+        let mut ptrs: Vec<*const std::os::raw::c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+
+        // SAFETY: FFI; `ptrs` has `owned.len()` valid pointers, each
+        // into a CString live for this scope. No trigger *tokens* are
+        // passed — a token-id trigger would only arm on the single
+        // control token, while the same opener spelled across ordinary
+        // pieces would slip past it; the regex sees detokenised text
+        // and catches both.
+        unsafe {
+            ffi::llama_sampler_init_grammar_lazy_patterns(
+                vocab,
+                gbnf_cstr.as_ptr(),
+                root.as_ptr(),
+                ptrs.as_mut_ptr(),
+                ptrs.len(),
+                ptr::null(),
+                0,
+            )
+        }
+    };
     if grmr.is_null() {
         return Err(LlamaCppError::Sampler);
     }
-    Ok(Some(grmr))
+    Ok(grmr)
 }
 
 /// Sample one token under a grammar constraint, following llama.cpp's
@@ -1553,11 +1657,13 @@ unsafe fn sample_with_grammar(
 /// `tx.blocking_send` errors and the loop exits silently. The daemon
 /// translates the missing terminal frame into an `error` (mid-stream
 /// failure mapping per ADR 0007).
+#[allow(clippy::too_many_arguments)]
 fn run_generation_v2(
     state: &Arc<Mutex<State>>,
     prompt: &str,
     bitmaps: &[Bitmap],
     req: &ResolvedV2,
+    tool_grammar: Option<&ToolGrammar>,
     max_new: u32,
     seed: u32,
     tx: &mpsc::Sender<TokenEventV2>,
@@ -1628,10 +1734,11 @@ fn run_generation_v2(
     let sampler = build_sampler_chain_v2(vocab, req, seed)?;
     let _sampler_guard = SamplerGuard { ptr: sampler };
 
-    // Optional standalone grammar sampler (response_format → GBNF). Kept
-    // OUT of the chain and applied manually per token, mirroring
-    // llama.cpp's `common_sampler` — chaining it would throw across FFI.
-    let grammar_sampler = build_grammar_sampler_v2(vocab, req)?;
+    // Optional standalone grammar sampler (response_format → GBNF, or
+    // tool_choice → the family's tool-call GBNF). Kept OUT of the chain
+    // and applied manually per token, mirroring llama.cpp's
+    // `common_sampler` — chaining it would throw across FFI.
+    let grammar_sampler = build_grammar_sampler_v2(vocab, req, tool_grammar)?;
     let _grammar_guard = grammar_sampler.map(|ptr| SamplerGuard { ptr });
     let n_vocab = unsafe { ffi::llama_vocab_n_tokens(vocab) } as usize;
     // Candidate buffer for the grammar path, allocated once and reused for

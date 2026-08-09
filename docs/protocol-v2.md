@@ -212,6 +212,7 @@ responsibility.
 | messages       | `messages`      | array of `MessageV2`     | **yes**  | MUST be non-empty. |
 | attachments    | `attachments`   | array of `Attachment`    | no       | Metadata only — bytes ride in BLOB frames. Omit when text-only. |
 | tools          | `tools`         | array of `Tool`          | no       | Tool definitions in scope for this request. |
+| tool_choice    | `tool_choice`   | string                   | no       | Whether the model may / must / must not call a tool: `"auto"`, `"required"`, `"none"` (§3.2b). Requires a non-empty `tools`. Unlike `response_format`, a value the daemon cannot honour is an **error**, not a silent no-op. |
 | temperature    | `temperature`   | float                    | no       | Daemon applies the backend default if absent. |
 | top_p          | `top_p`         | float                    | no       | "" |
 | top_k          | `top_k`         | uint32                   | no       | "" |
@@ -238,6 +239,44 @@ The daemon translates the semantic format to engine-specific constraints
   (or don't support JSON Schema specifically) ignore this field and return
   unconstrained output; there is **no error** — the request succeeds as if
   `response_format` were absent.
+
+### 3.2b `tool_choice` (bare string)
+
+Constrains tool use for this request. Three values:
+
+| Value        | Meaning |
+|--------------|---------|
+| `"auto"`     | The model decides. Behaviourally the same as omitting the field, except the daemon may additionally constrain the *shape* of a call the model chooses to make. |
+| `"required"` | The model MUST emit at least one tool call. On a backend that enforces this, no path through sampling produces a bare text answer. |
+| `"none"`     | The model MUST NOT call a tool. Declarations still reach the prompt, so the rendered context is unchanged. |
+
+Rules:
+
+- **`tools` MUST be non-empty.** `tool_choice` constrains that table; sent
+  without it, the request is rejected with `invalid_request`.
+- **`response_format` and `tool_choice` are mutually exclusive.** Both
+  constrain decoding and only one constraint can be installed, so a
+  request carrying both is rejected with `invalid_request` rather than
+  having one of them silently dropped (ADR 0029).
+- **This is a constraint, not a hint.** A backend that cannot enforce the
+  requested mode rejects the request with `invalid_request`; it does not
+  accept it and try. This is the deliberate difference from
+  `response_format`, which degrades to unconstrained output. A caller
+  that sets `required` and receives a `done` frame with no `tool_use`
+  block has hit a bug, not a documented degradation.
+- **An unrecognised value parses but is rejected.** A newer client's
+  request deserialises (forward-compat) and the daemon then answers
+  `invalid_request` rather than guessing which mode was meant.
+- **Naming a specific tool is not expressible.** There is no
+  `{"type":"function","function":{"name":…}}` form. To pin one tool, send
+  `"required"` with only that tool declared. Bridges MUST reject the
+  named form rather than widening it to `"required"`, which would let the
+  model call a *different* declared tool while the caller believed it had
+  pinned one.
+- **Scope: names, not argument schemas.** Enforcement pins the call
+  syntax and constrains the tool name to the declared table; argument
+  *values* are not constrained by each tool's `input_schema`. Callers
+  still validate arguments.
 
 ### 3.3 `MessageV2`
 

@@ -8,5 +8,5 @@
 
 pub(super) use inferd_openai_wire::{
     ChatChunk, ChatMessage, ChatRequest, ChunkToolCallDelta, StreamOptions, ToolCallFunction,
-    ToolCallReplay, ToolDecl, ToolDeclFunction,
+    ToolCallReplay, ToolChoice as WireToolChoice, ToolChoiceMode, ToolDecl, ToolDeclFunction,
 };

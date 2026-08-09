@@ -31,11 +31,11 @@
 
 use super::client::{
     ChatChunk, ChatMessage, ChatRequest, ChunkToolCallDelta, StreamOptions, ToolCallFunction,
-    ToolCallReplay, ToolDecl, ToolDeclFunction,
+    ToolCallReplay, ToolChoiceMode, ToolDecl, ToolDeclFunction, WireToolChoice,
 };
 use crate::backend::TokenEventV2;
 use inferd_proto::v2::{
-    ContentBlock, MessageV2, ResolvedV2, RoleV2, StopReasonV2, ToolCallId, UsageV2,
+    ContentBlock, MessageV2, ResolvedV2, RoleV2, StopReasonV2, ToolCallId, ToolChoice, UsageV2,
 };
 
 /// Errors building the wire request from a `ResolvedV2`.
@@ -56,6 +56,14 @@ pub enum MapperError {
     /// non-text inside a `ToolResult` content array is unrepresentable.
     #[error("openai-compat tool_result content must be text only")]
     NonTextToolResult,
+    /// `tool_choice` carried a mode this adapter cannot forward.
+    /// `resolve()` rejects `ToolChoice::Unknown` before dispatch, so
+    /// reaching here means the request bypassed validation — and
+    /// forwarding *nothing* would turn a caller's constraint into a
+    /// hint on the provider's side, which is the failure the field
+    /// exists to close.
+    #[error("openai-compat adapter cannot forward an unrecognised tool_choice")]
+    UnknownToolChoice,
 }
 
 /// Translate a `ResolvedV2` envelope into the `ChatRequest` we POST.
@@ -93,6 +101,19 @@ pub(super) fn request_from_resolved(
         })
         .collect();
 
+    // Forwarded, not enforced locally: the provider owns constrained
+    // decoding for its own model, and OpenAI's `tool_choice` has the
+    // same three modes. Dropping it would leave a `required` request
+    // best-effort on the far side while the caller believed it held a
+    // guarantee.
+    let tool_choice = match resolved.tool_choice {
+        None => None,
+        Some(ToolChoice::Auto) => Some(WireToolChoice::Mode(ToolChoiceMode::Auto)),
+        Some(ToolChoice::Required) => Some(WireToolChoice::Mode(ToolChoiceMode::Required)),
+        Some(ToolChoice::None) => Some(WireToolChoice::Mode(ToolChoiceMode::None)),
+        Some(ToolChoice::Unknown) => return Err(MapperError::UnknownToolChoice),
+    };
+
     Ok(ChatRequest {
         model: model.to_string(),
         messages,
@@ -102,6 +123,7 @@ pub(super) fn request_from_resolved(
         max_tokens: resolved.max_tokens,
         n: None,
         tools,
+        tool_choice,
         stream_options: Some(StreamOptions {
             include_usage: true,
         }),
@@ -508,6 +530,7 @@ mod tests {
             }],
             attachments: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             temperature: None,
             top_p: None,
             top_k: None,
@@ -693,5 +716,69 @@ mod tests {
             }
             other => panic!("expected Done, got {other:?}"),
         }
+    }
+
+    /// `tool_choice` must reach the provider, not get dropped: a dropped
+    /// `required` leaves the request best-effort upstream while the
+    /// caller believes it holds a guarantee.
+    #[test]
+    fn tool_choice_is_forwarded_to_the_provider() {
+        for (choice, want) in [
+            (ToolChoice::Auto, ToolChoiceMode::Auto),
+            (ToolChoice::Required, ToolChoiceMode::Required),
+            (ToolChoice::None, ToolChoiceMode::None),
+        ] {
+            let r = resolved_with_tool_choice(Some(choice));
+            let req = request_from_resolved(&r, "m").unwrap();
+            assert_eq!(
+                req.tool_choice,
+                Some(WireToolChoice::Mode(want)),
+                "{choice:?}"
+            );
+            let json = serde_json::to_value(&req).unwrap();
+            assert!(json.get("tool_choice").is_some(), "{choice:?}: {json}");
+        }
+    }
+
+    #[test]
+    fn absent_tool_choice_is_not_sent() {
+        let r = resolved_with_tool_choice(None);
+        let req = request_from_resolved(&r, "m").unwrap();
+        assert_eq!(req.tool_choice, None);
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("tool_choice").is_none(), "{json}");
+    }
+
+    /// A value this build does not understand is an error, not a silent
+    /// omission — the same reason the daemon rejects it.
+    #[test]
+    fn unknown_tool_choice_is_rejected() {
+        let mut r = resolved_with_tool_choice(Some(ToolChoice::Auto));
+        r.tool_choice = Some(ToolChoice::Unknown);
+        assert_eq!(
+            request_from_resolved(&r, "m").unwrap_err(),
+            MapperError::UnknownToolChoice
+        );
+    }
+
+    fn resolved_with_tool_choice(choice: Option<ToolChoice>) -> ResolvedV2 {
+        RequestV2 {
+            id: "req-1".into(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "weather?".into(),
+                }],
+            }],
+            tools: vec![Tool {
+                name: "get_weather".into(),
+                description: "gets weather".into(),
+                input_schema: json!({"type": "object"}),
+            }],
+            tool_choice: choice,
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap()
     }
 }

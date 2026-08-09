@@ -12,12 +12,12 @@ use inferd_openai_wire::{
     ChatChunk, ChatRequest, ChunkChoice, ChunkDelta, ChunkToolCallDelta,
     ChunkToolCallFunctionDelta, ChunkUsage, ContentPart, EmbeddingData, EmbeddingVector,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, MessageContent,
-    ResponseFormat as OpenAiResponseFormat,
+    ResponseFormat as OpenAiResponseFormat, ToolChoice as OpenAiToolChoice, ToolChoiceMode,
 };
 use inferd_proto::embed::EmbedRequest;
 use inferd_proto::v2::{
     Attachment, ContentBlock, MessageV2, RequestV2, ResponseBlock, ResponseFormat, ResponseV2,
-    RoleV2, StopReasonV2, Tool, ToolCallId, UsageV2,
+    RoleV2, StopReasonV2, Tool, ToolCallId, ToolChoice, UsageV2,
 };
 use thiserror::Error;
 
@@ -77,6 +77,26 @@ pub enum TranslateError {
     /// apart and says "upgrade the daemon" instead.
     #[error("the daemon's active backend does not accept audio input")]
     AudioUnsupported,
+    /// `tool_choice` named a specific function
+    /// (`{"type":"function","function":{"name":"…"}}`). The daemon's wire
+    /// has no way to say "this tool and no other", so accepting it as
+    /// `required` would let the model call a different declared tool
+    /// while the caller believed it had pinned one. Rejected rather than
+    /// widened — the caller can achieve the same thing by declaring only
+    /// that tool with `tool_choice: "required"`.
+    #[error(
+        "tool_choice naming a specific function is not supported; \
+         send `required` with only that tool declared"
+    )]
+    NamedToolChoice(String),
+    /// `tool_choice` was an unrecognised string.
+    #[error("unsupported tool_choice (expected `auto`, `required` or `none`)")]
+    BadToolChoice,
+    /// `tool_choice` arrived without `tools`. The daemon rejects this
+    /// too, but the bridge says so with a 400 rather than relaying an
+    /// IPC error, since it is a client mistake with a clear fix.
+    #[error("tool_choice requires a non-empty `tools` array")]
+    ToolChoiceWithoutTools,
 }
 
 /// Max number of image parts accepted in one chat request. A single
@@ -121,6 +141,32 @@ fn map_response_format(rf: Option<OpenAiResponseFormat>) -> Option<ResponseForma
             .schema
             .map(|schema| ResponseFormat::JsonSchema { schema }),
         _ => None,
+    }
+}
+
+/// Map an OpenAI `tool_choice` to the daemon's.
+///
+/// Unlike `response_format`, an unmappable value is an **error**, not a
+/// silent `None`: dropping `required` hands the caller a guarantee the
+/// daemon was never asked for. `has_tools` gates the field the same way
+/// `RequestV2::resolve` does, reported here as a 400 rather than relayed
+/// from IPC.
+fn map_tool_choice(
+    tc: Option<OpenAiToolChoice>,
+    has_tools: bool,
+) -> Result<Option<ToolChoice>, TranslateError> {
+    let Some(tc) = tc else {
+        return Ok(None);
+    };
+    if !has_tools {
+        return Err(TranslateError::ToolChoiceWithoutTools);
+    }
+    match tc {
+        OpenAiToolChoice::Mode(ToolChoiceMode::Auto) => Ok(Some(ToolChoice::Auto)),
+        OpenAiToolChoice::Mode(ToolChoiceMode::Required) => Ok(Some(ToolChoice::Required)),
+        OpenAiToolChoice::Mode(ToolChoiceMode::None) => Ok(Some(ToolChoice::None)),
+        OpenAiToolChoice::Mode(ToolChoiceMode::Other) => Err(TranslateError::BadToolChoice),
+        OpenAiToolChoice::Named(n) => Err(TranslateError::NamedToolChoice(n.function.name)),
     }
 }
 
@@ -324,12 +370,14 @@ pub fn chat_request_to_v2(
             input_schema: t.function.parameters,
         })
         .collect();
+    let tool_choice = map_tool_choice(req.tool_choice, !tools.is_empty())?;
 
     Ok(RequestV2 {
         id,
         messages,
         attachments,
         tools,
+        tool_choice,
         temperature: req.temperature,
         top_p: req.top_p,
         max_tokens: req.max_tokens,
@@ -590,7 +638,8 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use inferd_openai_wire::{
-        ChatMessage, ToolCallFunction, ToolCallReplay, ToolDecl, ToolDeclFunction,
+        ChatMessage, NamedToolChoice, NamedToolChoiceFunction, ToolCallFunction, ToolCallReplay,
+        ToolDecl, ToolDeclFunction,
     };
 
     fn msg(role: &str, text: &str) -> ChatMessage {
@@ -614,6 +663,7 @@ mod tests {
             max_tokens: Some(64),
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -636,6 +686,7 @@ mod tests {
             max_tokens: None,
             n: Some(2),
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -662,6 +713,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -706,6 +758,7 @@ mod tests {
                     parameters: serde_json::json!({"type":"object"}),
                 },
             }],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -744,6 +797,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -907,6 +961,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -951,6 +1006,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -973,6 +1029,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -1001,6 +1058,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -1022,6 +1080,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: Some(inferd_openai_wire::ResponseFormat::JsonSchema {
                 json_schema: inferd_openai_wire::JsonSchemaSpec {
@@ -1053,6 +1112,7 @@ mod tests {
                 max_tokens: None,
                 n: None,
                 tools: vec![],
+                tool_choice: None,
                 stream_options: None,
                 response_format: Some(rf),
             };
@@ -1079,6 +1139,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -1103,6 +1164,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -1157,6 +1219,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         }
@@ -1303,6 +1366,7 @@ mod tests {
             max_tokens: None,
             n: None,
             tools: vec![],
+            tool_choice: None,
             stream_options: None,
             response_format: None,
         };
@@ -1327,6 +1391,96 @@ mod tests {
         match &resp.data[0].embedding {
             EmbeddingVector::Floats(v) => assert_eq!(v.len(), 2),
             other => panic!("expected floats, got {other:?}"),
+        }
+    }
+
+    /// A `tool_choice` string maps onto the daemon's constraint, and the
+    /// `n`-of-`tools` guard fires before it: the daemon rejects a
+    /// `tool_choice` with no tools, so catching it here gives a 400 with
+    /// a bridge-shaped message instead of an IPC round trip.
+    #[test]
+    fn tool_choice_modes_map_when_tools_are_declared() {
+        for (mode, want) in [
+            (ToolChoiceMode::Auto, ToolChoice::Auto),
+            (ToolChoiceMode::Required, ToolChoice::Required),
+            (ToolChoiceMode::None, ToolChoice::None),
+        ] {
+            let mut req = req_with_one_tool();
+            req.tool_choice = Some(OpenAiToolChoice::Mode(mode));
+            let v2 = chat_request_to_v2(req, "i".into(), None).unwrap();
+            assert_eq!(v2.tool_choice, Some(want), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn tool_choice_without_tools_is_rejected() {
+        let mut req = req_with_one_tool();
+        req.tools = vec![];
+        req.tool_choice = Some(OpenAiToolChoice::Mode(ToolChoiceMode::Required));
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), None),
+            Err(TranslateError::ToolChoiceWithoutTools)
+        ));
+    }
+
+    /// Naming a function is rejected rather than widened to `required`:
+    /// widening would let the model call a *different* declared tool
+    /// while the caller believed it had pinned one.
+    #[test]
+    fn named_tool_choice_is_rejected_not_widened() {
+        let mut req = req_with_one_tool();
+        req.tool_choice = Some(OpenAiToolChoice::Named(NamedToolChoice {
+            kind: "function".into(),
+            function: NamedToolChoiceFunction {
+                name: "get_weather".into(),
+            },
+        }));
+        match chat_request_to_v2(req, "i".into(), None) {
+            Err(TranslateError::NamedToolChoice(name)) => assert_eq!(name, "get_weather"),
+            other => panic!("expected NamedToolChoice, got {other:?}"),
+        }
+    }
+
+    /// Unlike `response_format`, an unrecognised `tool_choice` is an
+    /// error, not a silent drop: the caller asked for a guarantee.
+    #[test]
+    fn unrecognised_tool_choice_is_rejected() {
+        let mut req = req_with_one_tool();
+        req.tool_choice = Some(OpenAiToolChoice::Mode(ToolChoiceMode::Other));
+        assert!(matches!(
+            chat_request_to_v2(req, "i".into(), None),
+            Err(TranslateError::BadToolChoice)
+        ));
+    }
+
+    /// Absent `tool_choice` must stay absent: a request that declares
+    /// tools without a choice keeps the daemon's default behaviour.
+    #[test]
+    fn absent_tool_choice_stays_absent() {
+        let v2 = chat_request_to_v2(req_with_one_tool(), "i".into(), None).unwrap();
+        assert_eq!(v2.tool_choice, None);
+    }
+
+    fn req_with_one_tool() -> ChatRequest {
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![msg("user", "weather in Paris?")],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: vec![ToolDecl {
+                kind: "function".into(),
+                function: ToolDeclFunction {
+                    name: "get_weather".into(),
+                    description: "gets weather".into(),
+                    parameters: serde_json::json!({"type":"object"}),
+                },
+            }],
+            tool_choice: None,
+            stream_options: None,
+            response_format: None,
         }
     }
 }

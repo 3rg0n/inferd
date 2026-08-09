@@ -28,6 +28,51 @@ pub enum ResponseFormat {
     },
 }
 
+/// How hard the daemon should push the model toward calling a tool.
+///
+/// Serialised as a bare JSON string (`"auto"` / `"required"` /
+/// `"none"`), matching how OpenAI and Anthropic spell the same three
+/// modes, so a bridge maps it without inventing an envelope.
+///
+/// This is a *constraint*, not a hint, on backends that advertise
+/// `tools` support: the llamacpp backend compiles the loaded family's
+/// tool-call syntax to a GBNF grammar and installs it on the sampler,
+/// so `Required` cannot come back as prose. Backends whose upstream
+/// has its own equivalent (the cloud adapters) forward it; a backend
+/// that can express neither rejects the request rather than silently
+/// downgrading to a hint — a fail-open `tool_choice` is worse than an
+/// absent one, because the caller believes it holds a guarantee.
+///
+/// Forward-compatibility: an unrecognised value deserialises to
+/// [`ToolChoice::Unknown`] rather than failing the parse, and the
+/// daemon rejects it explicitly. Naming a *specific* tool (OpenAI's
+/// `{"type":"function","function":{"name":…}}`) is deliberately not
+/// modelled yet; it stays additive because this enum is non-exhaustive
+/// in effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoice {
+    /// The model decides. Equivalent to omitting the field, except the
+    /// grammar (when the backend installs one) additionally constrains
+    /// the *shape* of a call the model chooses to make.
+    Auto,
+    /// The model must emit at least one tool call. On llamacpp this is
+    /// a non-lazy grammar whose root requires one, so no path through
+    /// sampling produces a bare text answer.
+    Required,
+    /// The model must not call a tool. Tool declarations still reach
+    /// the prompt (removing them would change the rendered context),
+    /// but no grammar is installed and the daemon does not shape the
+    /// output toward a call.
+    None,
+    /// Any value this build does not recognise. Kept so a newer
+    /// client's request parses; the daemon then rejects it with
+    /// `invalid_request` rather than guessing which of the three modes
+    /// was meant.
+    #[serde(other)]
+    Unknown,
+}
+
 /// Conversation role on a v2 message.
 ///
 /// Same set as v1's `Role` (system / user / assistant) but defined
@@ -151,6 +196,14 @@ pub struct RequestV2 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
 
+    /// How hard to push the model toward calling one of `tools`.
+    /// Absent means [`ToolChoice::Auto`]'s *behaviour* without the
+    /// grammar — i.e. exactly what pre-v0.8 clients got — so omitting
+    /// it is behaviour-preserving. Meaningless without `tools`, and the
+    /// daemon rejects that combination rather than ignoring the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+
     /// Sampling temperature; daemon applies engine default if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -209,6 +262,11 @@ pub struct ResolvedV2 {
     pub attachments: Vec<Attachment>,
     /// Validated tool definitions.
     pub tools: Vec<Tool>,
+    /// Tool-choice constraint, if set. `resolve` has already rejected
+    /// [`ToolChoice::Unknown`] and any value sent without `tools`, so a
+    /// backend reading this can trust it names one of the three modes
+    /// and that `tools` is non-empty.
+    pub tool_choice: Option<ToolChoice>,
     /// Sampling temperature, if set.
     pub temperature: Option<f64>,
     /// Nucleus sampling probability, if set.
@@ -283,6 +341,26 @@ impl RequestV2 {
             }
         }
 
+        // `tool_choice` is a constraint on `tools`, so it is only
+        // meaningful alongside them, and an unrecognised mode must not
+        // be silently treated as `auto`. Both cases are rejected here
+        // rather than dropped: a caller who asked for `required` and
+        // got best-effort text has been handed a false guarantee, which
+        // is the fail-open failure this field exists to close.
+        match self.tool_choice {
+            Some(ToolChoice::Unknown) => {
+                return Err(ProtoError::InvalidRequest(
+                    "tool_choice must be one of: auto, required, none".into(),
+                ));
+            }
+            Some(_) if self.tools.is_empty() => {
+                return Err(ProtoError::InvalidRequest(
+                    "tool_choice requires a non-empty tools array".into(),
+                ));
+            }
+            _ => {}
+        }
+
         for (mi, msg) in self.messages.iter().enumerate() {
             if msg.content.is_empty() {
                 return Err(ProtoError::InvalidRequest(format!(
@@ -305,6 +383,7 @@ impl RequestV2 {
             messages: self.messages,
             attachments: self.attachments,
             tools: self.tools,
+            tool_choice: self.tool_choice,
             temperature: self.temperature,
             top_p: self.top_p,
             top_k: self.top_k,
@@ -469,6 +548,117 @@ mod tests {
 
         assert_eq!(req, deserialized);
         assert!(deserialized.response_format.is_none());
+    }
+
+    fn tool() -> Tool {
+        Tool {
+            name: "get_weather".to_owned(),
+            description: "look up the weather".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn req_with(tools: Vec<Tool>, tool_choice: Option<ToolChoice>) -> RequestV2 {
+        RequestV2 {
+            wire_version: 1,
+            id: "tc".to_owned(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "weather?".to_owned(),
+                }],
+            }],
+            tools,
+            tool_choice,
+            ..Default::default()
+        }
+    }
+
+    /// The wire spelling is a bare string, not a tagged object — a
+    /// bridge maps OpenAI's `"required"` straight through, and this is
+    /// the frozen shape, so pin it rather than only round-tripping.
+    #[test]
+    fn tool_choice_serialises_as_a_bare_string() {
+        for (choice, want) in [
+            (ToolChoice::Auto, "\"auto\""),
+            (ToolChoice::Required, "\"required\""),
+            (ToolChoice::None, "\"none\""),
+        ] {
+            let got = serde_json::to_string(&choice).expect("serialize");
+            assert_eq!(got, want);
+            let back: ToolChoice = serde_json::from_str(&got).expect("deserialize");
+            assert_eq!(back, choice);
+        }
+    }
+
+    #[test]
+    fn tool_choice_round_trips_on_the_envelope() {
+        let req = req_with(vec![tool()], Some(ToolChoice::Required));
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(
+            json.contains(r#""tool_choice":"required""#),
+            "envelope: {json}"
+        );
+        let back: RequestV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(req, back);
+    }
+
+    /// Absent `tool_choice` must stay absent on the wire: a v0.7 daemon
+    /// reading a v0.8 client's text-only frame sees no new key at all.
+    #[test]
+    fn absent_tool_choice_is_not_serialised() {
+        let req = req_with(Vec::new(), None);
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(!json.contains("tool_choice"), "envelope: {json}");
+        let back: RequestV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.tool_choice, None);
+        assert_eq!(back.resolve().expect("resolves").tool_choice, None);
+    }
+
+    /// Forward-compat: a newer client's mode must parse (so the frame is
+    /// readable) but must NOT resolve — silently treating an unknown
+    /// mode as `auto` would answer a `required`-shaped request with
+    /// best-effort prose.
+    #[test]
+    fn unknown_tool_choice_parses_but_is_rejected() {
+        let json = r#"{"wire_version":1,"id":"tc","messages":[{"role":"user",
+            "content":[{"type":"text","text":"hi"}]}],
+            "tools":[{"name":"t","description":"d","input_schema":{}}],
+            "tool_choice":"tool_named_foo"}"#;
+        let req: RequestV2 = serde_json::from_str(json).expect("must parse");
+        assert_eq!(req.tool_choice, Some(ToolChoice::Unknown));
+
+        let err = req.resolve().expect_err("must not resolve");
+        assert!(
+            matches!(err, ProtoError::InvalidRequest(ref m) if m.contains("tool_choice")),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `tool_choice` constrains `tools`; without them there is nothing
+    /// to constrain, and honouring it would be a no-op the caller reads
+    /// as enforcement.
+    #[test]
+    fn tool_choice_without_tools_is_rejected() {
+        for choice in [ToolChoice::Auto, ToolChoice::Required, ToolChoice::None] {
+            let err = req_with(Vec::new(), Some(choice))
+                .resolve()
+                .expect_err("must reject tool_choice with no tools");
+            assert!(
+                matches!(err, ProtoError::InvalidRequest(ref m) if m.contains("tools")),
+                "unexpected error for {choice:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_choice_with_tools_resolves_and_carries_through() {
+        for choice in [ToolChoice::Auto, ToolChoice::Required, ToolChoice::None] {
+            let resolved = req_with(vec![tool()], Some(choice))
+                .resolve()
+                .expect("must resolve");
+            assert_eq!(resolved.tool_choice, Some(choice));
+        }
     }
 
     /// THREAT_MODEL F-1: the 64 MiB frame cap bounds one *frame*, not one

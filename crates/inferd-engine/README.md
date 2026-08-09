@@ -19,7 +19,12 @@ being broken by the addition. The v1 text-only `generate` method was
 removed in v0.4 when v1 folded into v2 (ADR 0021). As of v0.5,
 `generate_v2` honours `response_format` (a JSON Schema) by compiling it
 to a GBNF grammar so output is constrained to match the schema
-(ADR 0013).
+(ADR 0013). It enforces `tool_choice` (ADR 0029) the same way, through
+`ChatRenderer::tool_call_grammar` — whose default implementation
+**refuses every mode**, so a renderer family opts in deliberately instead
+of inheriting a silently-unenforced `required`. The two are mutually
+exclusive: one grammar sampler exists, so a request carrying both is
+rejected rather than having one constraint dropped.
 
 ## Rerank needs its own context, and fails at load time
 

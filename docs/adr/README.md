@@ -33,6 +33,7 @@ implementation choices aren't.
 | [0026](0026-chat-renderer-registry-per-model-family.md) | Chat rendering is a registry keyed to model family, not a hardcoded Gemma renderer (resolve at load from operator config or GGUF metadata; fail the load when no renderer matches, rather than silently rendering a foreign model in Gemma's grammar; no jinja evaluator in the daemon) | Proposed |
 | [0027](0027-reranking-on-a-fourth-socket.md) | Reranking on a fourth socket — cross-encoder scores, not vectors (`LLAMA_POOLING_TYPE_RANK`; own NDJSON socket bound only on capability; daemon owns query/document pair formatting; ADR 0012 not relaxed — operators run a second process; runtime config flag, not a build feature) | Accepted |
 | [0028](0028-airgapped-build-profile.md) | The airgapped build is a default-on `model-fetch` feature turned *off*, not an opt-in feature turned on (cargo features cannot remove a dependency, so `--no-default-features` is the only shape where "no TLS stack linked" is provable by `cargo tree`; adds `inferdctl import`; two artifacts per platform from one code path) | Accepted |
+| [0029](0029-tool-choice-is-enforced-by-grammar-not-advertised.md) | `tool_choice` is enforced by grammar, not advertised as a hint (eager GBNF root for `required` masks EOG so prose is unreachable; text-level exclusion for `none`; hand-written per family because Gemma 4's call syntax is not JSON; rejects `response_format` + `tool_choice` rather than silently dropping one; cloud adapters forward or error, never drop) | Accepted |
 
 ## Writing a new ADR
 

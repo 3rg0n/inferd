@@ -41,11 +41,13 @@
 
 mod gemma4;
 mod granite;
+mod tool_grammar;
 
 pub use gemma4::Gemma4Renderer;
 pub use granite::GraniteRenderer;
+pub use tool_grammar::{GRAMMAR_ROOT, ToolGrammar};
 
-use inferd_proto::v2::{Attachment, ResolvedV2};
+use inferd_proto::v2::{Attachment, ResolvedV2, Tool, ToolChoice};
 
 /// The mtmd default media marker. A renderer emits this substring in
 /// place of an image / audio / video content block; `mtmd_tokenize`
@@ -208,6 +210,39 @@ pub trait ChatRenderer: Send + Sync + std::fmt::Debug {
     /// same reason as [`Self::supports_tools`].
     fn supports_thinking(&self) -> bool {
         true
+    }
+
+    /// Build the constrained-decoding grammar that makes `choice` a
+    /// *guarantee* for this family's tool-call syntax, or `None` when
+    /// the mode needs no constraint.
+    ///
+    /// This is the enforcement half of `tool_choice`. Declaring tools
+    /// in the prompt is a request the model may ignore; without a
+    /// grammar, `required` would be a promise the daemon does not
+    /// keep — the model is free to answer in prose and the caller has
+    /// no way to tell that its constraint was dropped. That silent
+    /// fail-open is the same class of bug ADR 0025 refuses for audio
+    /// sample rates and ADR 0026 refuses for prompt families, so a
+    /// family that cannot enforce a mode must return
+    /// [`RenderError::Unsupported`] rather than an empty grammar.
+    ///
+    /// `tools` is non-empty whenever `choice` is `Some` —
+    /// `RequestV2::resolve` rejects `tool_choice` without tools, so
+    /// there is no "constrain to nothing" case to model here.
+    ///
+    /// The default refuses every mode, so a new family opts in
+    /// deliberately: inheriting a silently-unenforced `required` is
+    /// exactly the outcome this method exists to prevent.
+    fn tool_call_grammar(
+        &self,
+        choice: ToolChoice,
+        _tools: &[Tool],
+    ) -> Result<Option<ToolGrammar>, RenderError> {
+        let _ = choice;
+        Err(RenderError::Unsupported {
+            family: self.family(),
+            feature: "tool_choice",
+        })
     }
 }
 

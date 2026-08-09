@@ -166,6 +166,14 @@ complete `tool_use` block arrives whole when the model calls a tool
 declared in `RequestV2.Tools`. The stream terminates with one `done`
 (carrying `UsageV2` + `StopReasonV2`) or one `error`.
 
+`RequestV2.ToolChoice` constrains tool use: `ToolChoiceAuto`,
+`ToolChoiceRequired`, `ToolChoiceNone`. It is a constraint rather than a
+hint — on a backend that enforces it, `ToolChoiceRequired` cannot come
+back as text ([ADR 0029](https://github.com/3rg0n/inferd/blob/main/docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md)).
+The daemon rejects it without a non-empty `Tools`, and rejects it
+alongside `ResponseFormat`, since only one decoding constraint can be
+installed. Leave it empty to omit the field.
+
 ## Transports
 
 | Function | Platform | Default (`DefaultInferAddr()`) |

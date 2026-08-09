@@ -36,7 +36,7 @@
 
 use crate::backend::TokenEventV2;
 use inferd_proto::v2::{
-    ContentBlock, MessageV2, ResolvedV2, RoleV2, StopReasonV2, ToolCallId, UsageV2,
+    ContentBlock, MessageV2, ResolvedV2, RoleV2, StopReasonV2, ToolCallId, ToolChoice, UsageV2,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -58,6 +58,11 @@ pub enum BodyError {
     /// gate single-sided.
     #[error("bedrock-invoke tool_result content must be text only")]
     NonTextToolResult,
+    /// `tool_choice` carried a mode this adapter cannot forward.
+    /// `resolve()` rejects it before dispatch; reaching here means the
+    /// request bypassed validation.
+    #[error("bedrock-invoke adapter cannot forward an unrecognised tool_choice")]
+    UnknownToolChoice,
 }
 
 // --- Request body --------------------------------------------------
@@ -87,6 +92,32 @@ pub(super) struct AnthropicRequest {
     pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<AnthropicToolDecl>,
+    /// Forwarded `tool_choice`. Anthropic enforces this server-side, so
+    /// forwarding is what keeps a `required` request a constraint rather
+    /// than a hint on the far side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<AnthropicToolChoice>,
+}
+
+/// Anthropic's `tool_choice` object.
+///
+/// The vocabulary differs from OpenAI's and from inferd's: Anthropic
+/// spells "must call something" as `any`, not `required`, and adds
+/// `tool` for a named function (which inferd's wire cannot express, so
+/// nothing maps to it). Serialised as `{"type":"…"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum AnthropicToolChoice {
+    /// The model decides.
+    Auto,
+    /// The model must call one of the declared tools — Anthropic's
+    /// spelling of inferd's `required`.
+    Any,
+    /// The model must not call a tool. Newer than the rest of this
+    /// surface; a model revision that predates it answers with a
+    /// Bedrock validation error, which is the loud failure we want — a
+    /// caller who asked for `none` must not silently get `auto`.
+    None,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +213,16 @@ pub(super) fn request_body(resolved: &ResolvedV2) -> Result<AnthropicRequest, Bo
         })
         .collect();
 
+    let tool_choice = match resolved.tool_choice {
+        None => None,
+        Some(ToolChoice::Auto) => Some(AnthropicToolChoice::Auto),
+        Some(ToolChoice::Required) => Some(AnthropicToolChoice::Any),
+        Some(ToolChoice::None) => Some(AnthropicToolChoice::None),
+        // `resolve()` rejects this before dispatch. Forwarding nothing
+        // would downgrade the caller's constraint to a hint, so refuse.
+        Some(ToolChoice::Unknown) => return Err(BodyError::UnknownToolChoice),
+    };
+
     Ok(AnthropicRequest {
         anthropic_version: "bedrock-2023-05-31",
         messages,
@@ -191,6 +232,7 @@ pub(super) fn request_body(resolved: &ResolvedV2) -> Result<AnthropicRequest, Bo
         top_p: resolved.top_p,
         top_k: resolved.top_k,
         tools,
+        tool_choice,
     })
 }
 
@@ -651,6 +693,7 @@ mod tests {
             }],
             attachments: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             temperature: None,
             top_p: None,
             top_k: None,
@@ -896,5 +939,62 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Anthropic spells `required` as `any`. Getting this wrong is
+    /// silent: `{"type":"required"}` is not a value Anthropic knows, so
+    /// pin the emitted JSON, not just the Rust enum.
+    #[test]
+    fn tool_choice_maps_to_anthropics_vocabulary() {
+        for (choice, want) in [
+            (ToolChoice::Auto, "auto"),
+            (ToolChoice::Required, "any"),
+            (ToolChoice::None, "none"),
+        ] {
+            let r = resolved_with_tool_choice(Some(choice));
+            let body = request_body(&r).unwrap();
+            let json = serde_json::to_value(&body).unwrap();
+            assert_eq!(
+                json["tool_choice"],
+                json!({"type": want}),
+                "{choice:?}: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_tool_choice_is_not_sent() {
+        let r = resolved_with_tool_choice(None);
+        let body = request_body(&r).unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json.get("tool_choice").is_none(), "{json}");
+    }
+
+    #[test]
+    fn unknown_tool_choice_is_rejected() {
+        let mut r = resolved_with_tool_choice(Some(ToolChoice::Auto));
+        r.tool_choice = Some(ToolChoice::Unknown);
+        assert_eq!(request_body(&r).unwrap_err(), BodyError::UnknownToolChoice);
+    }
+
+    fn resolved_with_tool_choice(choice: Option<ToolChoice>) -> ResolvedV2 {
+        RequestV2 {
+            id: "req-1".into(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::Text {
+                    text: "weather?".into(),
+                }],
+            }],
+            tools: vec![Tool {
+                name: "get_weather".into(),
+                description: "gets weather".into(),
+                input_schema: json!({"type": "object"}),
+            }],
+            tool_choice: choice,
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap()
     }
 }

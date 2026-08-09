@@ -109,6 +109,14 @@ What ships today (v0.7):
   `response_format` JSON Schema, which the daemon compiles to a GBNF
   grammar so output is constrained to match the schema. Reachable both on
   the native wire and through the `inferd-http` bridge.
+- **Enforced `tool_choice`** (ADR 0029): `auto` / `required` / `none` as a
+  *constraint*, not a hint. `required` installs an eager grammar whose
+  root demands a complete tool call, which masks every end-of-generation
+  token until one is emitted — so the model cannot answer in prose
+  instead. A backend that cannot enforce the requested mode rejects the
+  request rather than accepting it and trying. Because only one grammar
+  can be installed, `response_format` and `tool_choice` together are
+  rejected instead of one being silently dropped.
 - **No inbound network listener** (ADR 0022): the daemon binds a Unix
   socket / named pipe only; loopback TCP was removed. Network reach is a
   separate bridge process's job (ADR 0020).

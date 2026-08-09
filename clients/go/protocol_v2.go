@@ -171,6 +171,30 @@ type ToolV2 struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// ToolChoice constrains whether the model may, must, or must not call a
+// tool. It is a constraint rather than a hint on backends that advertise
+// tool support: the llamacpp backend compiles the loaded family's
+// tool-call syntax to a grammar and installs it on the sampler, so
+// ToolChoiceRequired cannot come back as prose.
+//
+// The daemon rejects a ToolChoice sent without Tools, and rejects it
+// alongside ResponseFormat — only one grammar can be installed, so
+// honouring either would silently drop the other.
+type ToolChoice string
+
+const (
+	// ToolChoiceAuto lets the model decide. Equivalent to omitting the
+	// field, except the daemon additionally constrains the *shape* of a
+	// call the model chooses to make.
+	ToolChoiceAuto ToolChoice = "auto"
+	// ToolChoiceRequired forces at least one tool call: no path through
+	// sampling produces a bare text answer.
+	ToolChoiceRequired ToolChoice = "required"
+	// ToolChoiceNone forbids a tool call. Tool declarations still reach
+	// the prompt, so the rendered context is unchanged.
+	ToolChoiceNone ToolChoice = "none"
+)
+
 // RequestV2 is the v2 inference request envelope (ADR 0015). Populate
 // ID and Messages; Attachments / Tools / sampling fields are optional.
 //
@@ -205,6 +229,10 @@ type RequestV2 struct {
 	Messages     []MessageV2      `json:"messages"`
 	Attachments  []AttachmentV2   `json:"attachments,omitempty"`
 	Tools        []ToolV2         `json:"tools,omitempty"`
+	// ToolChoice constrains tool use. Empty means omitted (the daemon
+	// applies its default); see ToolChoice for the values. Requires a
+	// non-empty Tools.
+	ToolChoice   ToolChoice       `json:"tool_choice,omitempty"`
 	Temperature  *float64         `json:"temperature,omitempty"`
 	TopP         *float64         `json:"top_p,omitempty"`
 	TopK         *uint32          `json:"top_k,omitempty"`

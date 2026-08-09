@@ -19,8 +19,14 @@ types plus the frame codecs with the 64 MiB per-frame cap
   ResponseFormat, StopReasonV2, UsageV2, ErrorCodeV2, WIRE_VERSION}` —
   the single generation surface (typed content blocks, attachments,
   tools, in-band `wire_version`). `RequestV2.response_format`
-  (`json_schema`, v0.5.0) and `RequestV2.thinking` (reasoning
-  activation, v0.5.1) are optional, backwards-additive fields.
+  (`json_schema`, v0.5.0), `RequestV2.thinking` (reasoning activation,
+  v0.5.1) and `RequestV2.tool_choice` (`auto`/`required`/`none`,
+  ADR 0029) are optional, backwards-additive fields. `tool_choice` is a
+  constraint rather than a hint: `resolve()` rejects it without a
+  non-empty `tools`, rejects it alongside `response_format` (only one
+  decoding constraint can be installed), and rejects an unrecognised
+  value — which still *parses*, as `ToolChoice::Unknown`, so a newer
+  client's frame is not a parse failure.
 - `embed::{EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask,
   EmbedUsage, EmbedErrorCode}` — the embeddings surface (ADR 0017).
 - `rerank::{RerankRequest, RerankResolved, RerankResponse, RerankResult,

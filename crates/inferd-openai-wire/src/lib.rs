@@ -59,6 +59,12 @@ pub struct ChatRequest {
     /// Tool declarations the model may call.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDecl>,
+    /// Whether the model may / must / must not call a tool. Inbound maps
+    /// the three string forms to the daemon's `tool_choice`; the
+    /// named-function form is rejected (see [`ToolChoice`]). Outbound
+    /// forwards whatever the daemon asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     /// Ask the provider to include usage in the final stream chunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
@@ -67,6 +73,70 @@ pub struct ChatRequest {
     /// (ADR 0013); other forms are ignored (best-effort text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+}
+
+/// OpenAI `tool_choice`.
+///
+/// The wire allows two shapes: one of the strings `"auto"` / `"required"`
+/// / `"none"`, or an object naming a specific function
+/// (`{"type":"function","function":{"name":"…"}}`). This enum is
+/// untagged so both parse, and keeps the object form as a distinct
+/// variant rather than folding it into `Required` — the daemon's wire has
+/// no way to express "this tool and no other", so accepting it as
+/// `required` would let the model call a *different* declared tool while
+/// the caller believed it had pinned one. The inbound bridge rejects it
+/// with 400; widening the daemon's `ToolChoice` is the additive change
+/// that would support it.
+///
+/// `Other` catches an unrecognised string so a newer client's request
+/// still parses; the bridge then rejects it explicitly.
+///
+/// Variant order is load-bearing: an untagged enum tries variants in
+/// declaration order, and `ToolChoiceMode`'s `#[serde(other)]` arm makes
+/// it accept an *object* too (serde reads a map as the externally-tagged
+/// form of a unit-only enum, and an unknown tag lands on `Other`). With
+/// `Named` first, the object form matches the variant that models it;
+/// only if that fails does the string form get a turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    /// `{"type":"function","function":{"name":"…"}}`.
+    Named(NamedToolChoice),
+    /// One of the bare-string modes, or an unrecognised string.
+    Mode(ToolChoiceMode),
+}
+
+/// The bare-string forms of [`ToolChoice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoiceMode {
+    /// The model decides.
+    Auto,
+    /// The model must call a tool.
+    Required,
+    /// The model must not call a tool.
+    None,
+    /// Any other string. Kept so the request parses; rejected by the
+    /// bridge rather than guessed at.
+    #[serde(other)]
+    Other,
+}
+
+/// The object form of [`ToolChoice`], pinning one function by name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedToolChoice {
+    /// Always `"function"` on the OpenAI wire.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The named function.
+    pub function: NamedToolChoiceFunction,
+}
+
+/// The `function` object inside a [`NamedToolChoice`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedToolChoiceFunction {
+    /// The function the model must call.
+    pub name: String,
 }
 
 /// `stream_options` object — only `include_usage` is used.
@@ -455,4 +525,95 @@ pub struct ErrorBody {
     /// Optional machine code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `tool_choice` has two shapes on the OpenAI wire: a bare string
+    /// and an object naming a function. Both must land on the variant
+    /// that can carry them.
+    #[test]
+    fn tool_choice_string_forms_parse_as_modes() {
+        for (json, want) in [
+            ("\"auto\"", ToolChoiceMode::Auto),
+            ("\"required\"", ToolChoiceMode::Required),
+            ("\"none\"", ToolChoiceMode::None),
+        ] {
+            let got: ToolChoice = serde_json::from_str(json).expect("parse");
+            assert_eq!(got, ToolChoice::Mode(want), "{json}");
+        }
+    }
+
+    /// The object form must reach `Named`, not get swallowed by
+    /// `ToolChoiceMode`'s `#[serde(other)]` — serde reads a map as the
+    /// externally-tagged form of a unit-only enum, so untagged variant
+    /// order is load-bearing. If this regresses, a named choice would
+    /// be reported as "unsupported value" instead of the specific
+    /// "naming a function is not supported" error.
+    #[test]
+    fn tool_choice_object_form_reaches_named_not_other() {
+        let got: ToolChoice =
+            serde_json::from_str(r#"{"type":"function","function":{"name":"get_weather"}}"#)
+                .expect("parse");
+        match got {
+            ToolChoice::Named(n) => {
+                assert_eq!(n.kind, "function");
+                assert_eq!(n.function.name, "get_weather");
+            }
+            other => panic!("expected Named, got {other:?}"),
+        }
+    }
+
+    /// An unrecognised string must parse (forward compatibility) and be
+    /// distinguishable, so the caller can reject it rather than guess.
+    #[test]
+    fn unknown_tool_choice_string_parses_as_other() {
+        let got: ToolChoice = serde_json::from_str("\"any\"").expect("parse");
+        assert_eq!(got, ToolChoice::Mode(ToolChoiceMode::Other));
+    }
+
+    /// Absent `tool_choice` must not appear in a serialised request:
+    /// upstreams differ on which values they accept, and a spurious
+    /// `null` is rejected by some.
+    #[test]
+    fn absent_tool_choice_is_not_serialised() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: Vec::new(),
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: Vec::new(),
+            tool_choice: None,
+            stream_options: None,
+            response_format: None,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(!json.contains("tool_choice"), "{json}");
+    }
+
+    /// Round-trip the mode form on the envelope so the outbound adapter
+    /// emits exactly what OpenAI documents.
+    #[test]
+    fn tool_choice_mode_serialises_as_a_bare_string() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: Vec::new(),
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            n: None,
+            tools: Vec::new(),
+            tool_choice: Some(ToolChoice::Mode(ToolChoiceMode::Required)),
+            stream_options: None,
+            response_format: None,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(json.contains(r#""tool_choice":"required""#), "{json}");
+    }
 }

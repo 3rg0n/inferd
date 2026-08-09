@@ -171,6 +171,16 @@ non-loopback use:
   daemon's grammar-constrained decoding, so output conforms to your JSON
   Schema. `{"type":"json_object"}` / `{"type":"text"}` carry no schema, so
   they're unconstrained (best-effort JSON via the prompt only).
+- **`tool_choice` is supported** for the three string forms (`"auto"`,
+  `"required"`, `"none"`), which map to the daemon's constraint (ADR 0029)
+  — `required` really cannot come back as prose. Two 400s: the
+  named-function form `{"type":"function","function":{"name":…}}` is
+  rejected rather than widened to `"required"` (widening would let the
+  model call a *different* declared tool while you believed you had
+  pinned one — send `"required"` with only that tool declared instead),
+  and `tool_choice` alongside `response_format` is rejected because only
+  one decoding constraint can be installed. Unlike `response_format`, an
+  unrecognised `tool_choice` is an error, not a silent no-op.
 - **Unsupported OpenAI params:** `n > 1` → 400; `logprobs`,
   `presence_penalty`, `frequency_penalty` are ignored. Image **and** audio
   input are supported (see Vision / Audio above). Audio *output*

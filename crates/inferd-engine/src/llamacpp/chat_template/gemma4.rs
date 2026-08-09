@@ -47,9 +47,21 @@
 //! the markers and splices the per-modality fence tokens
 //! (`<start_of_image>...<end_of_image>`, etc.) in.
 
+use super::tool_grammar::{ToolGrammar, escape_literal, push_exclusion_rules, regex_escape};
 use super::{ChatFamily, ChatRenderer, MEDIA_MARKER, RenderError, Rendered};
-use inferd_proto::v2::{Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool, ToolCallId};
+use inferd_proto::v2::{
+    Attachment, ContentBlock, MessageV2, ResolvedV2, RoleV2, Tool, ToolCallId, ToolChoice,
+};
 use serde_json::Value;
+use std::fmt::Write as _;
+
+/// The tool-call opener. Also the lazy-grammar trigger: the model
+/// emitting this substring is the moment it commits to a call.
+const TOOL_OPEN: &str = "<|tool_call>";
+/// The tool-call closer.
+const TOOL_CLOSE: &str = "<tool_call|>";
+/// Gemma's string fence, standing in for JSON's `"`.
+const STRING_FENCE: &str = "<|\"|>";
 
 /// Stateless Gemma 4 renderer. Construct with [`Gemma4Renderer::new`]
 /// and call [`ChatRenderer::render`] per request.
@@ -159,6 +171,201 @@ impl ChatRenderer for Gemma4Renderer {
             attachments,
         })
     }
+
+    fn tool_call_grammar(
+        &self,
+        choice: ToolChoice,
+        tools: &[Tool],
+    ) -> Result<Option<ToolGrammar>, RenderError> {
+        match choice {
+            // `auto` is the pre-`tool_choice` behaviour plus a safety
+            // net. A *lazy* grammar constrains nothing until the model
+            // emits `<|tool_call>`; from that point the syntax is
+            // pinned, so the model can no longer produce a call body
+            // the parser will reject as `Malformed` — which today
+            // aborts an otherwise good generation. It cannot force a
+            // call, and must not: that is what `required` is for.
+            ToolChoice::Auto => Ok(Some(ToolGrammar {
+                gbnf: gemma4_tool_call_gbnf(tools, false),
+                triggers: vec![regex_escape(TOOL_OPEN)],
+            })),
+
+            // `required` is the mode that needs real enforcement. An
+            // eager grammar whose root demands one complete call means
+            // no stack is empty until the closer is emitted, and
+            // `llama_grammar_apply_impl` masks every end-of-generation
+            // token while that holds — so the model cannot end its
+            // turn with prose instead.
+            ToolChoice::Required => Ok(Some(ToolGrammar {
+                gbnf: gemma4_tool_call_gbnf(tools, true),
+                triggers: Vec::new(),
+            })),
+
+            // `none` means the tools are visible but off-limits this
+            // turn. Upstream builds no grammar here, which leaves the
+            // mode advisory. We constrain instead, because a model
+            // that calls a forbidden tool anyway produces a
+            // `ToolUse` block the caller explicitly said it would not
+            // handle.
+            //
+            // The constraint has to be over *text*, not token ids: a
+            // `!<|tool_call>` token rule would only bar the single
+            // control token, while `<`, `|tool`, `_call>` spells the
+            // same opener in ordinary pieces and inferd's parser
+            // scans the detokenised text, so it would fire on the
+            // spelled-out form. The exclusion automaton bars the
+            // string however it is tokenised.
+            ToolChoice::None => Ok(Some(ToolGrammar {
+                gbnf: gemma4_no_tool_call_gbnf(),
+                triggers: Vec::new(),
+            })),
+
+            // `resolve()` rejects `Unknown` before it can reach a
+            // renderer. Treating it as `auto` here would resurrect the
+            // fail-open the wire-level check exists to close, so it
+            // refuses.
+            ToolChoice::Unknown => Err(RenderError::Unsupported {
+                family: ChatFamily::Gemma4,
+                feature: "an unrecognised tool_choice mode",
+            }),
+        }
+    }
+}
+
+/// The value-shape rules shared by every mode that admits a call
+/// body, transposed from `common_chat_params_init_gemma4`
+/// (`vendor/llama.cpp/common/chat.cpp`).
+///
+/// Two deliberate narrowings versus upstream, both because inferd
+/// parses these bodies with [`super::super::tool_parser`] rather than
+/// upstream's PEG, and a grammar wider than its own parser admits
+/// output the parser then rejects as `Malformed`:
+///
+/// 1. **Keys.** Upstream's `gemma4-dict-key-name` is `[^:}]+`, which
+///    permits `{a b:1}` and `{"a":1}`. inferd's `quote_bare_keys`
+///    quotes only `[A-Za-z][A-Za-z0-9_]*`, so anything else reaches
+///    `serde_json` unquoted and fails to parse. The rule is narrowed
+///    to exactly that identifier shape.
+/// 2. **String content.** inferd converts `<|"|>` fences to `"` by
+///    substitution *before* parsing, so a literal `"` or `\` inside
+///    the content becomes a stray quote or a bogus escape in the JSON
+///    it hands to `serde_json`. Both are excluded, along with raw
+///    control characters, which JSON forbids unescaped.
+///
+/// Neither narrowing loses expressible arguments: a string value that
+/// needs a quote is not currently representable on this wire in
+/// either direction, so the grammar refusing it converts a
+/// mid-stream parse failure into a token the model never emits.
+fn push_value_rules(out: &mut String) {
+    // `"` and `\` break the fence→quote substitution described above;
+    // \x00-\x1f are the control characters JSON forbids bare.
+    //
+    // Excluding `"` also removes the need for an exclusion automaton
+    // over the closing fence: `<|"|>` contains a `"`, so no string
+    // this rule admits can contain the fence, and the content run
+    // terminates unambiguously at it.
+    out.push_str("str-safe ::= [^\\\"\\\\\\x00-\\x1f]\n");
+    let fence = escape_literal(STRING_FENCE);
+    let _ = writeln!(out, "gemma4-string ::= \"{fence}\" str-content \"{fence}\"");
+    out.push_str("str-content ::= str-safe*\n");
+    out.push_str("gemma4-bool ::= \"true\" | \"false\"\n");
+    out.push_str("gemma4-null ::= \"null\"\n");
+    out.push_str(
+        "gemma4-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
+    );
+    // Narrowed to what `quote_bare_keys` will quote — see the doc
+    // comment. Upstream: `[^:}]+`.
+    out.push_str("gemma4-dict-key ::= [a-zA-Z] [a-zA-Z0-9_]* \":\"\n");
+    out.push_str("gemma4-dict-kv ::= gemma4-dict-key ws gemma4-value\n");
+    out.push_str(
+        "gemma4-dict ::= \"{\" ws (\"}\" | gemma4-dict-kv (\",\" ws gemma4-dict-kv)* ws \"}\")\n",
+    );
+    out.push_str(
+        "gemma4-array ::= \"[\" ws (\"]\" | gemma4-value (\",\" ws gemma4-value)* ws \"]\")\n",
+    );
+    out.push_str(
+        "gemma4-value ::= gemma4-string | gemma4-dict | gemma4-array | gemma4-number | gemma4-bool | gemma4-null\n",
+    );
+    // Only spaces and tabs: `quote_bare_keys` skips exactly those when
+    // looking back for a key boundary, so a newline before a key would
+    // leave it unquoted and unparseable.
+    out.push_str("ws ::= [ \\t]*\n");
+}
+
+/// GBNF constraining a Gemma 4 tool call. `required` forces exactly one
+/// call; otherwise the root matches one call and is used lazily.
+///
+/// Only the tool *name* is constrained, not its arguments — a call to a
+/// tool that was never declared is unusable to the caller, so masking
+/// those names is the constraint that pays. Per-tool argument schemas
+/// are left unconstrained, matching upstream, which carries a live TODO
+/// there (`need to extend json-schema-to-grammar to produce more than
+/// JSON rules`): Gemma's body is not JSON, so the shipped
+/// `json_schema_to_gbnf` cannot express it and a second schema
+/// compiler would have to be written to close the gap. Arguments are
+/// still validated after parsing, they are simply not masked during
+/// decoding.
+fn gemma4_tool_call_gbnf(tools: &[Tool], required: bool) -> String {
+    let mut g = String::with_capacity(1024);
+
+    if required {
+        // Eager. The root demands a complete call, so no stack is
+        // empty until the closer lands and every EOG token stays
+        // masked until then — that masking *is* the guarantee.
+        //
+        // The leading `prefix` allows content before the call: Gemma 4
+        // reasons in a `<|channel>thought…<channel|>` block, and a
+        // root of bare `tool-call` would mask the `<` that opens it,
+        // forcing the model to call blind. `prefix` is the exclusion
+        // automaton for the opener, so that content cannot itself
+        // contain a call — one call, with room to think first.
+        //
+        // Every `prefix` state is nullable, so this does not weaken
+        // the guarantee: nullable means the model *may* stop adding
+        // content, never that it may stop before the call, because the
+        // `tool-call` that follows is not optional.
+        g.push_str("root ::= prefix-0 tool-call\n");
+        push_exclusion_rules(&mut g, "prefix-", TOOL_OPEN);
+    } else {
+        // Lazy: `llama_grammar_accept_impl` replays output from the
+        // trigger match onward, so the root starts at the opener and
+        // needs no preceding-content rule — anything before the
+        // trigger was never constrained at all.
+        g.push_str("root ::= tool-call\n");
+    }
+
+    let open = escape_literal(TOOL_OPEN);
+    let close = escape_literal(TOOL_CLOSE);
+    let _ = writeln!(g, "tool-call ::= \"{open}call:\" tool-body \"{close}\"");
+
+    // One alternative per declared tool. A tools array is non-empty
+    // whenever a grammar is built (`resolve()` guarantees it), so this
+    // alternation always has at least one branch — an empty one would
+    // make the root unmatchable and, under `required`, mask every
+    // token including EOG.
+    g.push_str("tool-body ::=");
+    for (i, tool) in tools.iter().enumerate() {
+        if i > 0 {
+            g.push_str(" |");
+        }
+        let _ = write!(g, " \"{}\" gemma4-dict", escape_literal(&tool.name));
+    }
+    g.push('\n');
+
+    push_value_rules(&mut g);
+    g
+}
+
+/// GBNF for `tool_choice: "none"` — any output that never contains the
+/// tool-call opener.
+///
+/// Eager and unconditional: there is nothing to trigger on, since the
+/// point is that the trigger must never occur.
+fn gemma4_no_tool_call_gbnf() -> String {
+    let mut g = String::with_capacity(512);
+    g.push_str("root ::= no-tool-0\n");
+    push_exclusion_rules(&mut g, "no-tool-", TOOL_OPEN);
+    g
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -402,6 +609,204 @@ fn render_text_only_response(out: &mut String, content: &[ContentBlock]) {
             } else {
                 out.push_str(text);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tool_grammar::check_rule_closure;
+    use super::*;
+    use serde_json::json;
+
+    fn tools(names: &[&str]) -> Vec<Tool> {
+        names
+            .iter()
+            .map(|n| Tool {
+                name: (*n).to_string(),
+                description: "d".into(),
+                input_schema: json!({"type": "object"}),
+            })
+            .collect()
+    }
+
+    fn grammar_for(choice: ToolChoice, names: &[&str]) -> ToolGrammar {
+        Gemma4Renderer::new()
+            .tool_call_grammar(choice, &tools(names))
+            .expect("gemma4 supports every valid mode")
+            .expect("every valid mode constrains something")
+    }
+
+    #[test]
+    fn every_mode_emits_a_closed_grammar() {
+        // The check that would otherwise only run at generation time,
+        // on the Tier-3 path that no default gate exercises.
+        for choice in [ToolChoice::Auto, ToolChoice::Required, ToolChoice::None] {
+            let g = grammar_for(choice, &["get_weather", "send_email"]);
+            assert_eq!(
+                check_rule_closure(&g.gbnf, "root"),
+                Ok(()),
+                "{choice:?} grammar:\n{}",
+                g.gbnf
+            );
+        }
+    }
+
+    #[test]
+    fn required_is_eager_and_auto_is_lazy() {
+        // The whole distinction between a guarantee and a hint. A lazy
+        // `required` could not force anything, because a grammar masks
+        // no tokens until it triggers.
+        let required = grammar_for(ToolChoice::Required, &["f"]);
+        assert!(!required.is_lazy(), "required must constrain from token 0");
+
+        let auto = grammar_for(ToolChoice::Auto, &["f"]);
+        assert!(auto.is_lazy(), "auto must not constrain ordinary prose");
+        assert_eq!(auto.triggers, vec![r"<\|tool_call>".to_string()]);
+    }
+
+    #[test]
+    fn required_root_demands_a_call_after_optional_content() {
+        let g = grammar_for(ToolChoice::Required, &["f"]);
+        // `prefix-0` is nullable and `tool-call` is not, which is what
+        // keeps every EOG token masked until the closer is emitted.
+        assert!(
+            g.gbnf.starts_with("root ::= prefix-0 tool-call\n"),
+            "{}",
+            g.gbnf
+        );
+        assert!(!g.gbnf.contains("tool-call?"), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn auto_root_starts_at_the_opener() {
+        // Lazy grammars are fed output from the trigger match onward, so
+        // a content prefix rule would be wrong here, not merely
+        // redundant: it would let the replayed opener be consumed as
+        // content.
+        let g = grammar_for(ToolChoice::Auto, &["f"]);
+        assert!(g.gbnf.starts_with("root ::= tool-call\n"), "{}", g.gbnf);
+        assert!(!g.gbnf.contains("prefix-"), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn the_call_body_alternates_over_exactly_the_declared_tools() {
+        let g = grammar_for(ToolChoice::Required, &["get_weather", "send_email"]);
+        let body = g
+            .gbnf
+            .lines()
+            .find(|l| l.starts_with("tool-body ::="))
+            .expect("tool-body rule");
+        assert_eq!(
+            body,
+            "tool-body ::= \"get_weather\" gemma4-dict | \"send_email\" gemma4-dict"
+        );
+    }
+
+    #[test]
+    fn the_call_wrapper_is_gemma_syntax_not_json() {
+        // Issue #38 proposed reusing `json_schema_to_gbnf`; this is the
+        // syntax that makes that impossible.
+        let g = grammar_for(ToolChoice::Required, &["f"]);
+        assert!(
+            g.gbnf
+                .contains("tool-call ::= \"<|tool_call>call:\" tool-body \"<tool_call|>\""),
+            "{}",
+            g.gbnf
+        );
+        assert!(
+            g.gbnf.contains("gemma4-string ::= \"<|\\\"|>\""),
+            "{}",
+            g.gbnf
+        );
+    }
+
+    #[test]
+    fn a_tool_name_cannot_break_out_of_its_literal() {
+        // Names arrive from the request. An unescaped `"` would close
+        // the literal and let the rest of the name be read as grammar.
+        let g = grammar_for(ToolChoice::Required, &["ev\"il"]);
+        assert!(g.gbnf.contains("\"ev\\\"il\" gemma4-dict"), "{}", g.gbnf);
+        assert_eq!(check_rule_closure(&g.gbnf, "root"), Ok(()), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn none_forbids_the_opener_and_triggers_on_nothing() {
+        let g = grammar_for(ToolChoice::None, &["f"]);
+        assert!(!g.is_lazy(), "a trigger would defeat the point of none");
+        assert!(g.gbnf.starts_with("root ::= no-tool-0\n"), "{}", g.gbnf);
+        // No call syntax at all: the language is "output without a call".
+        assert!(!g.gbnf.contains("tool-body"), "{}", g.gbnf);
+        assert!(!g.gbnf.contains("call:"), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn the_key_rule_matches_what_the_parser_can_quote() {
+        // Narrower than upstream's `[^:}]+` on purpose: `quote_bare_keys`
+        // only quotes `[A-Za-z][A-Za-z0-9_]*`, so a wider grammar would
+        // admit bodies our own parser reports as Malformed.
+        let g = grammar_for(ToolChoice::Required, &["f"]);
+        assert!(
+            g.gbnf
+                .contains("gemma4-dict-key ::= [a-zA-Z] [a-zA-Z0-9_]* \":\""),
+            "{}",
+            g.gbnf
+        );
+        assert!(!g.gbnf.contains("[^:}]"), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn string_content_excludes_what_the_fence_substitution_would_break() {
+        // The parser rewrites `<|"|>` to `"` and hands the result to
+        // serde_json, so a literal quote or backslash inside the content
+        // corrupts the JSON it parses.
+        let g = grammar_for(ToolChoice::Required, &["f"]);
+        assert!(
+            g.gbnf.contains(r#"str-safe ::= [^\"\\\x00-\x1f]"#),
+            "{}",
+            g.gbnf
+        );
+    }
+
+    #[test]
+    fn interstitial_whitespace_is_only_space_and_tab() {
+        // `quote_bare_keys` skips exactly space and tab when looking back
+        // for a key boundary, so permitting a newline there would produce
+        // an unquoted, unparseable key.
+        let g = grammar_for(ToolChoice::Required, &["f"]);
+        assert!(g.gbnf.contains(r"ws ::= [ \t]*"), "{}", g.gbnf);
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_rather_than_treated_as_auto() {
+        // `resolve()` rejects this first; if it ever reaches a renderer,
+        // silently downgrading it would restore the fail-open that the
+        // wire-level check exists to close.
+        let err = Gemma4Renderer::new()
+            .tool_call_grammar(ToolChoice::Unknown, &tools(&["f"]))
+            .expect_err("unknown must not produce a grammar");
+        assert!(matches!(err, RenderError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn granite_refuses_every_mode() {
+        // The trait default. A family whose prompt cannot express tool
+        // calls must not accept a tool_choice and ignore it.
+        use super::super::GraniteRenderer;
+        for choice in [ToolChoice::Auto, ToolChoice::Required, ToolChoice::None] {
+            let err = GraniteRenderer::new()
+                .tool_call_grammar(choice, &tools(&["f"]))
+                .expect_err("granite has no tool-call syntax");
+            assert!(
+                matches!(
+                    err,
+                    RenderError::Unsupported {
+                        family: ChatFamily::Granite,
+                        ..
+                    }
+                ),
+                "got: {err}"
+            );
         }
     }
 }

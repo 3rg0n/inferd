@@ -46,6 +46,7 @@ fn req(text: &str) -> ResolvedV2 {
         }],
         attachments: Vec::new(),
         tools: Vec::new(),
+        tool_choice: None,
         temperature: Some(0.7),
         top_p: Some(0.95),
         top_k: Some(40),

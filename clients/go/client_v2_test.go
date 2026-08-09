@@ -341,3 +341,40 @@ func TestAudioAttachmentConstructor(t *testing.T) {
 		t.Errorf("raw bytes leaked into the request JSON: %s", got)
 	}
 }
+
+// The daemon parses tool_choice as a bare string, and rejects a value it
+// does not recognise. An omitted choice must stay off the wire entirely:
+// a spurious ""tool_choice":""" would be an unknown value, not an absent
+// one, so the daemon would reject the request.
+func TestToolChoiceWireShape(t *testing.T) {
+	for _, c := range []inferd.ToolChoice{
+		inferd.ToolChoiceAuto, inferd.ToolChoiceRequired, inferd.ToolChoiceNone,
+	} {
+		req := inferd.RequestV2{
+			ID:         "tc",
+			Messages:   []inferd.MessageV2{{Role: inferd.RoleUser, Content: []inferd.ContentBlock{inferd.TextBlock("hi")}}},
+			Tools:      []inferd.ToolV2{{Name: "get_weather", Description: "w", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+			ToolChoice: c,
+		}
+		body, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", c, err)
+		}
+		want := `"tool_choice":"` + string(c) + `"`
+		if !strings.Contains(string(body), want) {
+			t.Errorf("want %s in %s", want, body)
+		}
+	}
+
+	req := inferd.RequestV2{
+		ID:       "tc",
+		Messages: []inferd.MessageV2{{Role: inferd.RoleUser, Content: []inferd.ContentBlock{inferd.TextBlock("hi")}}},
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "tool_choice") {
+		t.Errorf("absent tool_choice must not be serialised: %s", body)
+	}
+}
