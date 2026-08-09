@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tool_use` blocks, not only the `tool_result`s. Callers that already
   send matching ids — the documented shape — are unaffected.
 
+### Fixed
+
+- **`docs/consuming-across-a-boundary.md` advertised two `inferd-http`
+  surfaces where one exists.** ADR 0020 sketched a *Surface B* — inferd's
+  native frames over a localhost port — and the boundary guide listed it
+  as something you could use. It was never built, and ADR 0024 removed its
+  motivation: a shared first-party relay collapses every consumer into one
+  peer identity at the daemon, so cross-boundary bridging belongs to the
+  consumer. The guide now says so, and points at Option C (roll your own)
+  for native frames. The same passage claimed TLS terminates at the
+  bridge; the bridge links no TLS stack and speaks plain HTTP behind a
+  reverse proxy, which its own README already stated correctly.
+
 ### Added
 
 - **`tool_choice` on the v2 generation wire — enforced by grammar, not

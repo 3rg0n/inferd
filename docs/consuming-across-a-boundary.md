@@ -75,11 +75,18 @@ This is the path inferd recommends and has validated end-to-end on WSL2
 ## Option B — `inferd-http` bridge (network + OpenAI-compat + token auth)
 
 Run the separate `inferd-http` bridge process ([ADR 0020](adr/0020-inferd-http-bridge-is-a-separate-process.md))
-next to the daemon. It consumes the daemon over IPC and exposes:
+next to the daemon. It consumes the daemon over IPC and exposes
+**OpenAI-compat HTTP** — `/v1/chat/completions` (stream + non-stream),
+`/v1/embeddings`, `/v1/models`, `/health` — for OpenAI-SDK tooling.
 
-- **Surface A** — OpenAI-compat HTTP (`/v1/chat/completions`,
-  `/v1/embeddings`) for OpenAI-SDK tooling.
-- **Surface B** — native inferd frames over a localhost port.
+ADR 0020 also sketched a **Surface B**: inferd's *native* frames over a
+localhost port, so first-party middleware could write one schema and dial
+a port instead of branching on pipe-versus-UDS. **That surface was never
+built and is not planned.** ADR 0024 removed its motivation — a consumer
+crossing a VM boundary owns the bridging, because one shared relay would
+collapse every consumer into a single peer identity at the daemon. If you
+want native frames across a boundary, that is Option C below, and the
+relay is yours. Nothing here serves native frames over TCP.
 
 Cross-VM consumers reach the bridge's port; on WSL2 with mirrored
 networking (or default localhost forwarding) a `127.0.0.1:PORT` the
@@ -88,9 +95,11 @@ bridge binds on the Windows host is reachable from inside WSL2 as
 MS-maintained).
 
 - **Transport:** loopback TCP (WSL forwards it over hvsocket internally).
-- **Auth:** token / API key + TLS terminate **at the bridge**, not the
-  daemon — because peer-credential identity does not survive a network
-  hop.
+- **Auth:** the bearer token terminates **at the bridge**, not the daemon
+  — peer-credential identity does not survive a network hop. A
+  non-loopback bind refuses to start without `--token`. **TLS is not in
+  the bridge**: it speaks plain HTTP and expects a reverse proxy in front
+  if you need transport encryption.
 - **Cost:** it's TCP under the hood (validated working; leaner than a
   remote network call but not a kernel-buffer IPC handoff). Choose this
   if you want one host daemon serving cross-VM consumers and accept TCP.
@@ -147,7 +156,8 @@ We spiked these thoroughly on Windows 11 24H2 + WSL 2.9.3
 | You want… | Use |
 |---|---|
 | Cleanest, no compromise, and can co-locate | **A — daemon in the Linux domain (UDS)** |
-| One host daemon + OpenAI-compat or network reach, accept TCP | **B — `inferd-http` bridge** |
+| One host daemon + OpenAI-compat reach, accept TCP | **B — `inferd-http` bridge** |
+| One host daemon + **native** frames across the boundary | **C** — no first-party option exists |
 | One host daemon, custom relay, accept TCP + own your auth | **C — localhost-forwarding relay** |
 | No TCP **and** cross-VM **and** supported **and** bulk-safe | Not achievable on WSL2 — pick A |
 
