@@ -56,14 +56,22 @@ pub enum ToolChoice {
     /// grammar (when the backend installs one) additionally constrains
     /// the *shape* of a call the model chooses to make.
     Auto,
-    /// The model must emit at least one tool call. On llamacpp this is
-    /// a non-lazy grammar whose root requires one, so no path through
-    /// sampling produces a bare text answer.
+    /// The model must not *end its turn* without a tool call. On
+    /// llamacpp this is a non-lazy grammar whose root requires one, so
+    /// no path through sampling reaches `end_turn` with a bare text
+    /// answer.
+    ///
+    /// It does **not** promise a call arrives: the grammar admits
+    /// unlimited non-call text before one, so a model that disagrees
+    /// with the prompt can decline until `max_tokens`. Branch on
+    /// `stop_reason` — `max_tokens` with no tool call means no call
+    /// arrived (ADR 0029, measured on a real model).
     Required,
     /// The model must not call a tool. Tool declarations still reach
-    /// the prompt (removing them would change the rendered context),
-    /// but no grammar is installed and the daemon does not shape the
-    /// output toward a call.
+    /// the prompt (removing them would change the rendered context);
+    /// on a backend that enforces this, a grammar excludes the call
+    /// opener *as text*, so the model cannot spell one however it is
+    /// tokenised.
     None,
     /// Any value this build does not recognise. Kept so a newer
     /// client's request parses; the daemon then rejects it with

@@ -20,10 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed on the sampler, so `required` is not a request the model can
   decline: the eager grammar's root demands a complete call, and
   `llama_grammar_apply_impl` masks every end-of-generation token while no
-  stack is empty — ending the turn with prose is not a reachable sampling
-  path. The Tier-3 test proves it adversarially, prompting "do not use any
-  tools, just say hi" and asserting a call comes back anyway; an advisory
-  implementation fails that test.
+  stack is empty — *ending the turn* with prose is not a reachable sampling
+  path. The Tier-3 test proves it adversarially against a real Gemma 4,
+  prompting "do not use any tools, just say hi": the model cannot finish,
+  and runs to `max_tokens` instead. An advisory implementation returns a
+  cheerful "Hi." and `end_turn`.
+
+  What `required` does **not** promise is that a call ever arrives. The
+  eager root is `prefix tool-call` with every prefix state nullable, so a
+  model that disagrees with the instruction can decline until its budget
+  runs out — measured, and unchanged by raising the budget, because the
+  failure mode is degenerate repetition rather than insufficient room.
+  Upstream carries the identical structure and weakness. Callers branch on
+  `stop_reason`: `max_tokens` with no `tool_use` block means no call
+  arrived. That is self-announcing and therefore retryable, which is the
+  whole difference from an advisory field's plausible prose.
 
   `auto` installs a *lazy* grammar armed on `<|tool_call>`. It cannot force
   a call, but once the model starts one the body syntax is pinned — which

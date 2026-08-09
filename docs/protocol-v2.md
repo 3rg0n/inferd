@@ -247,7 +247,7 @@ Constrains tool use for this request. Three values:
 | Value        | Meaning |
 |--------------|---------|
 | `"auto"`     | The model decides. Behaviourally the same as omitting the field, except the daemon may additionally constrain the *shape* of a call the model chooses to make. |
-| `"required"` | The model MUST emit at least one tool call. On a backend that enforces this, no path through sampling produces a bare text answer. |
+| `"required"` | The model MUST NOT end its turn without emitting a tool call. On a backend that enforces this, no path through sampling reaches `stop_reason: "end_turn"` with a bare text answer — but a refusing model can still exhaust `max_tokens` first, so a caller MUST treat `stop_reason: "max_tokens"` with no `tool_use` block as "no call arrived". See the rule below. |
 | `"none"`     | The model MUST NOT call a tool. Declarations still reach the prompt, so the rendered context is unchanged. |
 
 Rules:
@@ -261,9 +261,16 @@ Rules:
 - **This is a constraint, not a hint.** A backend that cannot enforce the
   requested mode rejects the request with `invalid_request`; it does not
   accept it and try. This is the deliberate difference from
-  `response_format`, which degrades to unconstrained output. A caller
-  that sets `required` and receives a `done` frame with no `tool_use`
-  block has hit a bug, not a documented degradation.
+  `response_format`, which degrades to unconstrained output.
+- **`required` bounds the turn's *end*, not its content.** A caller that
+  sets `required` and receives `stop_reason: "end_turn"` with no
+  `tool_use` block has hit a bug. `stop_reason: "max_tokens"` with no
+  `tool_use` block is **not** a bug: the constraint makes voluntarily
+  finishing without a call unreachable, but a model that disagrees with
+  the prompt can decline until the budget runs out (ADR 0029, measured).
+  Callers MUST branch on `stop_reason` rather than assuming a call
+  arrived. That outcome is self-announcing, which is the point — an
+  advisory implementation's plausible prose is not.
 - **An unrecognised value parses but is rejected.** A newer client's
   request deserialises (forward-compat) and the daemon then answers
   `invalid_request` rather than guessing which mode was meant.

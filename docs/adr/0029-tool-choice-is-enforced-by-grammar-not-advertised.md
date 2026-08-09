@@ -125,8 +125,13 @@ Concretely:
 **Good.**
 
 - `required` is a real guarantee on the llamacpp backend, verifiable:
-  the Tier-3 test prompts "do not use any tools, just say hi" and a
-  call comes back anyway. An advisory implementation fails that test.
+  the Tier-3 test prompts "do not use any tools, just say hi" and the
+  model cannot end its turn without a call — it runs to `MaxTokens`
+  instead. An advisory implementation returns a cheerful "Hi." and
+  `EndTurn`, which is the outcome the grammar makes unreachable. See
+  the matching entry under *Costs* for what this does **not**
+  guarantee; the distinction was established by running the test, not
+  by reasoning about the grammar.
 - `auto` fixes a latent bug for free — a model-emitted malformed call
   body used to abort the generation, and the lazy grammar makes it
   unreachable.
@@ -146,20 +151,33 @@ Concretely:
 - **Argument values are unconstrained beyond syntax.** A model can
   emit a well-formed call with arguments the tool's schema would
   reject. The caller still validates arguments.
-- **`required` bounds *what* the model may emit, not *when*.** The
-  eager root is `prefix tool-call` and `prefix` admits any text that is
-  not the opener, so a model that disagrees with the prompt can spend
-  its whole `max_tokens` arguing before it commits — returning
-  `MaxTokens` with no call. Observed on the Tier-3 adversarial prompt
-  at a 128-token budget: the guarantee held (the turn never ended
-  voluntarily, and the model never reached a legal opener) but the
-  budget ran out first. The prefix is not removable — a root of bare
-  `tool-call` would mask the `<` that opens Gemma's `<|channel>thought`
-  block and force the model to call blind. So a `required` caller sizes
-  `max_tokens` for reasoning *plus* the call, and reads `MaxTokens` as
-  "no call arrived" rather than assuming one did. What the grammar
-  forecloses is the silent failure — `EndTurn` with prose and no call —
-  not the truncation, which is self-announcing.
+- **`required` guarantees the turn cannot *end* without a call — not
+  that a call arrives.** This is the limit of what a grammar of this
+  shape can promise, and it is narrower than the mode's name suggests.
+  The eager root is `prefix tool-call` with every `prefix` state
+  nullable, so unlimited non-opener text is legal; a model that
+  disagrees with the instruction can decline for as long as its budget
+  allows. `EndTurn` with no call is unreachable, which is the silent
+  failure the field exists to close. `MaxTokens` with no call is not.
+
+  Measured on the Tier-3 adversarial prompt ("Do not use any tools.
+  Just say hi.") against Gemma 4 E4B: the model loops a *hallucinated*
+  `<execute_tool>{…}` — never the real `<|tool_call>` opener, which the
+  grammar does bar — argues with itself in the thinking channel, and
+  terminates on `MaxTokens`. Raising the budget from 128 to 600 tokens
+  changed nothing but the length of the loop: the failure mode is
+  degenerate repetition, not insufficient room.
+
+  The prefix is not removable. A root of bare `tool-call` would mask
+  the `<` that opens Gemma's `<|channel>thought` block and force the
+  model to call blind. Upstream has the identical structure and the
+  identical weakness — `scan_to_toolcall = p.until("<|tool_call>")`
+  followed by `repeat(min=1)` in `common_chat_params_init_gemma4`.
+
+  So a `required` caller must treat `MaxTokens` as "no call arrived"
+  rather than assuming one did. That outcome is self-announcing, which
+  is the property that matters: the caller can detect it and retry,
+  where an advisory implementation's plausible prose is undetectable.
 - **Narrowings versus upstream's grammar** (identifier-shaped dict
   keys; no `"` or `\` in string content) exist because inferd parses
   these bodies with its own parser rather than upstream's PEG, and a
