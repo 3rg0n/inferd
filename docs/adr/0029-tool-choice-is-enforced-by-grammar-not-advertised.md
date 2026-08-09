@@ -146,6 +146,20 @@ Concretely:
 - **Argument values are unconstrained beyond syntax.** A model can
   emit a well-formed call with arguments the tool's schema would
   reject. The caller still validates arguments.
+- **`required` bounds *what* the model may emit, not *when*.** The
+  eager root is `prefix tool-call` and `prefix` admits any text that is
+  not the opener, so a model that disagrees with the prompt can spend
+  its whole `max_tokens` arguing before it commits — returning
+  `MaxTokens` with no call. Observed on the Tier-3 adversarial prompt
+  at a 128-token budget: the guarantee held (the turn never ended
+  voluntarily, and the model never reached a legal opener) but the
+  budget ran out first. The prefix is not removable — a root of bare
+  `tool-call` would mask the `<` that opens Gemma's `<|channel>thought`
+  block and force the model to call blind. So a `required` caller sizes
+  `max_tokens` for reasoning *plus* the call, and reads `MaxTokens` as
+  "no call arrived" rather than assuming one did. What the grammar
+  forecloses is the silent failure — `EndTurn` with prose and no call —
+  not the truncation, which is self-announcing.
 - **Narrowings versus upstream's grammar** (identifier-shaped dict
   keys; no `"` or `\` in string content) exist because inferd parses
   these bodies with its own parser rather than upstream's PEG, and a
