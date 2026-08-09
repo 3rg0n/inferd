@@ -307,6 +307,16 @@ Rules:
 | `tool_use`    | `tool_call_id`: string, `name`: string, `input`: JSON object | replayed assistant turns |
 | `tool_result` | `tool_call_id`: string, `content`: array of `ContentBlock` | request |
 
+A `tool_result`'s `tool_call_id` MUST match the `tool_call_id` of a
+`tool_use` block earlier in the same request's `messages[]`. An id that
+resolves to nothing is rejected with `invalid_request`; the daemon does
+**not** infer which tool the result belongs to, even when `tools[]` has
+exactly one entry. Pairing results to calls is the caller's bookkeeping,
+and a guess would render a result *attributed to a tool that was never
+called* — indistinguishable from fact to the model, and undetectable
+downstream. Callers replaying a conversation must therefore carry the
+`tool_use` blocks, not just the results.
+
 An `attachment_id` on an `image`/`audio`/`video` block MUST match
 exactly one `Attachment.id` of the corresponding kind in the request's
 `attachments[]`. Unknown `type` values: a forward-compatible parser

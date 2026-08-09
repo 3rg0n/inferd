@@ -474,46 +474,55 @@ fn tool_result_in_user_turn_round_trip_after_assistant_tool_use() {
 }
 
 #[test]
-fn tool_result_with_unknown_tool_call_id_falls_through_to_raw_content() {
-    // If a ToolResult arrives without a matching ToolUse and tools[]
-    // is ambiguous, the renderer falls back to raw content rather
-    // than guessing.
-    let req = RequestV2 {
-        id: "x".into(),
-        messages: vec![MessageV2 {
-            role: RoleV2::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_call_id: ToolCallId::from("does-not-exist"),
-                content: vec![ContentBlock::Text {
-                    text: "freeform output".into(),
+fn tool_result_with_unknown_tool_call_id_is_rejected() {
+    // inferd relays, it does not infer. Pairing a result to the call
+    // that produced it is the middleware's bookkeeping, and
+    // `tool_call_id` is how it states the answer — so an id that
+    // resolves to nothing is the caller's bug and gets reported as
+    // one.
+    //
+    // Two earlier behaviours are what this replaces, and both put
+    // something in front of the model that the model reads as fact:
+    // guessing the name when exactly one tool was declared (a result
+    // attributed to a tool that was never called), and emitting
+    // unlabelled content when it couldn't guess (a result attributed
+    // to nothing). Neither is detectable downstream, which is the
+    // fail-open class ADR 0025 refuses.
+    for tool_names in [vec!["a"], vec!["a", "b"]] {
+        let req = RequestV2 {
+            id: "x".into(),
+            messages: vec![MessageV2 {
+                role: RoleV2::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_call_id: ToolCallId::from("does-not-exist"),
+                    content: vec![ContentBlock::Text {
+                        text: "freeform output".into(),
+                    }],
                 }],
             }],
-        }],
-        tools: vec![
-            Tool {
-                name: "a".into(),
-                description: ".".into(),
-                input_schema: json!({"type": "OBJECT"}),
-            },
-            Tool {
-                name: "b".into(),
-                description: ".".into(),
-                input_schema: json!({"type": "OBJECT"}),
-            },
-        ],
-        ..Default::default()
-    };
-    let (out, _) = render(req);
-    // No `response:NAME{...}` wrapper — just raw content between the
-    // sentinels.
-    assert!(
-        out.contains("<|tool_response>freeform output<tool_response|>"),
-        "raw fallback missing; got:\n{out}"
-    );
-    assert!(
-        !out.contains("response:"),
-        "should not invent a tool name; got:\n{out}"
-    );
+            tools: tool_names
+                .iter()
+                .map(|n| Tool {
+                    name: (*n).to_string(),
+                    description: ".".into(),
+                    input_schema: json!({"type": "OBJECT"}),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let resolved = req.resolve().expect("resolve");
+        let err = Gemma4Renderer::new()
+            .render(&resolved)
+            .expect_err("an unpaired tool_result must not render");
+        let msg = err.to_string();
+        // The single-tool case is the one that matters: it is exactly
+        // where the old code had enough information to guess, and
+        // guessing is what it must no longer do.
+        assert!(
+            msg.contains("does-not-exist") && msg.contains("matches no tool_use"),
+            "{tool_names:?}: expected an unpaired-tool_result error naming the id, got: {msg}"
+        );
+    }
 }
 
 #[test]

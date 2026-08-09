@@ -444,24 +444,33 @@ fn render_message<'a>(
                 // model turn. We honor the upstream convention: emit
                 // the response *inline* inside whatever turn this
                 // ToolResult sits in.
+                // The id must resolve. inferd is the postman between
+                // middleware and model: pairing a result to the call
+                // that produced it is the middleware's bookkeeping,
+                // and `tool_call_id` is how it tells us the answer.
+                //
+                // The two things this replaced were both inferd
+                // deciding on the caller's behalf — guessing the name
+                // when exactly one tool was declared, then emitting
+                // unlabelled content when it couldn't. Either can put
+                // a result in front of the model attributed to a tool
+                // that was never called, or with no attribution at
+                // all, and the model reads both as fact. That is the
+                // fail-open class ADR 0025 refuses: a fluent wrong
+                // answer where a detectable error belongs.
+                let Some(name) = tool_name_by_call_id.get(tool_call_id).copied() else {
+                    return Err(RenderError::UnpairedToolResult {
+                        message_index: mi,
+                        block_index: bi,
+                        tool_call_id: tool_call_id.as_str().to_string(),
+                    });
+                };
                 out.push_str("<|tool_response>");
-                let tool_name = tool_name_by_call_id
-                    .get(tool_call_id)
-                    .copied()
-                    .or_else(|| guess_tool_name_from_tools(tools));
-                if let Some(name) = tool_name {
-                    out.push_str("response:");
-                    out.push_str(name);
-                    out.push('{');
-                    render_text_only_response(out, content);
-                    out.push('}');
-                } else {
-                    // Couldn't pair to any ToolUse and tools[] is
-                    // ambiguous — emit raw content. Gemma will treat
-                    // this as freeform tool output; worse than a
-                    // perfect render but doesn't crash.
-                    render_text_only_response(out, content);
-                }
+                out.push_str("response:");
+                out.push_str(name);
+                out.push('{');
+                render_text_only_response(out, content);
+                out.push('}');
                 out.push_str("<tool_response|>");
             }
             ContentBlock::Unknown => {
@@ -566,19 +575,6 @@ fn render_args_inline(out: &mut String, value: &Value) {
         // tool_use blocks (the model emits objects). Render whatever
         // it is so we don't lose data.
         render_schema(out, value);
-    }
-}
-
-/// Last-ditch fallback when a `ToolResult` cannot be paired to any
-/// `ToolUse` via `tool_call_id`. If `tools[]` has exactly one entry
-/// we assume it's that one; otherwise return None and the caller
-/// emits raw content. Real consumers always send the matching
-/// `tool_call_id` so this branch should be dead in practice.
-fn guess_tool_name_from_tools(tools: &[Tool]) -> Option<&str> {
-    if tools.len() == 1 {
-        Some(tools[0].name.as_str())
-    } else {
-        None
     }
 }
 

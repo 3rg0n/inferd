@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **An unpaired `tool_result` is now rejected instead of guessed at.** A
+  `tool_result` whose `tool_call_id` matches no `tool_use` earlier in the
+  request fails with `invalid_request`, naming the id. Previously the
+  Gemma 4 renderer inferred the tool name when `tools[]` had exactly one
+  entry, and emitted unlabelled content when it couldn't — so a result
+  could reach the model *attributed to a tool that was never called*, or
+  to nothing at all. The model reads either as fact and no consumer can
+  detect it downstream, which is the fail-open class ADR 0025 refuses.
+
+  inferd sits between middleware and model and relays; pairing results to
+  calls is the middleware's bookkeeping and `tool_call_id` is how it
+  states the answer, so an id that resolves to nothing is the caller's
+  bug and is reported as one. Granite already refused these outright.
+
+  **Migration:** a caller replaying a tool conversation must include the
+  `tool_use` blocks, not only the `tool_result`s. Callers that already
+  send matching ids — the documented shape — are unaffected.
+
 ### Added
 
 - **`tool_choice` on the v2 generation wire — enforced by grammar, not

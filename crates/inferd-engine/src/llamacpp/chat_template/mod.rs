@@ -109,6 +109,29 @@ pub enum RenderError {
         /// Which content block in that message.
         block_index: usize,
     },
+    /// A `ToolResult` carried a `tool_call_id` that matches no
+    /// `ToolUse` anywhere in `messages[]`.
+    ///
+    /// inferd relays; it does not infer. Pairing a result to a call is
+    /// the middleware's bookkeeping, and the `tool_call_id` is how it
+    /// states the answer — a daemon that guessed when the id did not
+    /// resolve would be substituting its own belief for the caller's,
+    /// and a wrong guess renders a result *attributed to a tool that
+    /// was never called*. The model cannot detect that; it reads as a
+    /// fact. So an unresolvable id is the caller's bug to fix, and
+    /// saying so is the only honest report available.
+    #[error(
+        "messages[{message_index}].content[{block_index}]: tool_result references \
+         tool_call_id {tool_call_id:?}, which matches no tool_use in this request"
+    )]
+    UnpairedToolResult {
+        /// Which message in `messages[]`.
+        message_index: usize,
+        /// Which content block in that message.
+        block_index: usize,
+        /// The id that matched no `ToolUse`.
+        tool_call_id: String,
+    },
     /// The request asked for something this family's prompt grammar
     /// has no representation for (e.g. tool declarations against a
     /// family whose template carries none).
