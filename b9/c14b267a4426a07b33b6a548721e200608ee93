@@ -1,0 +1,67 @@
+clients/go/protocol_v2.go
+  s_126aec4081f728::t_c53b4ee854e69c 326,337-353
+crates/inferd-engine/src/mock.rs
+  s_126aec4081f728::t_096a7323852a3e 19
+  s_126aec4081f728::t_a14c4d8f86465b 156
+  s_126aec4081f728::t_9035144190d02e 175-180,186-193,196
+  s_126aec4081f728::t_f9e69d0143ba54 181-185
+  s_126aec4081f728::t_19889b1c93bf44 42-51
+crates/inferd-daemon/tests/v2_stub.rs
+  s_126aec4081f728::t_f3db18246d1eeb 41,116-222,252-255,261,267
+crates/inferd-proto/src/v2/response.rs
+  s_126aec4081f728::t_8006022bc7db74 152-178
+  s_126aec4081f728::t_332c500421e115 121-128
+crates/inferd-daemon/src/lifecycle_v2.rs
+  s_126aec4081f728::t_c45f74c3b5f762 261
+  s_126aec4081f728::t_3613980995c9a1 200-210
+  s_126aec4081f728::t_0c0d545604bb00 32
+  s_126aec4081f728::t_056123027ed310 239
+  s_126aec4081f728::t_81814ab82b1669 273-278,284,294
+clients/go/client_v2_test.go
+  s_126aec4081f728::t_b3a42a87563e52 381-428
+  s_126aec4081f728::t_dc17fc150c5125 429
+crates/inferd-proto/tests/v2_wire.rs
+  s_126aec4081f728::t_f3db18246d1eeb 372,381-446,459,508
+crates/inferd-http/src/handlers.rs
+  s_126aec4081f728::t_71bebf08cd4f07 226
+  s_126aec4081f728::t_77b1889c23a32e 212,215-225,227-230
+  s_126aec4081f728::t_707a3fff5b7bb9 297,300-309
+  s_126aec4081f728::t_2fc2607d4157a2 196-197
+docs/protocol-v2.md
+  s_126aec4081f728::t_77d8a49a72c342 250
+  s_126aec4081f728::t_acdd00ab171769 461-462,469-487
+  s_126aec4081f728::t_68b3204f813e88 271-276
+  s_5cd1b28ed520c1::t_cc254c316ccc16 488
+crates/inferd-client/src/v2_client.rs
+  s_126aec4081f728::t_7bcfc2d1a472d8 408
+CHANGELOG.md
+  s_126aec4081f728::t_8d97836caa1ea4 10-46
+clients/go/README.md
+  s_126aec4081f728::t_3b87766f2ac4fe 177-193
+crates/inferd-proto/README.md
+  s_126aec4081f728::t_ae6842369784c0 29-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b9c14b267a4426a07b33b6a548721e200608ee93",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_5cd1b28ed520c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82e2267c-23d5-4c0c-8d96-7d91a00e70c4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
