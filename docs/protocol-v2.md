@@ -247,7 +247,7 @@ Constrains tool use for this request. Three values:
 | Value        | Meaning |
 |--------------|---------|
 | `"auto"`     | The model decides. Behaviourally the same as omitting the field, except the daemon may additionally constrain the *shape* of a call the model chooses to make. |
-| `"required"` | The model MUST NOT end its turn without emitting a tool call. On a backend that enforces this, no path through sampling reaches `stop_reason: "end_turn"` with a bare text answer — but a refusing model can still exhaust `max_tokens` first, so a caller MUST treat `stop_reason: "max_tokens"` with no `tool_use` block as "no call arrived". See the rule below. |
+| `"required"` | The model MUST NOT end its turn without emitting a tool call. On a backend that enforces this, no path through sampling reaches `stop_reason: "end_turn"` with a bare text answer — but a refusing model can still exhaust `max_tokens` first, in which case the terminal frame carries `tool_choice_unsatisfied: true` (§4.2). See the rule below. |
 | `"none"`     | The model MUST NOT call a tool. Declarations still reach the prompt, so the rendered context is unchanged. |
 
 Rules:
@@ -268,9 +268,12 @@ Rules:
   `tool_use` block is **not** a bug: the constraint makes voluntarily
   finishing without a call unreachable, but a model that disagrees with
   the prompt can decline until the budget runs out (ADR 0029, measured).
-  Callers MUST branch on `stop_reason` rather than assuming a call
-  arrived. That outcome is self-announcing, which is the point — an
-  advisory implementation's plausible prose is not.
+  Callers MUST NOT assume a call arrived. Branch on
+  `tool_choice_unsatisfied` (§4.2), not on `stop_reason` alone —
+  `max_tokens` also means "ran out of room mid-answer", so the stop
+  reason cannot tell the two apart. That outcome is self-announcing,
+  which is the point — an advisory implementation's plausible prose is
+  not.
 - **An unrecognised value parses but is rejected.** A newer client's
   request deserialises (forward-compat) and the daemon then answers
   `invalid_request` rather than guessing which mode was meant.
@@ -455,12 +458,33 @@ type `0x01`; a `0x02` frame on the response stream is a protocol error.
   "type": "done",
   "usage": { "input_tokens": uint32, "output_tokens": uint32 },
   "stop_reason": "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" | "cancelled" | "error",
-  "backend": string
+  "backend": string,
+  "tool_choice_unsatisfied": bool   // optional; absent means false
 }
 ```
 
 `backend` is the serving adapter's name (e.g. `"llamacpp"`). It is
 **diagnostic only** — consumers MUST NOT branch on it (ADR 0007).
+
+`tool_choice_unsatisfied` is present **only** when the request carried
+`tool_choice: "required"` and the generation ended without the model
+ever emitting a tool call (§3.2b). It is omitted entirely when false, so
+a client written against v0.7.0 parses this frame unchanged, and a
+client that predates the field reads a daemon that emits it without
+error.
+
+`stop_reason` is unaffected: a declining model still reports
+`max_tokens`. That is deliberate — `StopReasonV2` is a closed set on
+both sides of the wire (no catch-all variant in `inferd-proto`, fixed
+string constants in `clients/go`), so a new stop reason would be a
+parse error on every deployed client rather than a graceful degrade. An
+optional field is the only shape that adds the signal without breaking
+one.
+
+The field is a **report, not a repair**: the daemon does not retry,
+reshape the prompt, or nudge the model (ADR 0007). Whether to retry with
+a different prompt, fall back, or surface the refusal is the caller's
+decision.
 
 ### 4.3 `error` (terminal, failure)
 

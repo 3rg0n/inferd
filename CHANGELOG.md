@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tool_choice_unsatisfied` on the `done` frame** — a
+  `tool_choice: "required"` request that produced no tool call now says
+  so, instead of being indistinguishable from an ordinary truncation.
+  `required` bounds where the turn may *end*, not what it contains
+  (ADR 0029, measured): the grammar makes voluntarily finishing without a
+  call unreachable, but unlimited non-call text is legal first, so a model
+  that disagrees with the prompt declines until the budget runs out. The
+  caller saw `stop_reason: "max_tokens"` and no `tool_use` block — which
+  is also exactly what "ran out of room mid-answer" looks like — and had
+  to pay the budget and then guess.
+
+  The flag is `#[serde(skip_serializing_if)]`, so it never reaches the
+  wire unless true: a v0.7.0 client parses the frame byte-identically,
+  and a client predating the field reads a daemon that emits it without
+  error. `stop_reason` is deliberately unmoved. A new stop reason would
+  have said this more directly, but `StopReasonV2` is a closed set on
+  both sides of the wire (no catch-all variant in `inferd-proto`, fixed
+  string constants in `clients/go`), so an unfamiliar value is a parse
+  error on every deployed client rather than a graceful degrade. No
+  `wire_version` bump.
+
+  Computed once in the daemon's relay, which already sees whether a
+  `ToolUse` crossed the stream, rather than per-backend — so all four
+  backends get identical semantics and none can forget the bookkeeping
+  and silently report "satisfied". Exposed on the Go client as
+  `ResponseV2.ToolChoiceUnsatisfied`. The `inferd-http` bridge logs it
+  and still returns `finish_reason: "length"`: OpenAI's `required` really
+  does force a call, so no OpenAI-shaped field carries this, and
+  inventing one would break the SDK compatibility that is the bridge's
+  reason to exist.
+
+  It is a **report, never a repair** — the daemon does not retry,
+  reshape, or nudge the model (invariant #2, ADR 0007). Retry, fall back,
+  or surface the refusal is the caller's decision.
+
 ### Changed
 
 - **An unpaired `tool_result` is now rejected instead of guessed at.** A

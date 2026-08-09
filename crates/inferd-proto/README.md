@@ -26,7 +26,13 @@ types plus the frame codecs with the 64 MiB per-frame cap
   non-empty `tools`, rejects it alongside `response_format` (only one
   decoding constraint can be installed), and rejects an unrecognised
   value — which still *parses*, as `ToolChoice::Unknown`, so a newer
-  client's frame is not a parse failure.
+  client's frame is not a parse failure. `required` bounds where the turn
+  may *end*, not what it contains, so a declining model can burn the
+  budget: `ResponseV2::Done` then carries
+  `tool_choice_unsatisfied: true` (omitted when false). Branch on that,
+  not on `stop_reason`, which stays `max_tokens` — `StopReasonV2` is
+  closed on both sides of the wire, so a new variant would break
+  deployed clients instead of degrading.
 - `embed::{EmbedRequest, EmbedResolved, EmbedResponse, EmbedTask,
   EmbedUsage, EmbedErrorCode}` — the embeddings surface (ADR 0017).
 - `rerank::{RerankRequest, RerankResolved, RerankResponse, RerankResult,

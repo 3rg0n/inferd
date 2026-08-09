@@ -174,6 +174,23 @@ The daemon rejects it without a non-empty `Tools`, and rejects it
 alongside `ResponseFormat`, since only one decoding constraint can be
 installed. Leave it empty to omit the field.
 
+`ToolChoiceRequired` bounds where the turn may *end*, not what it
+contains: a model that disagrees with the prompt can decline for its
+whole budget and stop at `StopMaxTokens`. When that happens the `done`
+frame carries `ToolChoiceUnsatisfied: true`, so branch on that rather
+than on `StopReason` — `StopMaxTokens` also means "ran out of room
+mid-answer", and the stop reason alone cannot separate the two:
+
+```go
+if frame.Type == inferd.ResponseV2Done && frame.ToolChoiceUnsatisfied {
+    // No call arrived. Retry with a different prompt, fall back, or
+    // surface the refusal — the daemon does not retry (ADR 0007).
+}
+```
+
+The field is absent (false) on every other request, including one that
+never sent a `ToolChoice`.
+
 ## Transports
 
 | Function | Platform | Default (`DefaultInferAddr()`) |

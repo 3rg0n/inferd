@@ -323,7 +323,7 @@ type UsageV2 struct {
 // selected by Type:
 //
 //   - frame: Block          (streaming text / thinking / tool_use)
-//   - done:  Usage, StopReason, Backend
+//   - done:  Usage, StopReason, Backend, ToolChoiceUnsatisfied
 //   - error: Code, Message
 type ResponseV2 struct {
 	ID         string           `json:"id"`
@@ -334,6 +334,23 @@ type ResponseV2 struct {
 	Backend    string           `json:"backend,omitempty"`     // done — diagnostic only
 	Code       ErrorCodeV2      `json:"code,omitempty"`        // error
 	Message    string           `json:"message,omitempty"`     // error
+
+	// ToolChoiceUnsatisfied is set on a done frame when the request
+	// asked for ToolChoiceRequired and no tool call ever arrived.
+	// Absent (false) otherwise.
+	//
+	// ToolChoiceRequired guarantees the model cannot *end its turn*
+	// without a call, not that a call arrives: unlimited non-call text
+	// is legal first, so a model that disagrees with the prompt can
+	// decline until max_tokens (ADR 0029). StopMaxTokens alone is
+	// ambiguous — it also means "ran out of room mid-answer" — so
+	// branch on this field, not on the stop reason:
+	//
+	//	if frame.ToolChoiceUnsatisfied {
+	//	    // no call arrived; retry or fall back. Your call — the
+	//	    // daemon does not retry (ADR 0007).
+	//	}
+	ToolChoiceUnsatisfied bool `json:"tool_choice_unsatisfied,omitempty"` // done
 }
 
 // IsTerminal reports whether this frame ends a v2 request stream.

@@ -369,12 +369,79 @@ fn response_done_roundtrip() {
         },
         stop_reason: StopReasonV2::EndTurn,
         backend: "llamacpp".into(),
+        tool_choice_unsatisfied: false,
     };
     let mut buf = Vec::new();
     write_frame(&mut buf, &frame).unwrap();
     let mut cursor = Cursor::new(buf);
     let parsed: ResponseV2 = read_frame(&mut cursor).unwrap().unwrap();
     assert_eq!(frame, parsed);
+}
+
+/// The flag must stay off the wire when unset. A v0.7.0 client parses
+/// the `done` frame by field name, so emitting `"tool_choice_
+/// unsatisfied":false` on every frame would change the bytes every
+/// existing consumer sees — the field is only additive if absence is
+/// the default encoding.
+#[test]
+fn unset_tool_choice_unsatisfied_is_not_serialised() {
+    let frame = ResponseV2::Done {
+        id: "req-001".into(),
+        usage: UsageV2 {
+            input_tokens: 1,
+            output_tokens: 1,
+        },
+        stop_reason: StopReasonV2::EndTurn,
+        backend: "llamacpp".into(),
+        tool_choice_unsatisfied: false,
+    };
+    let mut buf = Vec::new();
+    write_frame(&mut buf, &frame).unwrap();
+    let s = std::str::from_utf8(&buf).unwrap();
+    assert!(
+        !s.contains("tool_choice_unsatisfied"),
+        "unset flag must not reach the wire: {s}"
+    );
+}
+
+/// Set, it serialises as a plain `true`, and a frame that omits it
+/// parses back as `false` — so an older *daemon*'s frame is also
+/// readable by a newer client.
+#[test]
+fn set_tool_choice_unsatisfied_round_trips_and_absence_defaults_false() {
+    let frame = ResponseV2::Done {
+        id: "req-001".into(),
+        usage: UsageV2 {
+            input_tokens: 9,
+            output_tokens: 128,
+        },
+        // The measured shape from ADR 0029: a declining model burns the
+        // budget, so the stop reason is `max_tokens`, not `tool_use`.
+        stop_reason: StopReasonV2::MaxTokens,
+        backend: "llamacpp".into(),
+        tool_choice_unsatisfied: true,
+    };
+    let mut buf = Vec::new();
+    write_frame(&mut buf, &frame).unwrap();
+    let s = std::str::from_utf8(&buf).unwrap();
+    assert!(s.contains("\"tool_choice_unsatisfied\":true"), "got: {s}");
+    let mut cursor = Cursor::new(buf);
+    let parsed: ResponseV2 = read_frame(&mut cursor).unwrap().unwrap();
+    assert_eq!(frame, parsed);
+
+    // A frame from a daemon that predates the field.
+    let legacy = r#"{"type":"done","id":"x","usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"max_tokens","backend":"llamacpp"}"#;
+    let parsed: ResponseV2 = serde_json::from_str(legacy).expect("legacy done frame must parse");
+    match parsed {
+        ResponseV2::Done {
+            tool_choice_unsatisfied,
+            ..
+        } => assert!(
+            !tool_choice_unsatisfied,
+            "absent field must default to false, not fail the parse"
+        ),
+        other => panic!("expected Done, got {other:?}"),
+    }
 }
 
 #[test]
@@ -389,6 +456,7 @@ fn response_done_tool_use_stop_reason_roundtrip() {
         },
         stop_reason: StopReasonV2::ToolUse,
         backend: "llamacpp".into(),
+        tool_choice_unsatisfied: false,
     };
     let mut buf = Vec::new();
     write_frame(&mut buf, &frame).unwrap();
@@ -437,6 +505,7 @@ fn response_terminal_helper() {
         },
         stop_reason: StopReasonV2::EndTurn,
         backend: "mock".into(),
+        tool_choice_unsatisfied: false,
     };
     assert!(done.is_terminal());
 

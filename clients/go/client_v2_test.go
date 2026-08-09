@@ -378,3 +378,52 @@ func TestToolChoiceWireShape(t *testing.T) {
 		t.Errorf("absent tool_choice must not be serialised: %s", body)
 	}
 }
+
+// TestToolChoiceUnsatisfiedWireShape pins the done-frame flag that
+// reports "required was asked for and no call arrived" (ADR 0029).
+//
+// Two directions matter. Decoding a daemon's frame that sets it must
+// surface true; decoding a frame that omits it — every frame a v0.7.0
+// daemon ever sent — must yield false rather than failing the parse.
+// Encoding must keep an unset flag off the wire so this stays additive.
+func TestToolChoiceUnsatisfiedWireShape(t *testing.T) {
+	set := `{"type":"done","id":"x","usage":{"input_tokens":9,"output_tokens":128},` +
+		`"stop_reason":"max_tokens","backend":"llamacpp","tool_choice_unsatisfied":true}`
+	var frame inferd.ResponseV2
+	if err := json.Unmarshal([]byte(set), &frame); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !frame.ToolChoiceUnsatisfied {
+		t.Error("tool_choice_unsatisfied:true must decode as true")
+	}
+	// The stop reason stays max_tokens — the flag is the disambiguator,
+	// not a replacement. A new StopReasonV2 value would not have
+	// decoded at all against these fixed constants, which is why the
+	// signal is a field.
+	if frame.StopReason != inferd.StopMaxTokens {
+		t.Errorf("stop_reason: got %q want max_tokens", frame.StopReason)
+	}
+
+	legacy := `{"type":"done","id":"x","usage":{"input_tokens":1,"output_tokens":1},` +
+		`"stop_reason":"end_turn","backend":"llamacpp"}`
+	frame = inferd.ResponseV2{}
+	if err := json.Unmarshal([]byte(legacy), &frame); err != nil {
+		t.Fatalf("legacy done frame must parse: %v", err)
+	}
+	if frame.ToolChoiceUnsatisfied {
+		t.Error("absent field must default to false")
+	}
+
+	body, err := json.Marshal(inferd.ResponseV2{
+		ID: "x", Type: inferd.ResponseV2Done,
+		Usage:      &inferd.UsageV2{InputTokens: 1, OutputTokens: 1},
+		StopReason: inferd.StopEndTurn,
+		Backend:    "llamacpp",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "tool_choice_unsatisfied") {
+		t.Errorf("unset flag must not be serialised: %s", body)
+	}
+}

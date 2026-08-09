@@ -405,6 +405,7 @@ mod tests {
                     },
                     stop_reason: StopReasonV2::EndTurn,
                     backend: "mock".into(),
+                    tool_choice_unsatisfied: false,
                 },
             )
             .await;

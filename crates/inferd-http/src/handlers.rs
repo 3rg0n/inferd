@@ -193,6 +193,8 @@ fn chat_stream_response(
     tokio::spawn(async move {
         // Keep the client alive for the duration.
         let _client = client;
+        // The builder takes the id; keep a copy for the log line below.
+        let log_id = id.clone();
         let mut builder = ChunkBuilder::new(id, model, created);
         while let Some(item) = frames.next().await {
             match item {
@@ -207,8 +209,25 @@ fn chat_stream_response(
                 Ok(ResponseV2::Done {
                     ref usage,
                     stop_reason,
+                    tool_choice_unsatisfied,
                     ..
                 }) => {
+                    // OpenAI's `tool_choice: "required"` does force a
+                    // call, so an SDK client has no field to read this
+                    // in — it just sees `finish_reason: "length"`. The
+                    // daemon's `required` is weaker (ADR 0029): a
+                    // declining model burns the budget instead. Log it
+                    // so the operator can tell that apart from a genuine
+                    // truncation; inventing a non-standard response
+                    // field would break the compatibility that is this
+                    // bridge's whole purpose.
+                    if tool_choice_unsatisfied {
+                        tracing::warn!(
+                            req_id = %log_id,
+                            "tool_choice=required but the model emitted no tool call; \
+                             returning finish_reason=length"
+                        );
+                    }
                     let chunk = builder.finalize(usage, stop_reason);
                     let data = serde_json::to_string(&chunk).unwrap_or_default();
                     let _ = tx.send(Ok(Event::default().data(data))).await;
@@ -275,8 +294,19 @@ async fn chat_collect_response(
             Some(Ok(ResponseV2::Done {
                 ref usage,
                 stop_reason,
+                tool_choice_unsatisfied,
                 ..
             })) => {
+                // Same reasoning as the streaming path above: no
+                // OpenAI-shaped field carries this, so it goes to the
+                // log rather than into a non-standard response body.
+                if tool_choice_unsatisfied {
+                    tracing::warn!(
+                        req_id = %id,
+                        "tool_choice=required but the model emitted no tool call; \
+                         returning finish_reason=length"
+                    );
+                }
                 let finish = translate::stop_reason_to_openai(stop_reason);
                 let body = serde_json::json!({
                     "id": id,

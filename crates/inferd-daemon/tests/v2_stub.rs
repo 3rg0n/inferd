@@ -38,7 +38,7 @@ use inferd_proto::FrameType;
 #[cfg(unix)]
 use inferd_proto::v2::{
     ContentBlock, ErrorCodeV2, MessageV2, RequestV2, ResponseBlock, ResponseV2, RoleV2,
-    StopReasonV2,
+    StopReasonV2, Tool, ToolChoice,
 };
 #[cfg(unix)]
 use std::sync::Arc;
@@ -113,6 +113,113 @@ async fn send_and_read_all(path: &std::path::Path, req: &RequestV2) -> Vec<Respo
         .expect("read budget exceeded")
 }
 
+/// A `tool_choice: required` request whose generation produced no tool
+/// call. Build it here rather than in `common` — only these two tests
+/// need it.
+#[cfg(unix)]
+fn required_tool_request(id: &str) -> RequestV2 {
+    let mut req = text_request(id, "what time is it?");
+    req.tools = vec![Tool {
+        name: "get_time".into(),
+        description: "current time".into(),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+    }];
+    req.tool_choice = Some(ToolChoice::Required);
+    req
+}
+
+/// `required` + no call must set the flag on the terminal frame.
+///
+/// This is the ADR 0029 gap made reportable: `required` guarantees the
+/// turn cannot *end* without a call, but a model can decline for its
+/// whole budget, and the resulting `max_tokens` is indistinguishable
+/// from "ran out of room mid-answer". The mock declines by construction
+/// (it emits text and stops), which is exactly the shape a real
+/// declining model produces.
+#[cfg(unix)]
+#[tokio::test]
+async fn required_tool_choice_with_no_call_sets_tool_choice_unsatisfied() {
+    let mock = Arc::new(Mock::with_config(MockConfig {
+        tokens: vec!["I'd rather not.".into()],
+        ..Default::default()
+    }));
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+
+    let frames = send_and_read_all(&path, &required_tool_request("v2-tc-unsat")).await;
+
+    match frames.last().expect("a terminal frame") {
+        ResponseV2::Done {
+            tool_choice_unsatisfied,
+            ..
+        } => assert!(
+            *tool_choice_unsatisfied,
+            "required + no tool call must report unsatisfied; got: {frames:#?}"
+        ),
+        other => panic!("expected Done, got {other:?}"),
+    }
+
+    let _ = shutdown.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The other branch, and the one that catches a relay that flags
+/// unconditionally: same `required` request, but a call *does* arrive.
+/// The flag must stay off.
+#[cfg(unix)]
+#[tokio::test]
+async fn required_tool_choice_with_a_call_leaves_the_flag_unset() {
+    let mock = Arc::new(Mock::with_config(MockConfig {
+        tokens: vec!["checking".into()],
+        emit_tool_use: Some("get_time".into()),
+        ..Default::default()
+    }));
+    let (path, shutdown, handle) = boot_v2_daemon_with_mock(mock).await;
+
+    let frames = send_and_read_all(&path, &required_tool_request("v2-tc-sat")).await;
+
+    match frames.last().expect("a terminal frame") {
+        ResponseV2::Done {
+            tool_choice_unsatisfied,
+            stop_reason,
+            ..
+        } => {
+            assert!(
+                !tool_choice_unsatisfied,
+                "a call arrived; flag must stay unset: {frames:#?}"
+            );
+            assert_eq!(*stop_reason, StopReasonV2::ToolUse);
+        }
+        other => panic!("expected Done, got {other:?}"),
+    }
+
+    let _ = shutdown.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Without `tool_choice: required` the flag is never set, even when no
+/// call arrives — nothing was promised, so there is nothing unsatisfied.
+#[cfg(unix)]
+#[tokio::test]
+async fn absent_tool_choice_never_sets_the_flag() {
+    let (path, shutdown, handle) = boot_v2_daemon().await;
+
+    let frames = send_and_read_all(&path, &text_request("v2-tc-none", "hello")).await;
+
+    match frames.last().expect("a terminal frame") {
+        ResponseV2::Done {
+            tool_choice_unsatisfied,
+            ..
+        } => assert!(
+            !tool_choice_unsatisfied,
+            "no tool_choice was sent; flag must stay unset: {frames:#?}"
+        ),
+        other => panic!("expected Done, got {other:?}"),
+    }
+
+    let _ = shutdown.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn valid_v2_request_streams_frames_and_terminates_with_done() {
@@ -142,16 +249,22 @@ async fn valid_v2_request_streams_frames_and_terminates_with_done() {
     assert_eq!(deltas, vec!["a", "b", "c"]);
 
     match &frames[3] {
+        // Exhaustive on purpose: no `..`, so adding a field to the
+        // terminal frame fails this test until someone decides what the
+        // baseline value should be. That is how the new
+        // `tool_choice_unsatisfied` field got asserted here.
         ResponseV2::Done {
             id,
             usage,
             stop_reason,
             backend,
+            tool_choice_unsatisfied,
         } => {
             assert_eq!(id, "v2-001");
             assert_eq!(*stop_reason, StopReasonV2::EndTurn);
             assert_eq!(usage.output_tokens, 3);
             assert_eq!(backend, "mock");
+            assert!(!tool_choice_unsatisfied, "this request sent no tool_choice");
         }
         other => panic!("expected Done, got {other:?}"),
     }

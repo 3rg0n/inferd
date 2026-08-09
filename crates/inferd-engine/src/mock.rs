@@ -16,7 +16,7 @@ use crate::backend::{
 use async_trait::async_trait;
 use inferd_proto::embed::{EmbedResolved, EmbedUsage};
 use inferd_proto::rerank::{RerankResolved, RerankResult, RerankUsage};
-use inferd_proto::v2::{ResolvedV2, StopReasonV2, UsageV2};
+use inferd_proto::v2::{ResolvedV2, StopReasonV2, ToolCallId, ToolUseInput, UsageV2};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_stream::wrappers::ReceiverStream;
@@ -39,6 +39,16 @@ pub struct MockConfig {
     /// observable so admission queueing actually engages. `None` means
     /// no delay (the historical behaviour).
     pub token_delay_ms: Option<u64>,
+    /// If `Some(name)`, emit one `TokenEventV2::ToolUse` for that tool
+    /// after the tokens and terminate with `StopReasonV2::ToolUse`.
+    ///
+    /// Mock does not *parse* tool calls (its `capabilities().tools` is
+    /// `false`) — this replays a call the daemon relay must observe, so
+    /// the relay's `tool_choice_unsatisfied` bookkeeping can be tested
+    /// on both branches without a real model. Without it the mock never
+    /// emits a call, and a relay bug that flagged every `required`
+    /// request would pass.
+    pub emit_tool_use: Option<String>,
 }
 
 /// Variants for `MockConfig::pre_stream_error`.
@@ -143,6 +153,7 @@ impl Backend for Mock {
             .config
             .token_delay_ms
             .map(std::time::Duration::from_millis);
+        let emit_tool_use = self.config.emit_tool_use.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(8);
 
         tokio::spawn(async move {
@@ -161,9 +172,28 @@ impl Backend for Mock {
                 }
                 output_tokens = output_tokens.saturating_add(1);
             }
+            let mut stop_reason = StopReasonV2::EndTurn;
+            if let Some(name) = emit_tool_use {
+                if tx
+                    .send(TokenEventV2::ToolUse {
+                        tool_call_id: ToolCallId::from("mock-call-1"),
+                        name,
+                        // A no-argument call. `ToolUseInput` is
+                        // `serde_json::Value`, whose `Default` is
+                        // `Null` — an empty object is what a real
+                        // zero-arg call carries.
+                        input: ToolUseInput::Object(Default::default()),
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                stop_reason = StopReasonV2::ToolUse;
+            }
             let _ = tx
                 .send(TokenEventV2::Done {
-                    stop_reason: StopReasonV2::EndTurn,
+                    stop_reason,
                     usage: UsageV2 {
                         input_tokens: 0,
                         output_tokens,

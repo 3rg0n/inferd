@@ -118,6 +118,14 @@ pub enum ErrorCodeV2 {
     WireVersionUnsupported,
 }
 
+/// `skip_serializing_if` predicate for a `bool` that defaults to
+/// `false`. Keeps an unset optional flag off the wire entirely rather
+/// than emitting `false`, so an older client sees the frame shape it
+/// already parses.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// One frame on the v2 response NDJSON stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -141,6 +149,33 @@ pub enum ResponseV2 {
         ///
         /// Diagnostic only — apps must not branch on this (ADR 0007).
         backend: String,
+        /// Set when the request carried `tool_choice: "required"` and
+        /// the generation ended **without** the model ever emitting a
+        /// tool call. Omitted otherwise, so a v0.7.0 client parses this
+        /// frame unchanged.
+        ///
+        /// `required` guarantees the turn cannot *end* without a call —
+        /// the grammar masks every end-of-turn token while the call rule
+        /// is unsatisfied — but it cannot guarantee a call *arrives*:
+        /// unlimited non-call text is legal before one, so a model that
+        /// disagrees with the prompt can decline until `max_tokens`
+        /// (ADR 0029, measured on Gemma 4 E4B). Without this field the
+        /// caller sees `stop_reason: "max_tokens"` and cannot tell
+        /// "ran out of room mid-answer" from "declined for the whole
+        /// budget" — the same request shape produces both.
+        ///
+        /// A new `stop_reason` variant would have said this more
+        /// directly, but [`StopReasonV2`] is closed on both sides of
+        /// the wire (no `#[serde(other)]` here, fixed string constants
+        /// in `clients/go`), so an unfamiliar value is a parse error,
+        /// not a graceful degrade. An optional field is the only shape
+        /// that adds the signal without breaking a deployed client.
+        ///
+        /// So: `true` means no call arrived and retrying is the caller's
+        /// call. It is a *report*, never a repair — the daemon does not
+        /// retry, reshape, or nudge the model (invariant #2).
+        #[serde(default, skip_serializing_if = "is_false")]
+        tool_choice_unsatisfied: bool,
     },
     /// Terminal frame for a failed generation.
     Error {

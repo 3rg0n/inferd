@@ -29,7 +29,7 @@ use inferd_engine::{GenerateError, TokenEventV2};
 use inferd_proto::ProtoError;
 use inferd_proto::v2::{
     Attachment, BlobDescriptor, BlobDescriptorTag, ErrorCodeV2, MAX_ATTACHMENT_BYTES_PER_REQUEST,
-    MAX_ATTACHMENTS_PER_REQUEST, RequestV2, ResponseBlock, ResponseV2, WIRE_VERSION,
+    MAX_ATTACHMENTS_PER_REQUEST, RequestV2, ResponseBlock, ResponseV2, ToolChoice, WIRE_VERSION,
 };
 use inferd_proto::{FrameType, MAX_FRAME_BYTES, decode_json_payload, write_lp_json};
 use std::io;
@@ -197,6 +197,17 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
         let req_id = resolved.id.clone();
         let n_attachments = resolved.attachments.len();
         let n_tools = resolved.tools.len();
+        // Whether this request demanded a call, so the terminal frame
+        // can report that none arrived (ADR 0029). Read here because
+        // `resolved` moves into `generate_v2` below.
+        //
+        // Computed in the relay rather than per-backend on purpose: the
+        // answer is "did a ToolUse cross this stream", which the relay
+        // already sees for every adapter. Threading it through
+        // `TokenEventV2::Done` instead would make each of the four
+        // backends responsible for getting the same bookkeeping right,
+        // and a backend that forgot would silently report "satisfied".
+        let tool_choice_required = resolved.tool_choice == Some(ToolChoice::Required);
 
         let mut stream = match backend.generate_v2(resolved).await {
             Ok(s) => s,
@@ -225,6 +236,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
         };
 
         let mut terminal_emitted = false;
+        let mut saw_tool_use = false;
         while let Some(ev) = stream.next().await {
             match ev {
                 TokenEventV2::Text(delta) => {
@@ -246,6 +258,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     name,
                     input,
                 } => {
+                    saw_tool_use = true;
                     let frame = ResponseV2::Frame {
                         id: req_id.clone(),
                         block: ResponseBlock::ToolUse {
@@ -257,11 +270,18 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                     write_response_v2(&writer, &frame, write_timeout).await?;
                 }
                 TokenEventV2::Done { stop_reason, usage } => {
+                    // `required` promises the turn cannot *end* without
+                    // a call, not that one arrives — a declining model
+                    // runs to `max_tokens` instead (ADR 0029). Say so,
+                    // rather than leaving the caller to infer it from a
+                    // `max_tokens` that also means "ran out of room".
+                    let tool_choice_unsatisfied = tool_choice_required && !saw_tool_use;
                     let frame = ResponseV2::Done {
                         id: req_id.clone(),
                         usage,
                         stop_reason,
                         backend: backend_name.clone(),
+                        tool_choice_unsatisfied,
                     };
                     write_response_v2(&writer, &frame, write_timeout).await?;
                     router.record_success(&backend_name);
@@ -271,6 +291,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                         backend = %backend_name,
                         wire_version = "v2",
                         stop_reason = ?stop_reason,
+                        tool_choice_unsatisfied = tool_choice_unsatisfied,
                         input_tokens = usage.input_tokens,
                         output_tokens = usage.output_tokens,
                         n_attachments = n_attachments,
