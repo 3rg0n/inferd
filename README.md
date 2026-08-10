@@ -6,7 +6,7 @@
 [![inferd-client on crates.io](https://img.shields.io/crates/v/inferd-client?label=inferd-client)](https://crates.io/crates/inferd-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status: v0.7.0.** `inferd-proto` and `inferd-client` are on crates.io;
+**Status: v0.8.0.** `inferd-proto` and `inferd-client` are on crates.io;
 the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
 HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
 arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms, and
@@ -200,8 +200,8 @@ installed.
 ### Linux
 
 ```sh
-tar xzf inferd-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
-cd inferd-v0.7.0-x86_64-unknown-linux-gnu
+tar xzf inferd-v0.8.0-x86_64-unknown-linux-gnu.tar.gz
+cd inferd-v0.8.0-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin ~/.config/systemd/user
 cp -f inferd-daemon inferdctl ~/.local/bin/
 cp -f backends/* ~/.local/bin/            # ggml backend modules ($ORIGIN RPATH)
@@ -245,8 +245,8 @@ and run `wsl.exe --shutdown` from Windows.
 ### macOS (Apple Silicon)
 
 ```sh
-tar xzf inferd-v0.7.0-aarch64-apple-darwin.tar.gz
-cd inferd-v0.7.0-aarch64-apple-darwin
+tar xzf inferd-v0.8.0-aarch64-apple-darwin.tar.gz
+cd inferd-v0.8.0-aarch64-apple-darwin
 ./packaging/launchd/install-launchagent.sh ./inferd-daemon
 ./inferdctl watch
 ```
@@ -264,8 +264,8 @@ bootstraps it. The probe picks Metal on Apple Silicon.
 ### Windows
 
 ```powershell
-Expand-Archive inferd-v0.7.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-cd inferd-v0.7.0-x86_64-pc-windows-msvc
+Expand-Archive inferd-v0.8.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+cd inferd-v0.8.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File .\packaging\install.ps1 `
     -SourceBinary .\inferd-daemon.exe
 .\inferdctl watch

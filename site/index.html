@@ -38,7 +38,7 @@
   </div>
   <div class="masthead-rule"></div>
   <div class="masthead-meta">
-    <span>v0.7.0</span>
+    <span>v0.8.0</span>
     <span class="dot">·</span>
     <span>MIT</span>
     <span class="dot">·</span>
@@ -62,7 +62,7 @@
     <strong>inferd</strong> is a single host-wide local-inference daemon. One generate model, one embed model, held warm in memory and shared by every tool on the machine that wants them — over a small IPC protocol (length-prefixed frames for generation, NDJSON for embeddings and rerank). It is plumbing, not a product.
   </p>
   <div class="hero-actions">
-    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.7.0</a>
+    <a class="btn primary" href="https://github.com/3rg0n/inferd/releases">Download v0.8.0</a>
     <a class="btn ghost" href="https://github.com/3rg0n/inferd">Read the source</a>
   </div>
   <pre class="hero-snippet" aria-label="example session"><span class="prompt">$</span> inferdctl doctor
@@ -269,8 +269,8 @@
       <article class="install-card">
         <h3 class="os">Linux</h3>
         <p class="install-desc">systemd <code>--user</code> unit. No sudo, no system-wide service.</p>
-<pre>tar xzf inferd-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
-cd  inferd-v0.7.0-x86_64-unknown-linux-gnu
+<pre>tar xzf inferd-v0.8.0-x86_64-unknown-linux-gnu.tar.gz
+cd  inferd-v0.8.0-x86_64-unknown-linux-gnu
 mkdir -p ~/.local/bin
 cp inferd-daemon inferdctl backends/* ~/.local/bin/
 mkdir -p ~/.config/systemd/user
@@ -282,16 +282,16 @@ systemctl --user enable --now inferd</pre>
       <article class="install-card">
         <h3 class="os">macOS</h3>
         <p class="install-desc">launchd <code>LaunchAgent</code>, per-user, Apple Silicon.</p>
-<pre>tar xzf inferd-v0.7.0-aarch64-apple-darwin.tar.gz
-cd  inferd-v0.7.0-aarch64-apple-darwin
+<pre>tar xzf inferd-v0.8.0-aarch64-apple-darwin.tar.gz
+cd  inferd-v0.8.0-aarch64-apple-darwin
 ./packaging/install-launchagent.sh ./inferd-daemon</pre>
       </article>
 
       <article class="install-card">
         <h3 class="os">Windows</h3>
         <p class="install-desc">Per-user Startup-folder shortcut. No SCM service.</p>
-<pre>Expand-Archive inferd-v0.7.0-x86_64-pc-windows-msvc.zip
-cd  inferd-v0.7.0-x86_64-pc-windows-msvc
+<pre>Expand-Archive inferd-v0.8.0-x86_64-pc-windows-msvc.zip
+cd  inferd-v0.8.0-x86_64-pc-windows-msvc
 powershell -ExecutionPolicy Bypass `
   -File .\packaging\install.ps1 `
   -SourceBinary .\inferd-daemon.exe</pre>
@@ -339,7 +339,7 @@ powershell -ExecutionPolicy Bypass `
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Status</p>
-      <p>GA · v0.7.0</p>
+      <p>GA · v0.8.0</p>
     </div>
     <div class="colophon-block">
       <p class="colophon-label">Set in</p>

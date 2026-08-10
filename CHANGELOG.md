@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-10
+
+Minor, not patch: one **behaviour** break, no wire break. A `tool_result`
+whose `tool_call_id` pairs with no `tool_use` in the same request is now
+rejected with `invalid_request` instead of being attributed to a guessed
+tool — a request the v0.7.0 daemon accepted now fails, which is what
+takes this off the patch line. `wire_version` is unmoved and every frame
+shape is unchanged: a v0.7.0 client interoperates, and the two new
+fields (`tool_choice` on the request, `tool_choice_unsatisfied` on
+`done`) are optional and omitted when absent.
+
+The theme is that a constraint the caller asked for either holds or says
+it did not. `tool_choice` is enforced by grammar rather than advertised
+as a hint ([ADR 0029](docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md)),
+`required` reports when no call arrived rather than looking like an
+ordinary truncation, and an unpairable `tool_result` is refused rather
+than silently mislabelled. All three replace a fail-open path with a
+detectable one.
+
 ### Added
 
 - **`tool_choice_unsatisfied` on the `done` frame** — a

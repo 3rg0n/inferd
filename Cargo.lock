@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-client"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-daemon"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-http"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-openai-wire"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "inferd-proto"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "serde",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "inferdctl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
