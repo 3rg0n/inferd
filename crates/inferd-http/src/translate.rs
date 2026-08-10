@@ -10,9 +10,10 @@
 
 use inferd_openai_wire::{
     ChatChunk, ChatRequest, ChunkChoice, ChunkDelta, ChunkToolCallDelta,
-    ChunkToolCallFunctionDelta, ChunkUsage, ContentPart, EmbeddingData, EmbeddingVector,
-    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, MessageContent,
-    ResponseFormat as OpenAiResponseFormat, ToolChoice as OpenAiToolChoice, ToolChoiceMode,
+    ChunkToolCallFunctionDelta, ChunkUsage, CompletionChoice, CompletionMessage, ContentPart,
+    EmbeddingData, EmbeddingVector, EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage,
+    MessageContent, ResponseFormat as OpenAiResponseFormat, ToolCallFunction, ToolCallReplay,
+    ToolChoice as OpenAiToolChoice, ToolChoiceMode,
 };
 use inferd_proto::embed::EmbedRequest;
 use inferd_proto::v2::{
@@ -507,6 +508,57 @@ impl ChunkBuilder {
         });
         chunk
     }
+
+    /// Build the non-streaming `chat.completion` body from the same
+    /// buffered tool calls [`Self::finalize`] streams, so the two paths
+    /// cannot disagree about what the model called. `text` is the
+    /// concatenated text deltas, which the caller accumulates (the
+    /// builder streams them rather than retaining them).
+    pub fn complete(
+        &self,
+        text: String,
+        usage: &UsageV2,
+        stop: StopReasonV2,
+    ) -> inferd_openai_wire::ChatCompletion {
+        let tool_calls = self
+            .tool_calls
+            .iter()
+            .map(|(id, name, args)| ToolCallReplay {
+                id: id.clone(),
+                kind: "function".to_string(),
+                function: ToolCallFunction {
+                    name: name.clone(),
+                    arguments: args.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+        // OpenAI sends `"content": null` on a tool-call-only turn.
+        let content = if text.is_empty() && !tool_calls.is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+        inferd_openai_wire::ChatCompletion {
+            id: self.id.clone(),
+            object: "chat.completion".to_string(),
+            created: self.created,
+            model: self.model.clone(),
+            choices: vec![CompletionChoice {
+                index: 0,
+                message: CompletionMessage {
+                    role: "assistant".to_string(),
+                    content,
+                    tool_calls,
+                },
+                finish_reason: Some(stop_reason_to_openai(stop).to_string()),
+            }],
+            usage: ChunkUsage {
+                prompt_tokens: usage.input_tokens,
+                completion_tokens: usage.output_tokens,
+                total_tokens: usage.input_tokens + usage.output_tokens,
+            },
+        }
+    }
 }
 
 /// Map inferd stop reasons to OpenAI `finish_reason`.
@@ -638,8 +690,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use inferd_openai_wire::{
-        ChatMessage, NamedToolChoice, NamedToolChoiceFunction, ToolCallFunction, ToolCallReplay,
-        ToolDecl, ToolDeclFunction,
+        ChatMessage, NamedToolChoice, NamedToolChoiceFunction, ToolDecl, ToolDeclFunction,
     };
 
     fn msg(role: &str, text: &str) -> ChatMessage {
@@ -852,6 +903,84 @@ mod tests {
         );
         assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
         assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 15);
+    }
+
+    /// A tool call must reach the caller on **both** response paths. The
+    /// non-streaming body was hand-built and dropped the buffered calls,
+    /// so it returned `finish_reason: "tool_calls"` with nothing to
+    /// execute — an SDK saw a call was made and found no call.
+    #[test]
+    fn tool_calls_reach_both_stream_and_non_stream() {
+        let mut b = ChunkBuilder::new("id".into(), "m".into(), 7);
+        let f = ResponseV2::Frame {
+            id: "id".into(),
+            block: ResponseBlock::ToolUse {
+                tool_call_id: ToolCallId::from("tc-1"),
+                name: "get_weather".into(),
+                input: serde_json::json!({"city": "Dublin"}),
+            },
+        };
+        assert!(b.ingest(&f).is_none(), "tool_use buffers, does not stream");
+        let usage = UsageV2 {
+            input_tokens: 57,
+            output_tokens: 14,
+        };
+
+        let chunk = b.finalize(&usage, StopReasonV2::ToolUse);
+        let streamed = &chunk.choices[0].delta.tool_calls;
+        assert_eq!(streamed.len(), 1);
+
+        let done = b.complete(String::new(), &usage, StopReasonV2::ToolUse);
+        let collected = &done.choices[0].message.tool_calls;
+        assert_eq!(
+            collected.len(),
+            streamed.len(),
+            "non-stream dropped the tool calls the stream emitted"
+        );
+        assert_eq!(collected[0].id, "tc-1");
+        assert_eq!(collected[0].function.name, "get_weather");
+        assert_eq!(collected[0].function.arguments, r#"{"city":"Dublin"}"#);
+        assert_eq!(collected[0].kind, "function");
+
+        // Both paths agree on the terminal metadata too.
+        assert_eq!(done.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(
+            done.choices[0].finish_reason,
+            chunk.choices[0].finish_reason
+        );
+        assert_eq!(done.usage.total_tokens, 71);
+
+        // A tool-call-only turn carries an explicit null content, which
+        // clients branch on — not an omitted key, not an empty string.
+        let json = serde_json::to_value(&done).expect("serialize");
+        assert_eq!(
+            json["choices"][0]["message"]["content"],
+            serde_json::Value::Null
+        );
+        assert_eq!(json["object"], "chat.completion");
+        assert_eq!(json["created"], 7);
+    }
+
+    /// The ordinary text turn keeps a string `content` and omits the
+    /// empty `tool_calls` array.
+    #[test]
+    fn text_only_completion_keeps_content_and_omits_tool_calls() {
+        let b = ChunkBuilder::new("id".into(), "m".into(), 0);
+        let done = b.complete(
+            "hello".into(),
+            &UsageV2 {
+                input_tokens: 1,
+                output_tokens: 2,
+            },
+            StopReasonV2::EndTurn,
+        );
+        assert_eq!(done.choices[0].message.content.as_deref(), Some("hello"));
+        assert_eq!(done.choices[0].finish_reason.as_deref(), Some("stop"));
+        let json = serde_json::to_value(&done).expect("serialize");
+        assert!(
+            json["choices"][0]["message"].get("tool_calls").is_none(),
+            "empty tool_calls should be omitted, not sent as []"
+        );
     }
 
     #[test]

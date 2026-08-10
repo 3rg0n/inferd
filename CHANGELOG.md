@@ -85,6 +85,32 @@ detectable one.
 
 ### Fixed
 
+- **`inferd-http` dropped tool calls on the non-streaming response.**
+  `POST /v1/chat/completions` with `stream: false` returned
+  `finish_reason: "tool_calls"` and no `tool_calls` array — an OpenAI SDK
+  was told a call had been made and found nothing to execute, so a
+  non-streaming tool-using client could not work at all. The streaming
+  path was correct throughout, which is why the SDK validation that
+  cleared the bridge missed it.
+
+  The two paths had diverged: streaming built its terminal frame from
+  `ChunkBuilder`, while the non-streaming handler hand-wrote a
+  `serde_json::json!` body and discarded the builder it had been feeding
+  every frame. The calls were buffered and simply never read. Rather than
+  copy the assembly into the second site, the shape now lives in
+  `inferd-openai-wire` as `ChatCompletion` and both paths render from the
+  same buffer — so the response types are typed and shared like every
+  other surface the bridge speaks, and neither path can be extended
+  without the other. A regression test asserts the two agree on the same
+  generation, and a tool-call-only turn now sends an explicit
+  `"content": null` as OpenAI does, rather than an empty string.
+
+  Found during v0.8.0 install=work validation, against the installed
+  bridge rather than a test double. Pre-existing since the bridge shipped
+  in v0.6.0 (deferred by comment, not a v0.8.0 regression), but
+  `tool_choice` is this release's headline feature and this was the
+  OpenAI-facing half of it.
+
 - **`docs/consuming-across-a-boundary.md` advertised two `inferd-http`
   surfaces where one exists.** ADR 0020 sketched a *Surface B* — inferd's
   native frames over a localhost port — and the boundary guide listed it

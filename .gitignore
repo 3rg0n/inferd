@@ -64,3 +64,7 @@ tmp-spec-validation/
 
 # v0.6 validation scratch (tarballs, harnesses)
 .tmp-v06val/
+
+# v0.8 validation scratch (staged archive, pipe harnesses)
+.tmp-v080/
+staging/

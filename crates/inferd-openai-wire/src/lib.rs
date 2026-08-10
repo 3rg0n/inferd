@@ -438,6 +438,59 @@ pub struct ChunkUsage {
     pub total_tokens: u32,
 }
 
+// --- Non-streaming response -----------------------------------------
+
+/// `POST /v1/chat/completions` success body when `stream` is false.
+///
+/// The streaming counterpart is [`ChatChunk`]. Both are built from the
+/// same buffered state so the two paths cannot report different tool
+/// calls for the same generation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChatCompletion {
+    /// Stable id for the completion.
+    pub id: String,
+    /// Always `"chat.completion"`.
+    pub object: String,
+    /// Unix creation timestamp.
+    pub created: u64,
+    /// Echoed model name.
+    pub model: String,
+    /// Per-choice results (inferd emits a single choice).
+    pub choices: Vec<CompletionChoice>,
+    /// Token usage for the whole completion.
+    pub usage: ChunkUsage,
+}
+
+/// One choice in a [`ChatCompletion`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompletionChoice {
+    /// Choice index (always 0 for inferd).
+    #[serde(default)]
+    pub index: u32,
+    /// The complete assistant message.
+    pub message: CompletionMessage,
+    /// `stop` | `length` | `tool_calls` | …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+/// The assembled assistant message in a [`CompletionChoice`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompletionMessage {
+    /// Always `"assistant"`.
+    pub role: String,
+    /// The generated text. Serialized even when `None` — OpenAI sends an
+    /// explicit `"content": null` on a turn that is only tool calls, and
+    /// clients branch on that, so omitting the key would not be
+    /// equivalent.
+    pub content: Option<String>,
+    /// Tool calls the model made. Same struct the request direction uses
+    /// to replay them back as history, so a caller can echo a choice's
+    /// `message` into the next request unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallReplay>,
+}
+
 // ===================== Embeddings ===================================
 
 /// Request body for `POST /v1/embeddings`.

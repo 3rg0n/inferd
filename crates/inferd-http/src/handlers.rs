@@ -307,24 +307,7 @@ async fn chat_collect_response(
                          returning finish_reason=length"
                     );
                 }
-                let finish = translate::stop_reason_to_openai(stop_reason);
-                let body = serde_json::json!({
-                    "id": id,
-                    "object": "chat.completion",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": text },
-                        "finish_reason": finish,
-                    }],
-                    "usage": {
-                        "prompt_tokens": usage.input_tokens,
-                        "completion_tokens": usage.output_tokens,
-                        "total_tokens": usage.input_tokens + usage.output_tokens,
-                    }
-                });
-                let _ = builder; // (tool-call assembly for non-stream is a follow-up; text path complete)
+                let body = builder.complete(text, usage, stop_reason);
                 return (StatusCode::OK, Json(body)).into_response();
             }
             Some(Ok(ResponseV2::Error { code, message, .. })) => {

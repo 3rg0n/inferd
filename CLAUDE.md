@@ -225,7 +225,7 @@ Feature-gated builds and tests:
 - Build with a backend, e.g. `cargo build -p inferd-daemon --features dl-backends` (or `--features cuda` for the static single-accelerator path).
 - `INFERD_FORCE_BACKEND=cpu|metal|cuda|rocm|vulkan` pins the accelerator at runtime (env-only, no CLI flag — ADR 0019).
 
-Release engineering: `docs/RELEASING.md` is the tag/publish runbook; `docs/v0.3-validation.md` is the per-platform install=work coverage matrix. The release workflow (`.github/workflows/release.yml`) bundles backend dylibs into each tarball; the Linux x86_64 CUDA path uses `readelf -d` BFS to walk the transitive DT_NEEDED closure and patchelf to bake `$ORIGIN` RUNPATH (NVIDIA driver libs `libcuda.so.1` / `libnvidia-ml.so.1` are skiplisted — redistribution is EULA-forbidden).
+Release engineering: `docs/RELEASING.md` is the tag/publish runbook; `docs/vX.Y-validation.md` is the per-platform install=work coverage matrix for each line (current: `docs/v0.8-validation.md`). The release workflow (`.github/workflows/release.yml`) bundles backend dylibs into each tarball; the Linux x86_64 CUDA path uses `readelf -d` BFS to walk the transitive DT_NEEDED closure and patchelf to bake `$ORIGIN` RUNPATH (NVIDIA driver libs `libcuda.so.1` / `libnvidia-ml.so.1` are skiplisted — redistribution is EULA-forbidden).
 
 ## When writing ADRs
 
