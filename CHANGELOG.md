@@ -85,6 +85,43 @@ detectable one.
 
 ### Fixed
 
+- **A fresh install could not pull its own models: the default configs
+  pinned SHAs against mutable `resolve/main/` URLs.** On 2026-07-17
+  unsloth republished both Gemma 4 text GGUFs ("Added Gemma official chat
+  template update"), changing the bytes served at the URLs the first-boot
+  config and the ADR 0023 auto-select tiers named. A first start then
+  downloaded 5 GB, failed the SHA-256 check, quarantined the blob and
+  exited — and systemd restarted it into the same 5 GB download, on a
+  loop. `auto_pull` on an empty store was completely broken; only hosts
+  whose CAS store already held the June blobs still worked, which is why
+  every prior validation leg passed.
+
+  The verification behaved exactly as designed. ADR 0010's whole point is
+  that the SHA is the security control on the one URL the daemon is
+  allowed to fetch, and it correctly refused bytes that did not match
+  what was pinned. The defect was pointing that control at a moving
+  target: a content digest and a mutable branch URL are an unsatisfiable
+  pair the moment the publisher re-quantises in place.
+
+  Every shipped `source_url` now names an immutable 40-char repo
+  revision — `0720adb2…` for E4B, `d997c805…` for 12B, `6661a650…` for
+  EmbeddingGemma — each verified via HuggingFace's `X-Linked-ETag` to
+  serve bytes matching the already-pinned digests. No SHA changed, so no
+  model behaviour changed: this restores the fetch to the exact artifacts
+  validated since v0.4 rather than adopting the upstream re-quant, whose
+  altered chat template would be a Gemma 4 templating change (ADR 0026)
+  landing unvalidated in the release whose headline feature is Gemma 4
+  tool-call grammar. Adopting it is a separate, tested decision.
+
+  Two unit tests now assert the invariant structurally — a default URL
+  must contain no `/resolve/main/` and must carry a 40-char hex revision
+  — covering the first-boot defaults and both auto-select tiers,
+  including the 12B pair that drifted identically but that no default
+  install exercises. Both were confirmed to fail against the old URLs
+  before the fix landed. The two mmproj projectors and the embedding
+  model had not drifted; they are pinned regardless, because "has not
+  changed yet" is not a property.
+
 - **`inferd-http` dropped tool calls on the non-streaming response.**
   `POST /v1/chat/completions` with `stream: false` returned
   `finish_reason: "tool_calls"` and no `tool_calls` array — an OpenAI SDK

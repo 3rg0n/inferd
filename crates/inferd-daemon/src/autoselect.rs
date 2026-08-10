@@ -93,6 +93,11 @@ const HEADROOM_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 /// Build the default (pinned) llamacpp generation entry for a tier.
 /// Mirrors the first-boot defaults; SHAs match
 /// `docs/benchmarks/gemma4-e4b-vs-12b.md` and the HuggingFace repos.
+///
+/// `source_url`s pin an immutable repo revision, never `resolve/main/` —
+/// see the note in `config_file.rs`: upstream re-quantised both text GGUFs
+/// on 2026-07-17 and the mutable URL turned a fresh install into a
+/// SHA-mismatch restart loop.
 fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry {
     match tier {
         Tier::E4b => LlamacppEntry {
@@ -101,8 +106,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
                 name: "gemma-4-e4b".into(),
                 sha256: "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36".into(),
                 size_bytes: Some(5_126_304_928),
-                source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
-                     gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+                source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/\
+                     0720adb23527c2cd5ea01d1db067cd960327fdac/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
                     .into(),
                 license: Some("gemma".into()),
             },
@@ -110,8 +115,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
                 name: "gemma-4-e4b-mmproj".into(),
                 sha256: "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51".into(),
                 size_bytes: Some(990_372_672),
-                source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
-                     mmproj-F16.gguf"
+                source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/\
+                     0720adb23527c2cd5ea01d1db067cd960327fdac/mmproj-F16.gguf"
                     .into(),
                 license: Some("gemma".into()),
             }),
@@ -134,8 +139,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
                 name: "gemma-4-12b".into(),
                 sha256: "ee33ab5be8e07aca1c269fc645eaed5f3298e089d52db29415839d8f29957020".into(),
                 size_bytes: Some(7_366_421_920),
-                source_url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/\
-                     gemma-4-12b-it-UD-Q4_K_XL.gguf"
+                source_url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/\
+                     d997c805aafe035a8024f961c6e1afd6b30d79a5/gemma-4-12b-it-UD-Q4_K_XL.gguf"
                     .into(),
                 license: Some("gemma".into()),
             },
@@ -143,8 +148,8 @@ fn default_gen_entry(tier: Tier, n_ctx: u32, n_gpu_layers: i32) -> LlamacppEntry
                 name: "gemma-4-12b-mmproj".into(),
                 sha256: "91f086971e56d7a7d8d39e271873fccdb49541bd259d6e02c401a4f1cb7a219e".into(),
                 size_bytes: Some(175_115_840),
-                source_url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/\
-                     mmproj-F16.gguf"
+                source_url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/\
+                     d997c805aafe035a8024f961c6e1afd6b30d79a5/mmproj-F16.gguf"
                     .into(),
                 license: Some("gemma".into()),
             }),
@@ -269,8 +274,8 @@ fn default_embed_entry() -> LlamacppEntry {
             name: "embeddinggemma-300m".into(),
             sha256: "a0f7b4e13c397a6e1b32c2de75b1f65a14c92ec524d5f674d94a4290a1c4969b".into(),
             size_bytes: Some(328_577_056),
-            source_url: "https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/resolve/main/\
-                 embeddinggemma-300M-Q8_0.gguf"
+            source_url: "https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/resolve/\
+                 6661a6504c30d8304af13455cb4a5d4f5bc6011f/embeddinggemma-300M-Q8_0.gguf"
                 .into(),
             license: Some("gemma".into()),
         },
@@ -301,6 +306,36 @@ mod tests {
         // Start from an empty backend list so we exercise synthesis.
         c.backends = Some(vec![]);
         c
+    }
+
+    // Same invariant `config_file::default_source_urls_pin_immutable_revisions`
+    // enforces on the first-boot defaults, applied to the auto-select
+    // tiers — which is where the 12B URLs live, and they drifted too.
+    #[test]
+    fn tier_default_source_urls_pin_immutable_revisions() {
+        fn assert_pinned(url: &str, what: &str) {
+            assert!(
+                !url.contains("/resolve/main/"),
+                "{what} points at the mutable `main` branch: {url}"
+            );
+            let rev = url
+                .split("/resolve/")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_else(|| panic!("{what} has no /resolve/<rev>/ segment: {url}"));
+            assert!(
+                rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+                "{what} revision {rev:?} is not a 40-char commit hash: {url}"
+            );
+        }
+
+        for tier in [Tier::E4b, Tier::B12] {
+            let e = default_gen_entry(tier, 8192, -1);
+            assert_pinned(&e.model.source_url, &format!("{tier:?} model"));
+            let mm = e.mmproj.as_ref().expect("tier default carries an mmproj");
+            assert_pinned(&mm.source_url, &format!("{tier:?} mmproj"));
+        }
+        assert_pinned(&default_embed_entry().model.source_url, "embed model");
     }
 
     #[test]

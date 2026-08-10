@@ -539,8 +539,17 @@ pub fn default_first_boot_config() -> ConfigFile {
                     sha256: "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36"
                         .into(),
                     size_bytes: Some(5_126_304_928),
-                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
-                         gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+                    // Pinned to an immutable repo revision, not `main`.
+                    // `resolve/main/` is mutable: unsloth re-quantised both
+                    // Gemma 4 text GGUFs on 2026-07-17 ("Added Gemma
+                    // official chat template update"), which changed the
+                    // bytes under this URL. A fresh install then downloaded
+                    // 5 GB, failed the SHA-256 check, quarantined the blob
+                    // and restart-looped. The SHA is the security control
+                    // (ADR 0010) and it did its job; the URL has to be
+                    // immutable for it to be satisfiable at all.
+                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/\
+                         0720adb23527c2cd5ea01d1db067cd960327fdac/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
                         .into(),
                     license: Some("gemma".into()),
                 },
@@ -558,8 +567,8 @@ pub fn default_first_boot_config() -> ConfigFile {
                     sha256: "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51"
                         .into(),
                     size_bytes: Some(990_372_672),
-                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/\
-                         mmproj-F16.gguf"
+                    source_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/\
+                         0720adb23527c2cd5ea01d1db067cd960327fdac/mmproj-F16.gguf"
                         .into(),
                     license: Some("gemma".into()),
                 }),
@@ -587,10 +596,9 @@ pub fn default_first_boot_config() -> ConfigFile {
                     sha256: "a0f7b4e13c397a6e1b32c2de75b1f65a14c92ec524d5f674d94a4290a1c4969b"
                         .into(),
                     size_bytes: Some(328_577_056),
-                    source_url:
-                        "https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/resolve/main/\
-                         embeddinggemma-300M-Q8_0.gguf"
-                            .into(),
+                    source_url: "https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/resolve/\
+                         6661a6504c30d8304af13455cb4a5d4f5bc6011f/embeddinggemma-300M-Q8_0.gguf"
+                        .into(),
                     license: Some("gemma".into()),
                 },
                 // Embedding model — no projector.
@@ -1590,6 +1598,49 @@ mod tests {
         }
         assert!(saw_generate, "default must include a generate backend");
         assert!(saw_embed, "default must include an embed backend");
+    }
+
+    // Every shipped default `source_url` must name an immutable revision,
+    // never `resolve/main/`. A mutable URL plus a pinned SHA is an
+    // unsatisfiable pair the moment upstream re-quantises: on 2026-07-17
+    // unsloth republished both Gemma 4 text GGUFs, and a fresh install
+    // downloaded 5 GB, failed verification, quarantined the blob and
+    // restart-looped. The SHA check (ADR 0010) worked correctly — the bug
+    // was pointing it at bytes that could change underneath it.
+    //
+    // A 40-char hex path segment is what pins the revision; HuggingFace
+    // also serves branch and tag names there, so the shape is the check.
+    #[test]
+    fn default_source_urls_pin_immutable_revisions() {
+        fn assert_pinned(url: &str, what: &str) {
+            assert!(
+                !url.contains("/resolve/main/"),
+                "{what} points at the mutable `main` branch: {url}"
+            );
+            let rev = url
+                .split("/resolve/")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_else(|| panic!("{what} has no /resolve/<rev>/ segment: {url}"));
+            assert!(
+                rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+                "{what} revision {rev:?} is not a 40-char commit hash: {url}"
+            );
+        }
+
+        let mut checked = 0;
+        for entry in default_first_boot_config().backends.iter().flatten() {
+            if let BackendEntry::Llamacpp(e) = entry {
+                assert_pinned(&e.model.source_url, &format!("{} model", e.name));
+                checked += 1;
+                if let Some(mm) = &e.mmproj {
+                    assert_pinned(&mm.source_url, &format!("{} mmproj", e.name));
+                    checked += 1;
+                }
+            }
+        }
+        // generate + its mmproj + embed.
+        assert_eq!(checked, 3, "expected 3 default URLs, checked {checked}");
     }
 
     #[test]

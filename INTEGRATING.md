@@ -88,7 +88,7 @@ Default location: `$HOME/.inferd/config.json` on Unix, `%USERPROFILE%\.inferd\co
     "name": "gemma-4-e4b",
     "sha256": "30d1e7949597a3446726064e80b876fd1b5cba4aa6eec53d27afa420e731fb36",
     "size_bytes": 5126304928,
-    "source_url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf",
+    "source_url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/0720adb23527c2cd5ea01d1db067cd960327fdac/gemma-4-E4B-it-UD-Q4_K_XL.gguf",
     "license": "apache-2.0"
   },
   "n_ctx": 8192,
@@ -97,6 +97,8 @@ Default location: `$HOME/.inferd/config.json` on Unix, `%USERPROFILE%\.inferd\co
 ```
 
 `auto_pull: true` (the default) means: on first start, download the GGUF from `source_url`, verify SHA-256 with constant-time compare, store in the shared CAS layout under `$MODELS_HOME` (per [ADR 0011](docs/adr/0011-shared-content-addressable-model-store.md)), then load and serve.
+
+Note the `/resolve/<40-char commit>/` in `source_url` rather than `/resolve/main/`. Pin an immutable revision in any config you write: `main` is a moving branch, and a `sha256` pinned against bytes that can change upstream is an unsatisfiable pair — the fetch verifies, fails, quarantines the blob, and the daemon exits. Publishers do re-quantise in place.
 
 The model named here is the only model that daemon serves. Want a second model? Run a second daemon with a different config + different socket path.
 
