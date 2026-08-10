@@ -68,3 +68,7 @@ tmp-spec-validation/
 # v0.8 validation scratch (staged archive, pipe harnesses)
 .tmp-v080/
 staging/
+
+# Python bytecode from the packaging/validate/ gate harness
+__pycache__/
+*.pyc

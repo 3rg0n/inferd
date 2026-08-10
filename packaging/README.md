@@ -23,6 +23,10 @@ The release workflow (`.github/workflows/release.yml`) bundles each
 manifest into the matching platform's archive (M4 packaging
 follow-up, tracked separately from the alpha tag).
 
+`validate/` in the repo (not bundled into archives) holds the
+stdlib-only Python gates each platform's **install=work** leg runs
+against the installed daemon — see `packaging/validate/README.md`.
+
 ## ADR 0019: backends/ co-location
 
 v0.3 builds use the dynamic-loader path: `libllama` is a shared

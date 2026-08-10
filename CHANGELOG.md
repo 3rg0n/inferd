@@ -122,6 +122,15 @@ detectable one.
   model had not drifted; they are pinned regardless, because "has not
   changed yet" is not a property.
 
+  **Upgrading hosts keep their existing config**, by design — the daemon
+  never overwrites `~/.inferd/config.json`, so operator customisation
+  wins. An install that first booted before this release therefore still
+  names `resolve/main/`. That is inert while its model store holds the
+  blobs, which is the case for anything that has run successfully; it
+  matters only if that store is later emptied. To pick the fix up,
+  replace `main` in each `source_url` with the revision above, or move
+  the config aside and let the daemon write a fresh default.
+
 - **`inferd-http` dropped tool calls on the non-streaming response.**
   `POST /v1/chat/completions` with `stream: false` returned
   `finish_reason: "tool_calls"` and no `tool_calls` array — an OpenAI SDK
