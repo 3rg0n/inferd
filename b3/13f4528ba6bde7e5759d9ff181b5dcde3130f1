@@ -1,0 +1,35 @@
+CHANGELOG.md
+  s_126aec4081f728::t_940ad0bd188f9c 130-132
+  s_126aec4081f728::t_1e47771d114aae 125-129,133
+packaging/validate/bridge.py
+  s_126aec4081f728::t_91662b119003d3 1-200
+.gitignore
+  s_126aec4081f728::t_6c8fbfb9593b1e 71-74
+packaging/validate/wire.py
+  s_126aec4081f728::t_da431f32aaf890 1-29,42-43,52-226
+  s_126aec4081f728::t_6f38fb73c4e175 31,41,46-47
+  s_126aec4081f728::t_438adf565ea872 30,32-40,44-45,48-51
+packaging/validate/gates.py
+  s_126aec4081f728::t_e1a0033d82fb6e 22,25
+  s_126aec4081f728::t_5fe640ec98e805 1-21,23-24,26-255
+packaging/validate/README.md
+  s_126aec4081f728::t_bedcabd5c18f0b 1-104
+packaging/README.md
+  s_126aec4081f728::t_343d442dcc02eb 26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b313f4528ba6bde7e5759d9ff181b5dcde3130f1",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
