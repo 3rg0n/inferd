@@ -1,0 +1,39 @@
+packaging/validate/bridge.py
+  s_126aec4081f728::t_7f25531bf77f6c 29-34
+  s_126aec4081f728::t_98acee4489e778 64
+  s_126aec4081f728::t_b595b3ceac5926 72-74
+packaging/validate/README.md
+  s_126aec4081f728::t_a87696735485de 45,51-72
+  s_fb340f953812c6::t_329bf3bbc64072 73
+packaging/validate/wire.py
+  s_126aec4081f728::t_43cd9cbf350623 243
+  s_126aec4081f728::t_39b314fef08388 176
+  s_126aec4081f728::t_0e41698819ecbb 14-15
+  s_126aec4081f728::t_6805350bbe81ae 60-76
+  s_126aec4081f728::t_8a09058efb145e 179
+  s_126aec4081f728::t_cf956f97aa6334 199,201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cdf594b07a4f5b6d41f8c17636bef954c29d2f61",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
