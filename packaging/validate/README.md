@@ -42,11 +42,34 @@ resolves socket paths the way `inferd-daemon/src/endpoint.rs` does:
 - **Windows** — `\\.\pipe\inferd`, `\\.\pipe\inferd-infer-embed`
 
 Override with `INFERD_SOCK` / `INFERD_EMBED_SOCK`. Print what it
-resolved:
+resolved, along with the active timeouts:
 
 ```sh
 python3 packaging/validate/wire.py
 ```
+
+## Timeouts — raise them, don't wrap the scripts
+
+The client-side read timeouts default to 180s for a generating call and
+120s for embeddings, which suits an accelerated host. They bound only how
+long the *client* waits, so raising one cannot mask a daemon defect —
+whereas too tight a value reads exactly like a hang:
+
+```sh
+INFERD_GEN_TIMEOUT=600 python3 packaging/validate/gates.py
+INFERD_HTTP_TIMEOUT=600 python3 packaging/validate/bridge.py
+```
+
+Also `INFERD_EMBED_TIMEOUT`. Expect to need these on a **CPU-only**
+target, and on macOS where Metal JIT-compiles each new kernel-shape
+variant on first use — the v0.8.0 macOS leg saw one adversarial-prompt
+generation exceed 180s on a memory-pressured box while `doctor` stayed
+`ready` and the result was byte-for-byte correct. That leg had to build a
+throwaway wrapper to widen the timeout, which is precisely the
+scratch-rebuild this harness exists to stop; hence the env knobs.
+
+A slow decode is not a failure. Confirm the daemon is healthy
+(`inferdctl doctor`) before treating a timeout as a defect.
 
 ## Running
 

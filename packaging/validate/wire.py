@@ -11,7 +11,8 @@ so the framing itself is exercised:
 
 Transport is chosen from the platform: AF_UNIX on Unix, named pipes via
 ctypes on Windows. Socket paths follow the platform defaults and can be
-overridden with INFERD_SOCK / INFERD_EMBED_SOCK.
+overridden with INFERD_SOCK / INFERD_EMBED_SOCK; the client-side read
+timeouts with INFERD_GEN_TIMEOUT / INFERD_EMBED_TIMEOUT.
 """
 import json
 import os
@@ -55,6 +56,23 @@ def _default_paths():
 _GEN_DEFAULT, _EMB_DEFAULT = _default_paths()
 GEN = os.environ.get("INFERD_SOCK", _GEN_DEFAULT)
 EMB = os.environ.get("INFERD_EMBED_SOCK", _EMB_DEFAULT)
+
+# Client-side read timeouts, in seconds. These bound how long the *client*
+# waits, nothing on the wire, so widening one cannot mask a daemon defect
+# -- but too tight a value reads exactly like a hang. The defaults suit an
+# accelerated host; a slow decode is not a failure:
+#
+# - CPU-only targets (the arm64 legs) decode far slower than CUDA/Metal.
+# - Metal JIT-compiles each new kernel-shape variant on first use, and on
+#   a memory-pressured box the v0.8.0 macOS leg saw one adversarial-prompt
+#   generation exceed 180s that way while `doctor` stayed `ready`
+#   throughout and the result was byte-for-byte correct.
+#
+# Raise these rather than editing this file or wrapping it -- that leg had
+# to build a throwaway wrapper, which is the scratch-rebuild this
+# committed harness exists to stop.
+GEN_TIMEOUT = int(os.environ.get("INFERD_GEN_TIMEOUT", "180"))
+EMB_TIMEOUT = int(os.environ.get("INFERD_EMBED_TIMEOUT", "120"))
 
 
 def uvarint(n):
@@ -155,10 +173,10 @@ def _read_uvarint(conn):
 
 # --- surfaces -------------------------------------------------------------
 
-def gen(req, timeout=180):
+def gen(req, timeout=None):
     """Send one RequestV2; return every response frame."""
     req.setdefault("wire_version", WIRE_VERSION)
-    conn = _connect(GEN, timeout)
+    conn = _connect(GEN, GEN_TIMEOUT if timeout is None else timeout)
     payload = json.dumps(req).encode()
     conn.send(uvarint(len(payload)) + b"\x01" + payload)
     frames = []
@@ -178,9 +196,9 @@ def gen(req, timeout=180):
     return frames
 
 
-def embed(req, timeout=120):
+def embed(req, timeout=None):
     """Send one embed request (NDJSON); return the terminal frame."""
-    conn = _connect(EMB, timeout)
+    conn = _connect(EMB, EMB_TIMEOUT if timeout is None else timeout)
     conn.send(json.dumps(req).encode() + b"\n")
     line = b""
     while not line.endswith(b"\n"):
@@ -222,5 +240,6 @@ def terminal(frames):
 
 if __name__ == "__main__":
     print(f"generation: {GEN}\nembeddings: {EMB}")
+    print(f"timeouts:   gen={GEN_TIMEOUT}s embed={EMB_TIMEOUT}s")
     if len(sys.argv) > 1:
         print(json.dumps(gen(json.loads(sys.argv[1])), indent=1))

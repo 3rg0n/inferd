@@ -26,6 +26,12 @@ import urllib.request
 
 BASE = os.environ.get("INFERD_HTTP_BASE", "http://127.0.0.1:8080")
 
+# Client-side read timeout for generating calls, in seconds. See the same
+# knob in `wire.py` for why it is overridable: CPU-only hosts and a cold
+# Metal shader cache both make a correct decode slow, which is not a
+# failure. Raise it rather than wrapping this script.
+HTTP_TIMEOUT = int(os.environ.get("INFERD_HTTP_TIMEOUT", "180"))
+
 WEATHER = [{
     "type": "function",
     "function": {
@@ -55,7 +61,7 @@ def get(path):
         return r.status, json.loads(r.read())
 
 
-def post(path, body, timeout=180, raw=False):
+def post(path, body, timeout=None, raw=False):
     req = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode(),
@@ -63,7 +69,9 @@ def post(path, body, timeout=180, raw=False):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(
+            req, timeout=HTTP_TIMEOUT if timeout is None else timeout
+        ) as r:
             data = r.read()
             return r.status, (data.decode() if raw else json.loads(data))
     except urllib.error.HTTPError as e:
