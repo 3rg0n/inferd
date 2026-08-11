@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validation
+
+- **macOS arm64 Metal — v0.8.0 install=work + `tool_choice` feature
+  gates, all green, no new defects (2026-08-11):** built from `b313f45`
+  on `main` (no `v0.8.0` tag exists yet), staged locally with
+  `packaging/stage-release.sh`. Genuinely empty model store (config +
+  store both moved aside first): all three models auto-pulled cleanly
+  from the pinned-revision URLs with no SHA mismatch, confirming #64's
+  fix holds on macOS's independent HTTPS stack. `gpu_layers=43`
+  (E4B) / `25` (embed) — a third exact match to Windows CUDA and Linux
+  CUDA, confirming #51's fix produces the identical offload count
+  regardless of accelerator vendor. `inferdctl status` exit 0 with every
+  frame relayed (#57/#61, third platform); the networked-branch install
+  message printed a resolvable `inferdctl` path (#58, independently
+  verified). Native gates G-A through G-H all green, including G-B's
+  byte-for-byte-identical degenerate repetition on a third platform/
+  accelerator. Bridge gates all green including the G7 non-streaming
+  tool-call fix, plus an additional OpenAI SDK pass with no SDK-specific
+  defects. One environmental (non-daemon) finding: on this 16 GiB box
+  under memory pressure, Metal's first-use shader JIT compilation pushed
+  one adversarial-prompt generation past the harness's 180s client
+  timeout; the daemon stayed `ready` throughout and the eventual result
+  was correct. See `docs/v0.8-validation.md`, issue #65.
+
 ## [0.8.0] - 2026-08-10
 
 Minor, not patch: one **behaviour** break, no wire break. A `tool_result`
