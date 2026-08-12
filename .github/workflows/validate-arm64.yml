@@ -261,33 +261,50 @@ jobs:
           # from the exe's own dir, never subdirs.
           Copy-Item "$stage/backends/*" $stage -Force -ErrorAction SilentlyContinue
           $env:INFERD_LOG = "1"
-          $p = Start-Process -FilePath (Join-Path $stage 'inferd-daemon.exe') `
-            -WorkingDirectory $stage `
-            -ArgumentList @(
-              '--lock', 'inferd.lock',
-              '--pipe', '\\.\pipe\inferd',
-              '--admin-addr', '\\.\pipe\inferd-admin',
-              '--embed',
-              '--embed-addr', '\\.\pipe\inferd-infer-embed'
-            ) `
-            -RedirectStandardOutput (Join-Path $stage 'daemon.out.log') `
-            -RedirectStandardError  (Join-Path $stage 'daemon.err.log') `
-            -PassThru
-          $p.Id | Out-File -Encoding ascii (Join-Path $stage 'daemon.pid')
-          "daemon pid $($p.Id)"
-          # Report an immediate death here rather than leaving it to the
-          # wait loop: a startup failure (DLL resolution, pipe bind, lock)
-          # has an exit code worth naming, and the process object still
-          # holds it. The wait step would only see "gone".
-          if ($p.WaitForExit(15000)) {
-            "daemon exited $($p.ExitCode) within 15s of launch"
-            foreach ($f in 'daemon.out.log','daemon.err.log') {
+          # Launched under a supervisor process rather than directly, so
+          # the daemon's EXIT CODE survives the step boundary. The first
+          # two runs of this workflow died silently between steps — the
+          # only stderr was ggml's "loaded CPU backend" line — and a
+          # later step can no longer ask an exited pid for its code. The
+          # supervisor waits on the child and writes the code to disk,
+          # which is the difference between "it stopped" and *why*: a
+          # Windows load failure (0xC0000135) and an ordinary error exit
+          # both produce silence, and the code tells them apart.
+          # A .cmd supervisor rather than PowerShell: cmd runs the exe
+          # synchronously, so `%ERRORLEVEL%` after it *is* the daemon's
+          # code, and it needs no here-string (PowerShell requires the
+          # closing '@ at column 0, which an indented YAML block cannot
+          # provide).
+          $sup = @(
+            '@echo off',
+            'cd /d "%~dp0"',
+            'inferd-daemon.exe --lock inferd.lock --pipe \\.\pipe\inferd --admin-addr \\.\pipe\inferd-admin --embed --embed-addr \\.\pipe\inferd-infer-embed > daemon.out.log 2> daemon.err.log',
+            'echo exit=%ERRORLEVEL%> daemon.exitcode'
+          )
+          $supPath = Join-Path $stage 'supervise.cmd'
+          Set-Content -Path $supPath -Value $sup -Encoding ascii
+          $s = Start-Process -FilePath $supPath -WorkingDirectory $stage -PassThru
+          $s.Id | Out-File -Encoding ascii (Join-Path $stage 'supervisor.pid')
+          # cmd's own pid is not the daemon's, and the gates need the
+          # daemon pid for their liveness check. Resolve the child.
+          $dpid = $null
+          for ($i = 0; $i -lt 30; $i++) {
+            $c = Get-CimInstance Win32_Process `
+              -Filter "Name='inferd-daemon.exe'" -ErrorAction SilentlyContinue
+            if ($c) { $dpid = @($c)[0].ProcessId; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $dpid) {
+            "FAIL: inferd-daemon.exe never appeared after launch"
+            foreach ($f in 'daemon.out.log','daemon.err.log','daemon.exitcode') {
               $path = Join-Path $stage $f
               "--- $f ---"
               if (Test-Path $path) { Get-Content $path } else { "(absent)" }
             }
             exit 1
           }
+          $dpid | Out-File -Encoding ascii (Join-Path $stage 'daemon.pid')
+          "daemon pid $dpid (supervisor $($s.Id))"
 
       # First boot pulls ~6 GB into the CAS store, then loads the model.
       # `inferdctl status` exits 0 only on `status: "ready"` (a
@@ -306,6 +323,21 @@ jobs:
           cd "staging/inferd-${{ matrix.target }}"
           ctl=./inferdctl; [ "${{ runner.os }}" = "Windows" ] && ctl=./inferdctl.exe
           pid=$(tr -d '[:space:]' < daemon.pid)
+          # The captured stdio is only half the story: the daemon's own
+          # activity log is NDJSON under ~/.inferd/logs/ (INFERD_LOG=1),
+          # which is outside the staging dir and so was never uploaded.
+          # Copy it in so it lands in the artifact too.
+          dump_logs() {
+            for f in ./*.log; do
+              [ -f "$f" ] || continue
+              echo "--- $f ---"; cat "$f"
+            done
+            for f in "$HOME"/.inferd/logs/*.ndjson; do
+              [ -f "$f" ] || continue
+              cp -f "$f" . 2>/dev/null || true
+              echo "--- $(basename "$f") ---"; tail -50 "$f"
+            done
+          }
           alive() {
             if [ "${{ runner.os }}" = "Windows" ]; then
               tasklist //FI "PID eq $pid" 2>/dev/null | grep -q inferd-daemon
@@ -321,13 +353,16 @@ jobs:
             fi
             if ! alive; then
               echo "FAIL: daemon process $pid exited before reaching ready" >&2
-              cat ./*.log >&2 || true
+              # Written by the Windows supervisor; absent on Linux and
+              # absent if the process was killed rather than exiting.
+              [ -f daemon.exitcode ] && echo "daemon $(cat daemon.exitcode)" >&2
+              dump_logs >&2
               exit 1
             fi
             sleep 30
           done
           echo "FAIL: daemon not ready after 60 min" >&2
-          cat ./*.log >&2 || true
+          dump_logs >&2
           exit 1
 
       - name: Doctor
@@ -392,6 +427,8 @@ jobs:
           name: logs-${{ matrix.name }}
           path: |
             staging/inferd-${{ matrix.target }}/*.log
+            staging/inferd-${{ matrix.target }}/*.ndjson
+            staging/inferd-${{ matrix.target }}/daemon.exitcode
           if-no-files-found: warn
           retention-days: 14
 
@@ -402,7 +439,7 @@ jobs:
         continue-on-error: true
         run: |
           cd "staging/inferd-${{ matrix.target }}"
-          for f in bridge.pid daemon.pid; do
+          for f in bridge.pid daemon.pid supervisor.pid; do
             [ -f "$f" ] || continue
             pid=$(tr -d '[:space:]' < "$f")
             [ -n "$pid" ] || continue
