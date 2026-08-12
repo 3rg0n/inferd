@@ -80,9 +80,20 @@ Commit message: `release: vX.Y.Z — promote [Unreleased] to [X.Y.Z]`.
 ### 3. Tag and push
 
 ```sh
-git tag -s vX.Y.Z -m "vX.Y.Z"
+git tag -a vX.Y.Z -F -   # annotated; summarise the release in the message
 git push origin vX.Y.Z
 ```
+
+`-a`, not `-s`. This line said `-s` from v0.1 through v0.8.0 and was
+never once followed: `git tag -v` on every shipped tag (v0.6.0 through
+v0.8.0) reports `error: no signature found`, because the maintainer's box
+has no signing key configured. Release provenance comes from the
+workflow's **keyless cosign bundles** — one per archive, verifiable with
+`cosign verify-blob --bundle` — which is the mechanism actually in use
+and does not depend on a local key. If GPG-signed tags are wanted later,
+that is a real change (key, distribution, a documented verification
+step), not a flag swap: make it deliberately rather than leaving an
+instruction here that the next release will also ignore.
 
 ### 4. Watch the workflow
 
@@ -90,13 +101,48 @@ git push origin vX.Y.Z
 gh run watch --workflow=release.yml
 ```
 
-The expected trajectory:
+**Budget 2–3 hours wall-clock, not minutes.** Measured on the last two
+releases (v0.7.0 / v0.8.0):
 
-- 5 `build` jobs run in parallel (~5 minutes each on llama.cpp builds).
-  Each does two link passes and packs two archives (ADR 0028); the
-  second pass relinks only `inferd-daemon` + `inferdctl`, so it costs
-  minutes, not another full llama.cpp build.
-- 1 `sbom` job runs in parallel (~3 minutes).
+| Job | v0.7.0 | v0.8.0 |
+|---|---|---|
+| `aarch64-unknown-linux-gnu` | 6m | 6m |
+| `aarch64-apple-darwin` | 8m | 8m |
+| `aarch64-pc-windows-msvc` | 9m | 9m |
+| `x86_64-unknown-linux-gnu` (CUDA) | 124m | 127m |
+| `x86_64-pc-windows-msvc` (CUDA) | 172m | 128m |
+| `sbom` | <1m | 1m |
+| `publish` | 1m | 3m |
+
+The two x86_64 legs are **~15× slower than the arm64 ones**, and the
+differentiator is CUDA, not architecture: those are the only targets
+whose `features:` include `inferd-daemon/cuda`, so `nvcc` compiles device
+code for every supported GPU architecture — and does it twice, once per
+archive (see below). The arm64 legs build no CUDA at all.
+
+This entry previously read "~5 minutes each," which is wrong by a factor
+of ~25 and is worth correcting because the failure mode is a human one:
+a run that is *normally* two hours in looks indistinguishable from a
+hung one against a five-minute expectation, and the temptation is to
+cancel and re-tag a release that was fine. If a CUDA leg is still going
+at 90 minutes, that is the middle of its range — check which step it is
+on (`gh api repos/3rg0n/inferd/actions/jobs/<id> --jq '.steps[]'`)
+before concluding anything. No job sets `timeout-minutes`, so all
+inherit GitHub's 360m default; even the 172m worst case has ~3h of head
+room.
+
+Order of events:
+
+- 5 `build` jobs run in parallel. Each builds twice and packs two
+  archives (ADR 0028). On the CUDA targets the second pass is **not** the
+  cheap relink the `--no-default-features` change might suggest: measured
+  per-step on v0.8.0's `x86_64-unknown-linux-gnu`, `Build daemon (with
+  dl-backends)` took **61m** and `Build daemon (airgapped)` took **60m**.
+  Changing the feature set invalidates the cache, so the whole ggml/CUDA
+  tree recompiles. Everything either side of those two steps is ≤1m —
+  staging, verification and packing are free; essentially the entire leg
+  is those two compiles.
+- 1 `sbom` job runs in parallel (~1 minute).
 - 1 `publish` job runs after all 6 succeed: signs archives, verifies
   asset completeness, extracts CHANGELOG section, creates the release.
 
