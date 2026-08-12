@@ -120,7 +120,12 @@ What ships today (v0.7):
   instead. A backend that cannot enforce the requested mode rejects the
   request rather than accepting it and trying. Because only one grammar
   can be installed, `response_format` and `tool_choice` together are
-  rejected instead of one being silently dropped.
+  rejected instead of one being silently dropped. A grammar bounds where a
+  turn may *end*, not what it contains, so a model that disagrees can emit
+  non-call text until its budget runs out — the `done` frame carries
+  `tool_choice_unsatisfied` when that happens, which is what makes "no
+  call arrived" readable instead of indistinguishable from an ordinary
+  truncation.
 - **No inbound network listener** (ADR 0022): the daemon binds a Unix
   socket / named pipe only; loopback TCP was removed. Network reach is a
   separate bridge process's job (ADR 0020).

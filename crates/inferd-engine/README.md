@@ -7,7 +7,7 @@ multimodal via mtmd + embeddings + cross-encoder rerank), `mock`
 (tests), and the feature-gated cloud adapters `openai-compat` and
 `bedrock-invoke` (outbound HTTPS only, ADR 0006).
 
-**Status: shipping (v0.6).** With the `dl-backends` feature (ADR 0019)
+**Status: shipping (v0.8).** With the `dl-backends` feature (ADR 0019)
 each ggml backend (CPU / Metal / CUDA / Vulkan / ROCm) builds as a
 loadable module and the strongest available is selected at runtime.
 The trait carries `generate_v2` (typed content blocks / attachments /

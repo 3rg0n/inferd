@@ -238,15 +238,21 @@ contract:
 inferd-client = "0.6"
 ```
 
-`inferd-client 0.6.x` always uses `inferd-proto 0.6.x` and talks
-to `inferd-daemon 0.6.x`. The published patch versions move in
+`inferd-client 0.8.x` always uses `inferd-proto 0.8.x` and talks
+to `inferd-daemon 0.8.x`. The published patch versions move in
 lockstep. The generation (v2), embed, and rerank surfaces are each
 frozen: changes within a surface are backwards-additive only; a breaking
 change to the generation wire bumps the in-band `wire_version`
 (ADR 0021), so a mismatch fails loudly rather than corrupting the
-stream. v0.6, v0.5, and v0.4 are all wire-compatible (backwards-additive
-changes only; the `response_format` grammar field in 0.5.0 and the
-`thinking` reasoning-activation field in 0.5.1 are optional). The v0.4 → v0.3 framing change
+stream. v0.8, v0.7, v0.6, v0.5, and v0.4 are all wire-compatible
+(backwards-additive changes only; the `response_format` grammar field in
+0.5.0, the `thinking` reasoning-activation field in 0.5.1, and
+`tool_choice` on the request plus `tool_choice_unsatisfied` on `done` in
+0.8.0 are all optional). Note that 0.8.0 carries a **behaviour** break
+that is not a wire break: a `tool_result` whose `tool_call_id` pairs with
+no `tool_use` in the same request is rejected with `invalid_request`
+rather than attributed to a guessed tool, so a caller replaying a tool
+conversation must send the `tool_use` blocks too. The v0.4 → v0.3 framing change
 *was* breaking — a v0.3 client does not interoperate with a v0.4+
 daemon; upgrade both together.
 

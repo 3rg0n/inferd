@@ -199,7 +199,20 @@
     </details>
 
     <aside class="callout callout-block">
-      <p class="callout-label">New in v0.7</p>
+      <p class="callout-label">New in v0.8</p>
+      <p>
+        <strong><code>tool_choice</code>, enforced by grammar rather than advertised as a hint.</strong> Every provider surface has this field, and on most of them <code>"required"</code> is a strongly-worded request the model may decline. Here it is a constraint: the loaded model family's tool-call syntax is compiled to a GBNF grammar and installed on the sampler, so every end-of-generation token is masked until a complete call has been emitted — <em>ending the turn</em> without one is not a reachable sampling path. An advisory implementation returns a cheerful "Sure, no tools!" and a caller that trusted the field has to discover the failure itself. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md" class="ext">ADR 0029 ↗</a>
+      </p>
+      <p>
+        What it does <em>not</em> promise is stated as plainly, because that is the part callers get wrong: a grammar bounds where a turn may <em>end</em>, not what it contains. A model that disagrees with the instruction can emit non-call text until its token budget runs out — so <code>done</code> now carries <strong><code>tool_choice_unsatisfied</code></strong>, and "no call arrived" is a fact you read off the frame instead of inferring from a truncation that looks ordinary. The daemon reports it and stops there; retrying or falling back stays the caller's call, as ever.
+      </p>
+      <p>
+        Also: an unpaired <code>tool_result</code> — one whose <code>tool_call_id</code> matches no <code>tool_use</code> in the same request — is now rejected instead of being attributed to a guessed tool. That is a behaviour break, hence a minor rather than a patch; the wire itself is untouched, so a v0.7 client interoperates unchanged.
+      </p>
+    </aside>
+
+    <aside class="callout callout-block">
+      <p class="callout-label">Since v0.7</p>
       <p>
         <strong>Rerank</strong>, on a fourth socket. A cross-encoder scores your query against each candidate document <em>jointly</em> — one model pass per document, so unlike an embedding there is nothing to precompute. That is the point: it goes downstream of retrieval (<code>embed → top-50 → rerank → top-5 → generate</code>), and the precision it buys over vector similarity alone is what makes the extra passes worth paying for. Scores are raw and ordinal <em>within one response</em> — never comparable across models or against a fixed threshold — so the daemon sorts and truncates for you rather than handing out numbers that look absolute. Bound only when the warm model has a classification head, so nothing changes for existing deployments. <a href="https://github.com/3rg0n/inferd/blob/main/docs/adr/0027-reranking-on-a-fourth-socket.md" class="ext">ADR 0027 ↗</a>
       </p>

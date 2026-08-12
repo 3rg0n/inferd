@@ -18,10 +18,10 @@ versions are published as **path-prefixed tags** (`clients/go/vX.Y.Z`),
 not the repo's root `vX.Y.Z` tags. Pin it the normal way:
 
 ```sh
-go get github.com/3rg0n/inferd/clients/go@v0.6.1
+go get github.com/3rg0n/inferd/clients/go@v0.8.0
 ```
 
-Go maps that to the `clients/go/v0.6.1` tag automatically. The
+Go maps that to the `clients/go/v0.8.0` tag automatically. The
 client versions in **lockstep** with the daemon — `clients/go/<v>` is
 cut at the same commit as the root `<v>` release, so the client version
 you pin is the wire/daemon version it was built against.
