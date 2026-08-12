@@ -1,0 +1,22 @@
+docs/adr/0029-tool-choice-is-enforced-by-grammar-not-advertised.md
+  s_126aec4081f728::t_95c8ccb97970b3 5-34
+docs/adr/README.md
+  s_126aec4081f728::t_d4df026cbf1987 36
+  s_126aec4081f728::t_2622dc7d7e4e61 44-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "47ed3e3999b8d6d2b1deea78ac87ad91776d3006",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
