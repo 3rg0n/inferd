@@ -1,0 +1,394 @@
+name: Validate arm64 (install=work gates)
+
+# Runs the committed install=work gates on REAL arm64 silicon, for the two
+# release targets that have no hardware behind them here:
+#
+#   aarch64-unknown-linux-gnu   (ubuntu-24.04-arm)
+#   aarch64-pc-windows-msvc     (windows-11-arm)
+#
+# Both have shipped since v0.6 with install=work recorded as *not covered*
+# (docs/v0.6-validation.md: "no such hardware here — archives built and
+# signed only"). That gap stayed open through v0.6.1 and v0.7.0. The gates
+# in `packaging/validate/` are stdlib-only Python precisely so they can run
+# on a bare host, which makes closing it a CI job rather than a hardware
+# purchase.
+#
+# WHAT THIS PROVES: the arm64 build produces a daemon that loads, binds its
+# sockets, serves real generation + real embeddings from a real model, and
+# satisfies every v0.8.0 `tool_choice` gate plus the whole `inferd-http`
+# bridge surface — from a staged archive, on the target architecture.
+#
+# WHAT IT DOES NOT PROVE, and must not be read as proving: the **service
+# manager install**. `systemd --user` needs a real login session with a
+# D-Bus user bus, and the Windows installer is a Startup-folder shortcut
+# that only fires on interactive logon. Neither exists on a CI runner, so
+# this workflow launches `inferd-daemon` directly with the same flags the
+# systemd unit passes. That surface is where #56, #58 and #59 all came
+# from, so it is a real residual gap: an arm64 leg green here still leaves
+# `packaging/systemd/` and `packaging/windows/install.ps1` unexercised on
+# arm64. Record it that way in docs/vX.Y-validation.md rather than
+# implying a full install=work pass.
+#
+# Manual dispatch only. It builds llama.cpp from source on two runners and
+# downloads ~6 GB of models, so it has no business on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref to validate (branch, tag or SHA)'
+        required: false
+        default: ''
+      targets:
+        description: 'Which targets to run'
+        required: false
+        default: both
+        type: choice
+        options: [both, linux-arm64, windows-arm64]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: ${{ matrix.name }}
+    # A red leg on one architecture must not cancel the other — the whole
+    # point is finding out which of the two is broken.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    # Model pull + a from-source llama.cpp build on a CPU-only runner.
+    timeout-minutes: 150
+    steps:
+      - name: Skip unselected target
+        id: gate
+        shell: bash
+        run: |
+          want='${{ inputs.targets }}'
+          if [ "$want" = "both" ] || [ "$want" = "${{ matrix.name }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.name }} not selected (targets=$want)"
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref }}
+          # llamacpp needs the vendored llama.cpp submodule.
+          submodules: recursive
+
+      - name: Install Rust
+        if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # A from-source llama.cpp build plus ~6 GB of models is not a
+      # comfortable fit on a stock runner. Print free space up front so a
+      # later ENOSPC — which surfaces as a corrupt blob or a SHA mismatch,
+      # not as "disk full" — is diagnosable from the log alone.
+      - name: Report free disk
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: df -h . || true
+
+      # --- toolchain: mirrors release.yml exactly ------------------------
+      # These steps are duplicated from release.yml rather than shared, and
+      # the pins must be kept in step with it: this workflow's whole claim
+      # is that it validates *what release.yml builds*. A divergence here
+      # silently validates a different binary.
+
+      - name: Install libclang (Linux)
+        if: steps.gate.outputs.run == 'true' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+      # The arm64 Windows image does not ship LLVM (the v0.1.7 failure,
+      # #63). LLVM 19+ is required: VS 2022 v14.44's STL headers
+      # static-assert Clang >= 19 under clang-cl.
+      - name: Install LLVM (Windows arm64)
+        if: steps.gate.outputs.run == 'true' && matrix.target == 'aarch64-pc-windows-msvc'
+        uses: KyleMayes/install-llvm-action@a7a1a882e2d06ebe05d5bb97c3e1f8c984ae96fc  # v2.0.7
+        with:
+          version: '19.1.7'
+          arch: arm64
+          env: true   # exports LLVM_PATH + LIBCLANG_PATH for bindgen
+
+      # ggml's CPU backend refuses MSVC on ARM ("use clang"), so build.rs
+      # drives Ninja + clang-cl there; that needs the MSVC dev env for the
+      # Windows SDK headers and the MSVC runtime Rust links against.
+      - name: Set up MSVC dev environment (Windows arm64)
+        if: steps.gate.outputs.run == 'true' && matrix.target == 'aarch64-pc-windows-msvc'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: arm64
+
+      # --- build: the three binaries release.yml ships -------------------
+      # dl-backends for the daemon (no CUDA on either arm64 target);
+      # default features for inferdctl and inferd-http, which hold no model.
+      #
+      # Windows note (from release.yml): a cargo build on the Windows
+      # runners must run under the runner's default shell, so the command
+      # cannot span lines — `bash` puts coreutils `link` ahead of
+      # `link.exe` on PATH and every build script fails to link.
+
+      - name: Build inferd-daemon
+        if: steps.gate.outputs.run == 'true'
+        run: cargo build --release --bin inferd-daemon --features inferd-daemon/dl-backends --target ${{ matrix.target }}
+
+      - name: Build inferdctl
+        if: steps.gate.outputs.run == 'true'
+        run: cargo build --release --bin inferdctl --target ${{ matrix.target }}
+
+      - name: Build inferd-http
+        if: steps.gate.outputs.run == 'true'
+        run: cargo build --release --bin inferd-http --target ${{ matrix.target }}
+
+      # Same assertion release.yml makes: if BackendKind::Llamacpp got
+      # compiled out, clap's value-enum won't list it and every gate below
+      # would run against a mock — passing while proving nothing.
+      - name: Verify binary advertises --backend llamacpp
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rel="target/${{ matrix.target }}/release"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin="$rel/inferd-daemon.exe"
+            # dl-backends links the daemon against llama.dll, which
+            # build.rs stages into backends/. Windows resolves imports at
+            # startup from the exe's own dir + PATH, never subdirs.
+            cp -v "$rel"/backends/*.dll "$rel/" 2>/dev/null || true
+          else
+            bin="$rel/inferd-daemon"
+          fi
+          "$bin" --help 2>&1 | grep -qE 'llamacpp' \
+            || { echo "FAIL: binary does not advertise --backend llamacpp" >&2; exit 1; }
+          echo "OK: llamacpp advertised"
+
+      # --- stage the archive --------------------------------------------
+      # Run the gates against a staged archive, not the target/ tree: that
+      # is what a user installs, and archive-only defects have been found
+      # before (the backends/ flattening in particular).
+      - name: Stage archive
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/stage-release.sh \
+            "staging/inferd-${{ matrix.target }}" \
+            "${{ matrix.target }}" \
+            "${{ runner.os }}"
+          ls -la "staging/inferd-${{ matrix.target }}"
+
+      # --- launch ------------------------------------------------------
+      # NOT the service manager: see the header. Same flags the systemd
+      # unit's ExecStart passes, so the socket layout the gates resolve is
+      # the installed one. Unix sockets go under XDG_RUNTIME_DIR/inferd to
+      # match `packaging/validate/wire.py`'s Linux path resolution.
+      # `XDG_RUNTIME_DIR` is normally UNSET on a GHA Linux runner (there is
+      # no logind session), and the daemon and the harness disagree about
+      # what that means: `endpoint.rs` falls back to `$HOME/.inferd/run/`,
+      # and so does `wire.py`. That would work — but the daemon's `--lock`
+      # and `--uds` are required flags, so the launch below has to name
+      # paths explicitly, and any path it picks that ISN'T what `wire.py`
+      # resolves leaves the gates unable to connect. Pinning
+      # XDG_RUNTIME_DIR for every later step removes the ambiguity: both
+      # sides now take the same branch of the same chain.
+      #
+      # 0700 because the daemon's sockets are 0660/0600 and a world-
+      # traversable parent would undercut that (invariant #6).
+      - name: Pin runtime dir (Linux)
+        if: steps.gate.outputs.run == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xdg="$HOME/.inferd-run"
+          mkdir -p "$xdg/inferd"
+          chmod 700 "$xdg" "$xdg/inferd"
+          echo "XDG_RUNTIME_DIR=$xdg" >> "$GITHUB_ENV"
+
+      - name: Launch daemon (Linux)
+        if: steps.gate.outputs.run == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "staging/inferd-${{ matrix.target }}"
+          # Flatten backends/ next to the binary, as the install scripts
+          # do: ggml_backend_load_all() searches only the exe dir and cwd,
+          # never subdirs. Skipping this is how a GPU box reports CPU.
+          cp -v backends/* . 2>/dev/null || true
+          run="$XDG_RUNTIME_DIR/inferd"
+          # Same flags as packaging/systemd/inferd.service's ExecStart, so
+          # the socket layout matches an installed daemon.
+          INFERD_LOG=1 ./inferd-daemon \
+            --lock "$run/inferd.lock" \
+            --uds "$run/inferd.sock" \
+            --admin-addr "$run/admin.sock" \
+            --embed \
+            --embed-addr "$run/infer.embed.sock" \
+            > daemon.log 2>&1 &
+          echo $! > daemon.pid
+
+      # `--lock` is a required flag and at least one transport is required
+      # (`require_one_transport`), so a bare launch exits immediately —
+      # the pipe paths must be named. They are the daemon's own defaults,
+      # which is what `wire.py` resolves on Windows.
+      - name: Launch daemon (Windows)
+        if: steps.gate.outputs.run == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "staging/inferd-${{ matrix.target }}"
+          # backends/ next to the binary: Windows resolves imported DLLs
+          # from the exe's own dir, never subdirs.
+          Copy-Item "$stage/backends/*" $stage -Force -ErrorAction SilentlyContinue
+          $env:INFERD_LOG = "1"
+          $p = Start-Process -FilePath (Resolve-Path "$stage/inferd-daemon.exe") `
+            -WorkingDirectory (Resolve-Path $stage) `
+            -ArgumentList @(
+              '--lock', 'inferd.lock',
+              '--pipe', '\\.\pipe\inferd',
+              '--admin-addr', '\\.\pipe\inferd-admin',
+              '--embed',
+              '--embed-addr', '\\.\pipe\inferd-infer-embed'
+            ) `
+            -RedirectStandardOutput "daemon.out.log" `
+            -RedirectStandardError  "daemon.err.log" `
+            -PassThru
+          $p.Id | Out-File -Encoding ascii "$stage/daemon.pid"
+          "daemon pid $($p.Id)"
+
+      # First boot pulls ~6 GB into the CAS store, then loads the model.
+      # `inferdctl status` exits 0 only on `status: "ready"` (a
+      # capabilities-only burst is deliberately NOT ready), so its exit
+      # code is the wait condition — no log-string matching.
+      #
+      # The liveness check inside the loop matters: without it a daemon
+      # that died on startup (missing backend lib, bind failure, lock
+      # contention) burns the full 60 minutes before reporting, and the
+      # timeout message blames the pull rather than naming the real cause.
+      - name: Wait for ready
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd "staging/inferd-${{ matrix.target }}"
+          ctl=./inferdctl; [ "${{ runner.os }}" = "Windows" ] && ctl=./inferdctl.exe
+          pid=$(tr -d '[:space:]' < daemon.pid)
+          alive() {
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              tasklist //FI "PID eq $pid" 2>/dev/null | grep -q inferd-daemon
+            else
+              kill -0 "$pid" 2>/dev/null
+            fi
+          }
+          for i in $(seq 1 120); do
+            if "$ctl" status >/dev/null 2>&1; then
+              echo "ready after ~$((i*30))s"
+              "$ctl" status
+              exit 0
+            fi
+            if ! alive; then
+              echo "FAIL: daemon process $pid exited before reaching ready" >&2
+              cat ./*.log >&2 || true
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "FAIL: daemon not ready after 60 min" >&2
+          cat ./*.log >&2 || true
+          exit 1
+
+      - name: Doctor
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          cd "staging/inferd-${{ matrix.target }}"
+          ctl=./inferdctl; [ "${{ runner.os }}" = "Windows" ] && ctl=./inferdctl.exe
+          "$ctl" doctor
+
+      # --- the gates ----------------------------------------------------
+      # Both runners are CPU-only, so decode is far slower than any
+      # accelerated host: raise the client-side read timeouts (they bound
+      # only how long the client waits, never anything on the wire, so a
+      # widened value cannot mask a daemon defect). See
+      # packaging/validate/README.md.
+      - name: Native wire gates
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        env:
+          INFERD_GEN_TIMEOUT: '1800'
+          INFERD_EMBED_TIMEOUT: '600'
+        run: |
+          set -euo pipefail
+          python3 packaging/validate/wire.py
+          python3 packaging/validate/gates.py
+
+      - name: Bridge gates
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        env:
+          INFERD_HTTP_TIMEOUT: '1800'
+        run: |
+          set -euo pipefail
+          cd "staging/inferd-${{ matrix.target }}"
+          http=./inferd-http; [ "${{ runner.os }}" = "Windows" ] && http=./inferd-http.exe
+          "$http" --listen 127.0.0.1:8080 > bridge.log 2>&1 &
+          echo $! > bridge.pid
+          up=
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then up=1; break; fi
+            sleep 2
+          done
+          # Fail here rather than falling through: a bridge that never
+          # bound would otherwise surface as a bare connection error out of
+          # bridge.py, which reads like a gate failure instead of a
+          # never-started process.
+          if [ -z "$up" ]; then
+            echo "FAIL: bridge did not answer /health within 60s" >&2
+            cat bridge.log >&2 || true
+            exit 1
+          fi
+          cd ../..
+          python3 packaging/validate/bridge.py
+
+      # Logs are the evidence for the validation writeup, and the only way
+      # to diagnose a red leg on hardware nobody here can reach.
+      - name: Upload logs
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: logs-${{ matrix.name }}
+          path: |
+            staging/inferd-${{ matrix.target }}/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Kill by PID only — never a broad process kill.
+      - name: Stop daemon and bridge
+        if: always() && steps.gate.outputs.run == 'true'
+        shell: bash
+        continue-on-error: true
+        run: |
+          cd "staging/inferd-${{ matrix.target }}"
+          for f in bridge.pid daemon.pid; do
+            [ -f "$f" ] || continue
+            pid=$(tr -d '[:space:]' < "$f")
+            [ -n "$pid" ] || continue
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              taskkill //F //PID "$pid" || true
+            else
+              kill "$pid" || true
+            fi
+          done
