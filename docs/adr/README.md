@@ -33,7 +33,7 @@ implementation choices aren't.
 | [0026](0026-chat-renderer-registry-per-model-family.md) | Chat rendering is a registry keyed to model family, not a hardcoded Gemma renderer (resolve at load from operator config or GGUF metadata; fail the load when no renderer matches, rather than silently rendering a foreign model in Gemma's grammar; no jinja evaluator in the daemon) | Proposed |
 | [0027](0027-reranking-on-a-fourth-socket.md) | Reranking on a fourth socket — cross-encoder scores, not vectors (`LLAMA_POOLING_TYPE_RANK`; own NDJSON socket bound only on capability; daemon owns query/document pair formatting; ADR 0012 not relaxed — operators run a second process; runtime config flag, not a build feature) | Accepted |
 | [0028](0028-airgapped-build-profile.md) | The airgapped build is a default-on `model-fetch` feature turned *off*, not an opt-in feature turned on (cargo features cannot remove a dependency, so `--no-default-features` is the only shape where "no TLS stack linked" is provable by `cargo tree`; adds `inferdctl import`; two artifacts per platform from one code path) | Accepted |
-| [0029](0029-tool-choice-is-enforced-by-grammar-not-advertised.md) | `tool_choice` is enforced by grammar, not advertised as a hint (eager GBNF root for `required` masks EOG so prose is unreachable; text-level exclusion for `none`; hand-written per family because Gemma 4's call syntax is not JSON; rejects `response_format` + `tool_choice` rather than silently dropping one; cloud adapters forward or error, never drop) | Accepted |
+| [0029](0029-tool-choice-is-enforced-by-grammar-not-advertised.md) | `tool_choice` is enforced by grammar, not advertised as a hint (eager GBNF root for `required` masks EOG so prose is unreachable; text-level exclusion for `none`; hand-written per family because Gemma 4's call syntax is not JSON; rejects `response_format` + `tool_choice` rather than silently dropping one; cloud adapters forward or error, never drop) | Accepted; *Good*-bullet evidence claim corrected in place 2026-08-09 (`f5c9d2c`) — see the ADR's Erratum |
 
 ## Writing a new ADR
 
@@ -41,4 +41,14 @@ implementation choices aren't.
 - Filename `NNNN-kebab-case-title.md`, zero-padded sequential.
 - Once accepted, ADRs are immutable. To revise, write a new ADR
   and set the old one's status to `superseded by NNNN`.
+- **Errata are the one narrow exception**, and only for a factual
+  claim that was wrong when written — a misquoted test result, a
+  mis-stated guarantee — where the *decision itself* is unchanged.
+  Add a dated `## Erratum` section naming the commit, note it on the
+  `- Status:` line and in this index, and say what the corrected claim
+  is. Never silently edit: an unmarked change to an accepted ADR is
+  the failure mode immutability exists to prevent. If the decision
+  changed, or if the error is found after a release tag shipped with
+  it, supersede instead — by then someone may have built on the wrong
+  statement, and they need a document that still says what they read.
 - Reference the ADR from the corresponding `CHANGELOG.md` entry.

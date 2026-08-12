@@ -2,6 +2,36 @@
 
 - Status: accepted
 - Date: 2026-08-09
+- Erratum: 2026-08-09, `f5c9d2c` — see *Erratum* below
+
+## Erratum — corrected in place, 2026-08-09 (`f5c9d2c`)
+
+ADRs here are immutable once accepted (`docs/adr/README.md`), and this
+one was edited after acceptance. Recording that plainly rather than
+leaving it to `git log`.
+
+As first accepted (`5f0480f`), the *Good* bullet claimed the Tier-3
+test prompts "do not use any tools, just say hi" **and a call comes
+back anyway**. A 600-token re-run refuted it: the model loops a
+hallucinated `<execute_tool>{…}` and terminates on `MaxTokens` again,
+so the failure mode is degenerate repetition, not an insufficient
+budget. No grammar of this shape delivers "a call arrives", and the
+test asserting it was a test that fails on correct code.
+
+The **decision did not change** — not the field, the wire, the
+grammars, or any rejection path. What changed is the claim about what
+the decision *guarantees*: `required` makes *ending the turn* without
+a call unreachable, which is narrower than the mode's name suggests.
+
+Corrected in place rather than superseded by an ADR 0030 because the
+choice being recorded is unchanged, and superseding would split one
+live decision across two documents where the second says only "the
+first cited its evidence wrongly" — the audit trail immutability
+exists to protect is better served by this note than by that. The
+window matters too: both versions landed the same day, before any
+release tag, so no deployed consumer read the wrong sentence. A
+correction discovered after a tag ships gets an ADR 0030, not an
+erratum.
 
 ## Context
 
