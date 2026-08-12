@@ -1,0 +1,27 @@
+clients/go/README.md
+  s_126aec4081f728::t_f092900d2e1c8c 21,24
+site/index.html
+  s_126aec4081f728::t_8f86b2fc85cdfb 202-215
+crates/inferd-engine/README.md
+  s_126aec4081f728::t_f0c749b4f18f72 10
+README.md
+  s_126aec4081f728::t_7e53bef12ccb2a 123-128
+crates/inferd-client/README.md
+  s_126aec4081f728::t_d9d9acf21d94af 241-242,247-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "032c77527b3c85c938c9d963fee2d7a4b3ff66f3",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
