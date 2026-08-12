@@ -244,18 +244,25 @@ jobs:
       # (`require_one_transport`), so a bare launch exits immediately —
       # the pipe paths must be named. They are the daemon's own defaults,
       # which is what `wire.py` resolves on Windows.
+      #
+      # The redirect targets must be ABSOLUTE. `-RedirectStandardOutput`
+      # resolves a relative path against the *caller's* cwd, not
+      # `-WorkingDirectory` — the first run of this workflow wrote both
+      # logs to the repo root, where neither the wait step's dump nor the
+      # upload-artifact path could see them, so a daemon that died on
+      # startup reported "exited before reaching ready" and nothing else.
       - name: Launch daemon (Windows)
         if: steps.gate.outputs.run == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $stage = "staging/inferd-${{ matrix.target }}"
+          $stage = (Resolve-Path "staging/inferd-${{ matrix.target }}").Path
           # backends/ next to the binary: Windows resolves imported DLLs
           # from the exe's own dir, never subdirs.
           Copy-Item "$stage/backends/*" $stage -Force -ErrorAction SilentlyContinue
           $env:INFERD_LOG = "1"
-          $p = Start-Process -FilePath (Resolve-Path "$stage/inferd-daemon.exe") `
-            -WorkingDirectory (Resolve-Path $stage) `
+          $p = Start-Process -FilePath (Join-Path $stage 'inferd-daemon.exe') `
+            -WorkingDirectory $stage `
             -ArgumentList @(
               '--lock', 'inferd.lock',
               '--pipe', '\\.\pipe\inferd',
@@ -263,11 +270,24 @@ jobs:
               '--embed',
               '--embed-addr', '\\.\pipe\inferd-infer-embed'
             ) `
-            -RedirectStandardOutput "daemon.out.log" `
-            -RedirectStandardError  "daemon.err.log" `
+            -RedirectStandardOutput (Join-Path $stage 'daemon.out.log') `
+            -RedirectStandardError  (Join-Path $stage 'daemon.err.log') `
             -PassThru
-          $p.Id | Out-File -Encoding ascii "$stage/daemon.pid"
+          $p.Id | Out-File -Encoding ascii (Join-Path $stage 'daemon.pid')
           "daemon pid $($p.Id)"
+          # Report an immediate death here rather than leaving it to the
+          # wait loop: a startup failure (DLL resolution, pipe bind, lock)
+          # has an exit code worth naming, and the process object still
+          # holds it. The wait step would only see "gone".
+          if ($p.WaitForExit(15000)) {
+            "daemon exited $($p.ExitCode) within 15s of launch"
+            foreach ($f in 'daemon.out.log','daemon.err.log') {
+              $path = Join-Path $stage $f
+              "--- $f ---"
+              if (Test-Path $path) { Get-Content $path } else { "(absent)" }
+            }
+            exit 1
+          }
 
       # First boot pulls ~6 GB into the CAS store, then loads the model.
       # `inferdctl status` exits 0 only on `status: "ready"` (a
