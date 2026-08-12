@@ -1,0 +1,24 @@
+.github/workflows/validate-arm64.yml
+  s_126aec4081f728::t_791065a535ee7b 430-431
+  s_126aec4081f728::t_aedb3307d7585b 356-359,365
+  s_126aec4081f728::t_9c3120ff37412a 264-272,285,287,291,295-296
+  s_126aec4081f728::t_6c5786383ac996 442
+  s_126aec4081f728::t_101a65cd7eed25 326-340
+  s_126aec4081f728::t_72369fe8ebdbeb 273-284,286,288-290,292-294,297-299,306-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8dd2e9b77f94ad7239858d4500cb3e358e539cf1",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
