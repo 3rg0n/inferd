@@ -7,31 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Validation
-
-- **macOS arm64 Metal — v0.8.0 install=work + `tool_choice` feature
-  gates, all green, no new defects (2026-08-11):** built from `b313f45`
-  on `main` (no `v0.8.0` tag exists yet), staged locally with
-  `packaging/stage-release.sh`. Genuinely empty model store (config +
-  store both moved aside first): all three models auto-pulled cleanly
-  from the pinned-revision URLs with no SHA mismatch, confirming #64's
-  fix holds on macOS's independent HTTPS stack. `gpu_layers=43`
-  (E4B) / `25` (embed) — a third exact match to Windows CUDA and Linux
-  CUDA, confirming #51's fix produces the identical offload count
-  regardless of accelerator vendor. `inferdctl status` exit 0 with every
-  frame relayed (#57/#61, third platform); the networked-branch install
-  message printed a resolvable `inferdctl` path (#58, independently
-  verified). Native gates G-A through G-H all green, including G-B's
-  byte-for-byte-identical degenerate repetition on a third platform/
-  accelerator. Bridge gates all green including the G7 non-streaming
-  tool-call fix, plus an additional OpenAI SDK pass with no SDK-specific
-  defects. One environmental (non-daemon) finding: on this 16 GiB box
-  under memory pressure, Metal's first-use shader JIT compilation pushed
-  one adversarial-prompt generation past the harness's 180s client
-  timeout; the daemon stayed `ready` throughout and the eventual result
-  was correct. See `docs/v0.8-validation.md`, issue #65.
-
-## [0.8.0] - 2026-08-10
+## [0.8.0] - 2026-08-12
 
 Minor, not patch: one **behaviour** break, no wire break. A `tool_result`
 whose `tool_call_id` pairs with no `tool_use` in the same request is now
@@ -544,6 +520,82 @@ detectable one.
   copied the CLI onto `PATH`; its macOS and Windows steps claimed a bare
   `inferdctl` would resolve from the archive and are corrected to match
   what each installer actually leaves behind.
+
+### Added
+
+- **`.github/workflows/validate-arm64.yml`** — manual-dispatch workflow
+  running the committed `packaging/validate/` gates on GitHub's native
+  arm64 runners (`ubuntu-24.04-arm`, `windows-11-arm`), the same images
+  `release.yml` builds those targets on. It reproduces release.yml's
+  toolchain steps and pins (duplicated deliberately, not shared: the
+  claim is that it validates *what release.yml builds*, so a drifting
+  pin would silently validate a different binary), asserts the daemon
+  advertises `--backend llamacpp` so a mock cannot pass every gate while
+  proving nothing, stages a real archive, and runs `gates.py` +
+  `bridge.py`. It does **not** exercise `systemd --user` or the Windows
+  Startup-shortcut installer — no D-Bus session and no interactive logon
+  on a runner — which is recorded as a residual gap rather than implied
+  away.
+
+### Changed
+
+- **Validation-harness client timeouts are env-overridable** —
+  `INFERD_GEN_TIMEOUT` / `INFERD_EMBED_TIMEOUT` / `INFERD_HTTP_TIMEOUT`,
+  defaults unchanged (180s / 120s / 180s) and the active values printed
+  by `wire.py`. They bound only how long the *client* waits, never
+  anything on the wire, so raising one cannot mask a daemon defect —
+  whereas too tight a value reads exactly like a hang. The macOS leg had
+  to build a throwaway wrapper to widen one, which is the scratch-rebuild
+  the committed harness exists to prevent.
+
+### Validation
+
+- **Both arm64 legs green — v0.8.0 install=work is now 5/5 platforms
+  (2026-08-12):** Linux aarch64 ([run
+  31550563768](https://github.com/3rg0n/inferd/actions/runs/31550563768),
+  13m40s) and Windows arm64 ([run
+  31553477108](https://github.com/3rg0n/inferd/actions/runs/31553477108),
+  22m12s) via the new workflow. Linux aarch64 had **never** been
+  exercised before — that gap was open across v0.6, v0.6.1 and v0.7.0 —
+  and Windows arm64 gets its first install=work coverage since it was
+  un-parked at v0.6.1. Both: staged archive, `backends/` flattened,
+  ready (~390s / ~660s), `accelerator=cpu` `gpu_layers=0` on both
+  backends, `doctor` all-`ok`, and every native + bridge gate green with
+  content assertions — `INSTALLWORK080` / `BRIDGE080` verbatim, backend
+  `llamacpp` not mock, embeddings 256 dims L2 `1.000000`, G-A..G-H, G7 on
+  both bridge paths. Two settled questions beyond the legs themselves:
+  G-B's degenerate output plus `tool_choice_unsatisfied: true` now
+  reproduces across five platforms and three accelerator families, so it
+  is a property of the constraint rather than of any host; and
+  `gpu_layers` reports a truthful `0` where there is no accelerator at
+  all, the first test of #51's fix against zero. No new defects in the
+  daemon, the archive or the gates — both red runs on the way were CI
+  harness bugs (`Start-Process -RedirectStandardOutput` resolving
+  relative to the caller's cwd rather than `-WorkingDirectory`, losing
+  the logs; and the daemon being killed at the step boundary as a child
+  of the step's shell). See `docs/v0.8-validation.md`.
+
+- **macOS arm64 Metal — v0.8.0 install=work + `tool_choice` feature
+  gates, all green, no new defects (2026-08-11):** built from `b313f45`
+  on `main` (no `v0.8.0` tag exists yet), staged locally with
+  `packaging/stage-release.sh`. Genuinely empty model store (config +
+  store both moved aside first): all three models auto-pulled cleanly
+  from the pinned-revision URLs with no SHA mismatch, confirming #64's
+  fix holds on macOS's independent HTTPS stack. `gpu_layers=43`
+  (E4B) / `25` (embed) — a third exact match to Windows CUDA and Linux
+  CUDA, confirming #51's fix produces the identical offload count
+  regardless of accelerator vendor. `inferdctl status` exit 0 with every
+  frame relayed (#57/#61, third platform); the networked-branch install
+  message printed a resolvable `inferdctl` path (#58, independently
+  verified). Native gates G-A through G-H all green, including G-B's
+  byte-for-byte-identical degenerate repetition on a third platform/
+  accelerator. Bridge gates all green including the G7 non-streaming
+  tool-call fix, plus an additional OpenAI SDK pass with no SDK-specific
+  defects. One environmental (non-daemon) finding: on this 16 GiB box
+  under memory pressure, Metal's first-use shader JIT compilation pushed
+  one adversarial-prompt generation past the harness's 180s client
+  timeout; the daemon stayed `ready` throughout and the eventual result
+  was correct. See `docs/v0.8-validation.md`, issue #65.
 
 ## [0.7.0] - 2026-08-05
 

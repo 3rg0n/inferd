@@ -11,10 +11,14 @@ the daemon (`inferd-daemon`), the CLI (`inferdctl`), and the OpenAI-compat
 HTTP bridge (`inferd-http`) ship via GitHub releases for Linux (x86_64 +
 arm64), macOS arm64, and Windows (x86_64 + arm64) — five platforms, and
 since v0.7.0 **two archives each**: the normal one, and an *airgapped*
-build with no HTTPS client linked at all (ADR 0028). install=work is
-validated on Windows x86_64 CUDA, Linux x86_64 CUDA, and macOS arm64
-Metal — for both archives, from the published v0.7.0 tarballs, with the
-installers run at real default paths
+build with no HTTPS client linked at all (ADR 0028). install=work — a
+staged archive on a real host, real `generate` and real `embed`, no mock
+backend and no hand-edited config — is validated on **all five platforms**
+at v0.8.0 (`docs/v0.8-validation.md`): the three desktop legs on local
+hardware with the service-manager installers, and both arm64 legs on
+GitHub's native arm64 runners, which cover everything except
+`systemd --user` / the Windows Startup shortcut. The airgapped archive
+was separately validated on all three desktop platforms at v0.7.0
 ([issue #56](https://github.com/3rg0n/inferd/issues/56), closed; see
 `docs/v0.6-validation.md`). See `context.md` for the hand-off brief to
 first-time contributors and `docs/adr/` for the design decisions.
