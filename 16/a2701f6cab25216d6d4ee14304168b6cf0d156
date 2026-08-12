@@ -1,0 +1,29 @@
+docs/v0.8-validation.md
+  s_126aec4081f728::t_5b2d31d3aee091 37
+  s_126aec4081f728::t_db6ff2c6bd1e13 565-607
+  s_126aec4081f728::t_66d5b272b0b554 35
+.github/workflows/validate-arm64.yml
+  s_126aec4081f728::t_c72db3cbf6ba63 243-246,251,253-254,257-267
+  s_126aec4081f728::t_44e82931c4c2d7 276-280,288-295,301-305,310
+  s_126aec4081f728::t_d412e675d01ca2 349,351,354-362
+  s_126aec4081f728::t_84182dc7d50fb3 370
+  s_126aec4081f728::t_dfd1dcd5ecf55e 1-96,106-198,221-226,230,234-242,247-250,252,255-256,268-275,281-287,296-300,306-309,311-348,350,352-353,363-369,371-394
+  s_126aec4081f728::t_49187306f600c4 199-220,227-229,231-233
+  s_126aec4081f728::t_44c64663572efb 97-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "16a2701f6cab25216d6d4ee14304168b6cf0d156",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rgn@users.noreply.github.com>"
+    }
+  }
+}
