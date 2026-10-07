@@ -1,0 +1,14 @@
+# How this repository wants to be read.
+#
+# One precedence order: flag > environment > file > default. A key may only change a
+# default — anything deciding whether a check *fails* stays a flag, so a repository
+# cannot quiet its own gate by committing a file. There is nowhere to put a
+# credential; the file is committed, and `api_key` is refused by name.
+#
+# `repo` belongs here rather than in the workflow, and a fork shows why: it names the
+# repository being described, while a workflow knows only the repository it is
+# running in. Passing it from CI meant a fork rebuilt identical source under its own
+# name, so its bundle never byte-matched upstream and its first sync conflicted
+# inside `.signpost/`. Committed, the name travels with the clone, and a fork that
+# means to publish under its own name changes this line in a diff that says so.
+repo: github.com/3rg0n/inferd

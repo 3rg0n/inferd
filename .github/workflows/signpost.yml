@@ -1,0 +1,231 @@
+# Keeps .signpost/ describing this repository, and fails a pull request that would
+# leave it describing something else.
+#
+# Written by `signpost init github`. Yours to edit — but the three loop guards and
+# the two jobs' different strictness are load-bearing, and the comments say which is
+# which so you can tell a deliberate line from an incidental one.
+#
+# Two jobs, deliberately different:
+#
+#   build  — on push to the default branch. Rebuilds the bundle, verifies it
+#            strictly, commits it only if the bytes changed. This is the only place
+#            the bundle is ever written.
+#   verify — on pull requests. Checks the bundle's content, taking provenance as of
+#            the commit the bundle records. Writes nothing.
+#
+# The split is about merge conflicts: branches never regenerate the bundle, so two
+# branches cannot collide in `.signpost/`. Its consequence is that on a pull request
+# the committed stamp names an older commit *by construction*, so the pull-request
+# job passes `-as-of-bundle`. Without it the gate is red on every pull request
+# including one that changed no code, and a gate that is red on a documentation typo
+# is a gate people switch off — at which point the staleness check this tool is built
+# around is gone.
+name: signpost
+
+on:
+  push:
+    branches: [main]
+    # Loop guard 1 of 3. This workflow commits to the repository it is triggered by,
+    # so without this its own commit starts it again.
+    paths-ignore:
+      - ".signpost/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Not cancel-in-progress on the default branch: this job pushes a commit, and
+  # cancelling it halfway leaves the bundle describing neither commit. Queued
+  # instead, so a burst of merges produces one bundle per push in order.
+  group: signpost-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: rebuild the bundle
+    # Loop guard 2 of 3 is the actor test. A push whose actor is the bot is this
+    # job's own commit arriving back: paths-ignore already covers the normal case,
+    # and this covers a bot commit that also touched something outside `.signpost`,
+    # which paths-ignore would let through.
+    #
+    # Tested on the actor rather than on the commit message, because a message is
+    # content a contributor can copy by accident and an actor is not.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    permissions:
+      # The one job here that writes. Scoped to this job rather than at the top of
+      # the file so every other job stays read-only.
+      contents: write
+    steps:
+      # Pinned by commit SHA rather than tag. A tag is mutable and has been moved in
+      # a real supply-chain compromise; this is the same posture signpost applies to
+      # its own dependencies.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Git signals read history. A default checkout is depth 1, which would make
+          # co-change and churn silently thin rather than absent — signpost reports
+          # the shallowness, but a bundle committed from a shallow clone still records
+          # thinner numbers than the repository has.
+          fetch-depth: 0
+
+      # Installed from a release, and pinned to a version. `@latest` would mean the
+      # bundle's bytes could change because signpost changed, on a day nothing in
+      # this repository did — and a diff nobody can explain from the repository is
+      # the churn that gets a committed artifact deleted. Raise it deliberately.
+      - name: Install signpost
+        env:
+          SIGNPOST_VERSION: v0.2.0
+        run: |
+          set -euo pipefail
+          # The release archive is fetched directly and its SHA-256 checked against the
+          # release's own checksums.txt before anything is unpacked. install.sh does the
+          # same thing, and this does not use it: `curl ... | sh` would run a script
+          # nothing verified, inside the one job here that holds `contents: write`. The
+          # archive's checksum is no use if the code that checks it arrived unchecked.
+          #
+          # Written out rather than detected because runs-on above is fixed: this is a
+          # linux/amd64 runner, and asking uname on a pinned image is a question with a
+          # constant answer. Change both together if you change the runner.
+          name="signpost_${SIGNPOST_VERSION}_linux_amd64"
+          asset="${name}.tar.gz"
+          base="https://github.com/3rg0n/signpost/releases/download/${SIGNPOST_VERSION}"
+          mkdir -p "${RUNNER_TEMP}/bin" "${RUNNER_TEMP}/dl"
+          cd "${RUNNER_TEMP}/dl"
+          curl -fsSL -O "${base}/${asset}"
+          curl -fsSL -O "${base}/checksums.txt"
+          # Filtered to the one asset first. checksums.txt lists every platform's
+          # archive, and a bare `sha256sum -c` would fail on the six files this runner
+          # did not download.
+          grep " [*]\{0,1\}${asset}\$" checksums.txt >expected.txt
+          sha256sum -c expected.txt
+          # --strip-components because the archive holds a top-level directory named
+          # after the platform, and only the binary is wanted on PATH.
+          tar -xzf "${asset}" -C "${RUNNER_TEMP}/bin" --strip-components=1 "${name}/signpost"
+          echo "${RUNNER_TEMP}/bin" >>"${GITHUB_PATH}"
+
+      # No -repo. The name every page's `resource:` carries comes from
+      # `.signpost.yml`, because it is a property of the repository and not of
+      # whoever is running the build. Passing it here would name the repository this
+      # *job* runs in, so a fork would rebuild identical source under its own name
+      # and its first sync from upstream would conflict inside `.signpost/`.
+      - name: Rebuild the bundle
+        run: |
+          set -euo pipefail
+          signpost build .
+
+      # Strict, with no -as-of-bundle. This is the job that *writes* the stamp, so it
+      # is the only place that can check the stamp it just wrote is true.
+      - name: Verify strictly
+        run: |
+          set -euo pipefail
+          signpost verify .
+
+      # Committed only when the bytes changed. A run that committed regardless would
+      # put a no-op commit on the default branch for every push, and that churn is
+      # the fastest way to get a committed artifact deleted.
+      #
+      # Loop guard 3 of 3 is the `[skip ci]` in the message: it stops other workflows
+      # from running on a commit that changed only generated markdown.
+      - name: Commit the bundle if it changed
+        run: |
+          set -euo pipefail
+          # Staged first, then asked. `git diff` reports modifications to tracked
+          # files and says nothing about new ones, so on the first run — when the
+          # whole bundle is untracked — a plain `git diff --quiet` would report no
+          # change and the bundle would never be committed at all.
+          git add .signpost
+          if git diff --quiet --cached -- .signpost; then
+            echo "the bundle is unchanged; nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Rebuild the signpost bundle [skip ci]"
+          # --force-with-lease rather than a plain push: concurrency queues runs but
+          # does not stop a human pushing between this job's checkout and here, and
+          # overwriting their commit to land generated markdown would be the worst
+          # possible trade.
+          git push --force-with-lease
+
+  verify:
+    name: the bundle still describes this tree
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install signpost
+        env:
+          SIGNPOST_VERSION: v0.2.0
+        run: |
+          set -euo pipefail
+          # The release archive is fetched directly and its SHA-256 checked against the
+          # release's own checksums.txt before anything is unpacked. install.sh does the
+          # same thing, and this does not use it: `curl ... | sh` would run a script
+          # nothing verified, inside the one job here that holds `contents: write`. The
+          # archive's checksum is no use if the code that checks it arrived unchecked.
+          #
+          # Written out rather than detected because runs-on above is fixed: this is a
+          # linux/amd64 runner, and asking uname on a pinned image is a question with a
+          # constant answer. Change both together if you change the runner.
+          name="signpost_${SIGNPOST_VERSION}_linux_amd64"
+          asset="${name}.tar.gz"
+          base="https://github.com/3rg0n/signpost/releases/download/${SIGNPOST_VERSION}"
+          mkdir -p "${RUNNER_TEMP}/bin" "${RUNNER_TEMP}/dl"
+          cd "${RUNNER_TEMP}/dl"
+          curl -fsSL -O "${base}/${asset}"
+          curl -fsSL -O "${base}/checksums.txt"
+          # Filtered to the one asset first. checksums.txt lists every platform's
+          # archive, and a bare `sha256sum -c` would fail on the six files this runner
+          # did not download.
+          grep " [*]\{0,1\}${asset}\$" checksums.txt >expected.txt
+          sha256sum -c expected.txt
+          # --strip-components because the archive holds a top-level directory named
+          # after the platform, and only the binary is wanted on PATH.
+          tar -xzf "${asset}" -C "${RUNNER_TEMP}/bin" --strip-components=1 "${name}/signpost"
+          echo "${RUNNER_TEMP}/bin" >>"${GITHUB_PATH}"
+
+      # -as-of-bundle, for the reason at the top of this file: on a pull request the
+      # bundle's stamp is older by design, so provenance is taken from the bundle's
+      # own record and content is compared byte for byte against a fresh render. A
+      # pull request that changes what the map says still fails here; one that only
+      # moves the commit does not.
+      #
+      # A red job here means the bundle is broken in a way this branch has to fix —
+      # never "run `signpost build` and commit it", which would let two branches
+      # conflict in `.signpost/`. That distinction is the command's, not this file's:
+      # differences a rebuild after the merge resolves are printed as pending and exit
+      # 0, and a deleted bundle, a link with no target, or frontmatter no reader can
+      # parse still exits 1.
+      #
+      # The absent-bundle case is a skip rather than a failure, and the condition is
+      # narrower than it looks. A repository that has just adopted signpost has no
+      # bundle until the push job runs, and failing there would tell a contributor to
+      # run `signpost build` on their branch — the one thing the split forbids. So the
+      # question asked is not "is there a bundle here" but "does the base branch have
+      # one": a pull request that *deletes* the bundle still fails, because the base
+      # has it and this tree does not. An unresolvable base ref is a fault in the
+      # checkout rather than a fact about the repository, so it fails loudly instead
+      # of skipping — a gate that quietly skips when it cannot see is the false pass
+      # this command exists to prevent.
+      - name: Verify the bundle
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/${BASE}" >/dev/null; then
+            echo "cannot resolve origin/${BASE}; the checkout is wrong, not the bundle" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "origin/${BASE}:.signpost/manifest.json" 2>/dev/null; then
+            echo "no bundle on ${BASE} yet, so there is nothing to compare against."
+            echo "the push job writes the first one; branches do not write it."
+            exit 0
+          fi
+          signpost verify -as-of-bundle .
