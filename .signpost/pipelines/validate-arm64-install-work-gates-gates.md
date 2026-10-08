@@ -2,7 +2,7 @@
 type: Pipeline
 title: Validate arm64 (install=work gates) gates
 description: "CI job ${{ matrix.name }} in the Validate arm64 (install=work gates) workflow, 21 steps"
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/.github/workflows/validate-arm64.yml
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/.github/workflows/validate-arm64.yml
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: job, value: "${{ matrix.name }}" }

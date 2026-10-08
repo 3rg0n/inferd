@@ -2,7 +2,7 @@
 type: Document
 title: "ADR 0028: airgapped build profile"
 description: "Architecture decision (Accepted), 71 rules read from 0028-airgapped-build-profile.md."
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/docs/adr/0028-airgapped-build-profile.md
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/docs/adr/0028-airgapped-build-profile.md
 tags: [accepted, adr, constraint]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

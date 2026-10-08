@@ -2,7 +2,7 @@
 type: Module
 title: crates/inferd-engine/src/openai_compat
 description: 4 rust files; 5 exported symbols; package crates::inferd-engine::src::openai_compat::adapter.
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/crates/inferd-engine/src/openai_compat
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/crates/inferd-engine/src/openai_compat
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: commits, value: "11" }
