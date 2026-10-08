@@ -2,8 +2,8 @@
 okf_version: "0.2"
 type: Index
 title: Repository map
-description: "Structural map of this repository: 134 concepts, 466 relationships."
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+description: "Structural map of this repository: 135 concepts, 473 relationships."
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 ---
 # Repository map
@@ -20,7 +20,7 @@ Start here. What the shape of this repository says, then a line per page naming 
 The places a wrong assumption propagates furthest, so the places to read first.
 
 - [crates/inferd-engine](./modules/inferd-engine.md) — 58 relationships (17 in, 41 out)
-- [crates/inferd-daemon/src](./modules/src-12r0iph.md) — 52 relationships (18 in, 34 out)
+- [crates/inferd-daemon/src](./modules/src-12r0iph.md) — 54 relationships (19 in, 35 out)
 - [crates/inferd-engine/src/llamacpp](./modules/llamacpp.md) — 44 relationships (18 in, 26 out)
 - [crates/inferd-daemon](./modules/inferd-daemon.md) — 42 relationships (11 in, 31 out)
 - [crates/inferd-engine/src/openai_compat](./modules/openai-compat.md) — 38 relationships (14 in, 24 out)
@@ -31,7 +31,7 @@ What the shape of this repository says. Each line is a result — where one read
 
 - **Import cycles: 1.** The modules in a cycle cannot be understood or changed independently, whatever the directory layout suggests.
   - 2 modules: [crates/inferd-engine/src/llamacpp/chat_template](./modules/chat-template.md), [crates/inferd-engine/src/llamacpp](./modules/llamacpp.md)
-- **Cross-cluster edges: 178.** Where a change is most likely to surprise someone: the two sides are maintained as separate concerns and coupled anyway.
+- **Cross-cluster edges: 177.** Where a change is most likely to surprise someone: the two sides are maintained as separate concerns and coupled anyway.
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [crates/inferd-engine](./modules/inferd-engine.md) (changes with)
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [crates/inferd-daemon/src](./modules/src-12r0iph.md) (changes with)
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [base64](./references/crates-io-base64.md) (imports)
@@ -39,12 +39,10 @@ What the shape of this repository says. Each line is a result — where one read
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [hmac](./references/crates-io-hmac.md) (imports)
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [serde](./references/crates-io-serde.md) (imports)
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [sha2](./references/crates-io-sha2.md) (imports)
-  - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [tokio](./references/crates-io-tokio.md) (imports)
   - [crates/inferd-engine/src/bedrock_invoke](./modules/bedrock-invoke.md) → [tracing](./references/crates-io-tracing.md) (imports)
   - [crates/inferd-engine/src/llamacpp/chat_template](./modules/chat-template.md) → [crates/inferd-engine](./modules/inferd-engine.md) (changes with)
   - [crates/inferd-engine/src/llamacpp/chat_template](./modules/chat-template.md) → [crates/inferd-daemon/src](./modules/src-12r0iph.md) (changes with)
-  - [crates/inferd-daemon/tests/common](./modules/common.md) → [inferd-proto](./references/crates-io-inferd-proto.md) (imports)
-  - [crates/inferd-daemon/tests/common](./modules/common.md) → [tokio](./references/crates-io-tokio.md) (imports)
+  - [crates/inferd-daemon/tests/common](./modules/common.md) → [crates/inferd-daemon/src](./modules/src-12r0iph.md) (changes with)
   - [crates/inferd-engine/cpp](./modules/cpp.md) → [crates/inferd-engine](./modules/inferd-engine.md) (changes with)
   - [crates/inferd-engine/cpp](./modules/cpp.md) → [crates/inferd-engine/src/llamacpp](./modules/llamacpp.md) (changes with)
   - [crates/inferd-proto/src/embed](./modules/embed.md) → [crates/inferd-proto/src](./modules/src-ymgvev.md) (imports)
@@ -52,7 +50,9 @@ What the shape of this repository says. Each line is a result — where one read
   - [clients/go](./modules/go.md) → [crates/inferd-engine](./modules/inferd-engine.md) (changes with)
   - [clients/go](./modules/go.md) → [packaging](./modules/packaging.md) (changes with)
   - [clients/go](./modules/go.md) → [crates/inferd-daemon/src](./modules/src-12r0iph.md) (changes with)
-  - and 158 more
+  - [clients/go](./modules/go.md) → [crates/inferd-http/src](./modules/src-fq5wh.md) (changes with)
+  - [crates/inferd-daemon](./modules/inferd-daemon.md) → [clients/go](./modules/go.md) (changes with)
+  - and 157 more
 - **Disconnected islands: 1.** Concepts linked to each other and to nothing else — most often documents describing code nothing connects them to.
   - 32 concepts: [CI airgapped](./pipelines/ci-airgapped.md), [CI airgapped artifact links no HTTPS stack](./pipelines/ci-airgapped-artifact-links-no-https-stack.md), [CI cargo audit](./pipelines/ci-cargo-audit.md), [CI cargo deny \(licences + MPL containment\)](./pipelines/ci-cargo-deny-licences-mpl-containment.md), [CI default](./pipelines/ci-default.md), [CI dl-backends](./pipelines/ci-dl-backends.md), [CI go-client](./pipelines/ci-go-client.md), [CI llamacpp](./pipelines/ci-llamacpp.md), and 24 more
 - **Unconnected concepts: 31.** Nothing links to or from these: dead code, an unreferenced document, or a gap in extraction. Which of the three it is needs a human.
@@ -110,7 +110,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [packaging](./modules/packaging.md) — 1 shell file; entrypoint #!.
 - [crates/inferd-proto/src/rerank](./modules/rerank.md) — 3 rust files; 11 exported symbols; package crates::inferd-proto::src::rerank.
 - [crates/inferd-daemon/src](./modules/src-12r0iph.md) — 21 rust files; 154 exported symbols; entrypoint main; package crates::inferd-daemon::src::admin.
-- [crates/inferd-client/src](./modules/src-162lily.md) — 7 rust files; 32 exported symbols; package crates::inferd-client::src::admin.
+- [crates/inferd-client/src](./modules/src-162lily.md) — 8 rust files; 32 exported symbols; package crates::inferd-client::src::admin.
 - [crates/inferd-engine/src](./modules/src-1b7d94r.md) — 5 rust files; 30 exported symbols; package crates::inferd-engine::src::backend.
 - [crates/inferd/src](./modules/src-1kxpou4.md) — 1 rust file; entrypoint main; package crates::inferd::src::main.
 - [crates/inferd-openai-wire/src](./modules/src-1qcto7x.md) — 1 rust file; 34 exported symbols; package crates::inferd-openai-wire::src::lib.
@@ -118,6 +118,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [crates/inferd-proto/src](./modules/src-ymgvev.md) — 3 rust files; 15 exported symbols; package crates::inferd-proto::src::error.
 - [crates/inferd-daemon/tests](./modules/tests-1285xfa.md) — 10 rust files; package crates::inferd-daemon::tests::echo.
 - [crates/inferd-engine/tests](./modules/tests-1hsi7ps.md) — 10 rust files; package crates::inferd-engine::tests::chat_template_gemma4.
+- [crates/inferd/tests](./modules/tests-1qbzbiv.md) — 1 rust file; package crates::inferd::tests::default_endpoints.
 - [crates/inferd-proto/tests](./modules/tests-1sec76c.md) — 1 rust file; package crates::inferd-proto::tests::v2_wire.
 - [crates/inferd-proto/src/v2](./modules/v2.md) — 5 rust files; 32 exported symbols; package crates::inferd-proto::src::v2::attachment.
 - [packaging/validate](./modules/validate.md) — 3 python files; 23 exported symbols; entrypoint __main__; package packaging.validate.bridge.
@@ -187,7 +188,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [async-stream](./references/crates-io-async-stream.md) — crates.io dependency async-stream (0.3)
 - [async-trait](./references/crates-io-async-trait.md) — crates.io dependency async-trait (0.1, workspace)
 - [axum](./references/crates-io-axum.md) — crates.io dependency axum (0.7)
-- [base64](./references/crates-io-base64.md) — crates.io dependency base64 (0.22)
+- [base64](./references/crates-io-base64.md) — crates.io dependency base64 (0.23)
 - [bindgen](./references/crates-io-bindgen.md) — crates.io dependency bindgen (0.71)
 - [bytes](./references/crates-io-bytes.md) — crates.io dependency bytes (1, workspace)
 - [chrono](./references/crates-io-chrono.md) — crates.io dependency chrono (0.4)
@@ -197,7 +198,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [futures-core](./references/crates-io-futures-core.md) — crates.io dependency futures-core (0.3)
 - [futures-util](./references/crates-io-futures-util.md) — crates.io dependency futures-util (0.3)
 - [hex](./references/crates-io-hex.md) — crates.io dependency hex (0.4)
-- [hmac](./references/crates-io-hmac.md) — crates.io dependency hmac (0.12)
+- [hmac](./references/crates-io-hmac.md) — crates.io dependency hmac (0.13)
 - [image](./references/crates-io-image.md) — crates.io dependency image (0.25)
 - [inferd-client](./references/crates-io-inferd-client.md) — crates.io dependency inferd-client (=0.8.0)
 - [inferd-daemon](./references/crates-io-inferd-daemon.md) — crates.io dependency inferd-daemon (=0.8.0)
@@ -211,11 +212,11 @@ What the shape of this repository says. Each line is a result — where one read
 - [rubato](./references/crates-io-rubato.md) — crates.io dependency rubato (4)
 - [serde](./references/crates-io-serde.md) — crates.io dependency serde (1, workspace)
 - [serde_json](./references/crates-io-serde-json.md) — crates.io dependency serde_json (1, workspace)
-- [sha2](./references/crates-io-sha2.md) — crates.io dependency sha2 (0.10, workspace)
+- [sha2](./references/crates-io-sha2.md) — crates.io dependency sha2 (0.11, workspace)
 - [subtle](./references/crates-io-subtle.md) — crates.io dependency subtle (2, workspace)
 - [symphonia](./references/crates-io-symphonia.md) — crates.io dependency symphonia (0.6)
 - [tempfile](./references/crates-io-tempfile.md) — crates.io dependency tempfile (3)
-- [thiserror](./references/crates-io-thiserror.md) — crates.io dependency thiserror (1, workspace)
+- [thiserror](./references/crates-io-thiserror.md) — crates.io dependency thiserror (2, workspace)
 - [tokio](./references/crates-io-tokio.md) — crates.io dependency tokio (1, workspace)
 - [tokio-stream](./references/crates-io-tokio-stream.md) — crates.io dependency tokio-stream (0.1)
 - [tracing](./references/crates-io-tracing.md) — crates.io dependency tracing (0.1, workspace)

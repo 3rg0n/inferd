@@ -2,7 +2,7 @@
 type: Module
 title: crates/inferd-proto/fuzz/fuzz_targets
 description: 2 rust files; package crates::inferd-proto::fuzz::fuzz_targets::lp_frame_reader.
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d/crates/inferd-proto/fuzz/fuzz_targets
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/crates/inferd-proto/fuzz/fuzz_targets
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: commits, value: "2" }

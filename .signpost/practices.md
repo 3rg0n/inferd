@@ -2,7 +2,7 @@
 type: Practices
 title: How work is done here
 description: "What this repository declares about building, testing, gating, and ownership — and what it does not."
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 ---
 # How work is done here
@@ -18,7 +18,7 @@ Each line is something this repository states, or something it does not. A missi
 
 - **Not declared.** No test command is declared. This is the fact an agent most needs before it offers to add a test, because it decides where the test goes and how it is run.
   - Looked in Makefile targets, package.json scripts, Cargo aliases, CMake targets, Bazel targets.
-- 28 test files in the tree.
+- 29 test files in the tree.
 
 ### What runs against a change
 
@@ -29,8 +29,8 @@ Each line is something this repository states, or something it does not. A missi
 
 ### How changes are recorded
 
-- Commit subjects follow Conventional Commits: 341 of 342 read, including 87 fix and 80 feature. A message here states what kind of change it is.
-- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 3 commits back.
+- Commit subjects follow Conventional Commits: 345 of 347 read, including 88 fix and 80 feature. A message here states what kind of change it is.
+- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 8 commits back.
 
 ### Dependencies
 

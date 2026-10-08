@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: hmac
-description: crates.io dependency hmac (0.12)
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+description: crates.io dependency hmac (0.13)
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: hmac }
   - { name: scope, value: runtime }
-  - { name: version, value: "0.12" }
+  - { name: version, value: "0.13" }
 ---
 # hmac
 
 <!-- signpost:managed:summary -->
-crates.io dependency hmac (0.12)
+crates.io dependency hmac (0.13)
 <!-- /signpost:managed:summary -->
 
 ## Structure
