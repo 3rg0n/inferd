@@ -33,7 +33,7 @@ clap               = { workspace = true }
 # SHA compares) — avoids a timing side-channel on the token.
 subtle             = { workspace = true }
 # HTTP server. axum has first-class SSE support for streaming chat.
-axum               = { version = "0.7", features = ["json"] }
+axum               = { version = "0.8", features = ["json"] }
 # Decode OpenAI `image_url` (data: URL) PNG/JPEG payloads to raw RGB for
 # an inferd image attachment — the daemon links no image codec (ADR 0016),
 # so the bridge (as the consumer) decodes. png/jpeg only; no default codecs.
