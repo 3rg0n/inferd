@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: nix
-description: crates.io dependency nix (0.27)
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
+description: crates.io dependency nix (0.31)
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: nix }
   - { name: scope, value: runtime }
-  - { name: version, value: "0.27" }
+  - { name: version, value: "0.31" }
 ---
 # nix
 
 <!-- signpost:managed:summary -->
-crates.io dependency nix (0.27)
+crates.io dependency nix (0.31)
 <!-- /signpost:managed:summary -->
 
 ## Structure

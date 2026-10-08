@@ -2,7 +2,7 @@
 type: Module
 title: crates/inferd-engine/tests
 description: 10 rust files; package crates::inferd-engine::tests::chat_template_gemma4.
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/crates/inferd-engine/tests
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/crates/inferd-engine/tests
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: commits, value: "25" }

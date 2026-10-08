@@ -2,7 +2,7 @@
 type: Pipeline
 title: CI cargo audit
 description: "CI job cargo audit in the CI workflow, 3 steps; runs on a pull request or a default-branch push"
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/.github/workflows/ci.yml
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/.github/workflows/ci.yml
 tags: [gate]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

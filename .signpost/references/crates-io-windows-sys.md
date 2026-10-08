@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: windows-sys
-description: crates.io dependency windows-sys (0.52)
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
+description: crates.io dependency windows-sys (0.61)
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: windows-sys }
   - { name: scope, value: runtime }
-  - { name: version, value: "0.52" }
+  - { name: version, value: "0.61" }
 ---
 # windows-sys
 
 <!-- signpost:managed:summary -->
-crates.io dependency windows-sys (0.52)
+crates.io dependency windows-sys (0.61)
 <!-- /signpost:managed:summary -->
 
 ## Structure

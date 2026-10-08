@@ -2,16 +2,16 @@
 type: Module
 title: crates/inferd-engine
 description: 1 rust file; package crates::inferd-engine::build.
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94/crates/inferd-engine
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/crates/inferd-engine
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
-  - { name: commits, value: "86" }
+  - { name: commits, value: "87" }
   - { name: exported, value: "0" }
   - { name: files, value: "1" }
   - { name: first_commit, value: "2026-05-14" }
   - { name: last_commit, value: "2026-10-07" }
-  - { name: lines_added, value: "1138" }
-  - { name: lines_removed, value: "353" }
+  - { name: lines_added, value: "1139" }
+  - { name: lines_removed, value: "354" }
   - { name: package, value: crates::inferd-engine::build }
   - { name: top_author, value: Ergon Copeland }
   - { name: top_author_share, value: 99% }
