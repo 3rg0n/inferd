@@ -428,6 +428,7 @@ mod tests {
         // would mean the resampler emitted only its startup padding.
         let peak = d.samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.3, "resampled signal lost its amplitude: {peak}");
+        assert_pitch_hz(&d.samples, 16_000, 440.0);
     }
 
     #[test]
@@ -443,6 +444,24 @@ mod tests {
         assert!(
             (got - 16_000.0).abs() / 16_000.0 < 0.01,
             "expected ~16000 samples, got {got}"
+        );
+        assert_pitch_hz(&d.samples, 16_000, 440.0);
+    }
+
+    /// Assert `samples` at `rate` carry a tone of about `hz`, by counting
+    /// sign changes. Sample count alone cannot catch a resampler that
+    /// emits the right length at the wrong pitch — which is exactly the
+    /// fluent-wrong-answer failure ADR 0025 is about.
+    fn assert_pitch_hz(samples: &[f32], rate: u32, hz: f32) {
+        let crossings = samples
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
+        let seconds = samples.len() as f32 / rate as f32;
+        let measured = crossings as f32 / 2.0 / seconds;
+        assert!(
+            (measured - hz).abs() / hz < 0.02,
+            "expected a ~{hz} Hz tone, measured {measured} Hz"
         );
     }
 

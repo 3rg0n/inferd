@@ -50,7 +50,7 @@ symphonia          = { version = "0.6", default-features = false, features = ["w
 # Resample decoded audio to the rate the backend requires. The daemon
 # refuses a mismatch rather than mis-feeding a rate-less encoder (ADR
 # 0025), and rate conversion is the consumer's job (ADR 0016).
-rubato             = "4"
+rubato             = "5"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
