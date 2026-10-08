@@ -2,7 +2,7 @@
 type: External Dependency
 title: anyhow
 description: "crates.io dependency anyhow (1, workspace)"
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

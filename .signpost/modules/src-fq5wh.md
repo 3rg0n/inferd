@@ -2,18 +2,18 @@
 type: Module
 title: crates/inferd-http/src
 description: 7 rust files; 33 exported symbols; entrypoint main; package crates::inferd-http::src::audio_decode.
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d/crates/inferd-http/src
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/crates/inferd-http/src
 tags: [entrypoint]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
-  - { name: commits, value: "8" }
+  - { name: commits, value: "9" }
   - { name: entrypoints, value: main }
   - { name: exported, value: "33" }
   - { name: files, value: "7" }
   - { name: first_commit, value: "2026-07-10" }
-  - { name: last_commit, value: "2026-08-10" }
-  - { name: lines_added, value: "3361" }
-  - { name: lines_removed, value: "96" }
+  - { name: last_commit, value: "2026-10-07" }
+  - { name: lines_added, value: "3373" }
+  - { name: lines_removed, value: "114" }
   - { name: package, value: crates::inferd-http::src::audio_decode }
   - { name: top_author, value: Ergon Copeland }
   - { name: top_author_share, value: 100% }

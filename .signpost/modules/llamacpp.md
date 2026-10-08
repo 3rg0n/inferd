@@ -2,16 +2,16 @@
 type: Module
 title: crates/inferd-engine/src/llamacpp
 description: 7 rust files; 52 exported symbols; package crates::inferd-engine::src::llamacpp::accelerator.
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d/crates/inferd-engine/src/llamacpp
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/crates/inferd-engine/src/llamacpp
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
-  - { name: commits, value: "32" }
+  - { name: commits, value: "33" }
   - { name: exported, value: "52" }
   - { name: files, value: "7" }
   - { name: first_commit, value: "2026-05-16" }
-  - { name: last_commit, value: "2026-08-09" }
-  - { name: lines_added, value: "5040" }
-  - { name: lines_removed, value: "757" }
+  - { name: last_commit, value: "2026-10-07" }
+  - { name: lines_added, value: "5043" }
+  - { name: lines_removed, value: "763" }
   - { name: package, value: crates::inferd-engine::src::llamacpp::accelerator }
   - { name: top_author, value: Ergon Copeland }
   - { name: top_author_share, value: 100% }

@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: thiserror
-description: "crates.io dependency thiserror (1, workspace)"
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+description: "crates.io dependency thiserror (2, workspace)"
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: thiserror }
   - { name: scope, value: runtime }
-  - { name: version, value: "1, workspace" }
+  - { name: version, value: "2, workspace" }
 ---
 # thiserror
 
 <!-- signpost:managed:summary -->
-crates.io dependency thiserror (1, workspace)
+crates.io dependency thiserror (2, workspace)
 <!-- /signpost:managed:summary -->
 
 ## Structure

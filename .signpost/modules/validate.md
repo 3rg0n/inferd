@@ -2,7 +2,7 @@
 type: Module
 title: packaging/validate
 description: 3 python files; 23 exported symbols; entrypoint __main__; package packaging.validate.bridge.
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d/packaging/validate
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/packaging/validate
 tags: [entrypoint]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: base64
-description: crates.io dependency base64 (0.22)
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d
+description: crates.io dependency base64 (0.23)
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: base64 }
   - { name: scope, value: "dev, runtime" }
-  - { name: version, value: "0.22" }
+  - { name: version, value: "0.23" }
 ---
 # base64
 
 <!-- signpost:managed:summary -->
-crates.io dependency base64 (0.22)
+crates.io dependency base64 (0.23)
 <!-- /signpost:managed:summary -->
 
 ## Structure

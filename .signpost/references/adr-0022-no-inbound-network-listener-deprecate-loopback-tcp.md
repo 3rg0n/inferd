@@ -2,7 +2,7 @@
 type: Document
 title: "ADR 0022: no inbound network listener deprecate loopback tcp"
 description: "Architecture decision (Accepted), 26 rules read from 0022-no-inbound-network-listener-deprecate-loopback-tcp.md."
-resource: git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md
+resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7/docs/adr/0022-no-inbound-network-listener-deprecate-loopback-tcp.md
 tags: [accepted, adr, constraint]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

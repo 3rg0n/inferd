@@ -1,16 +1,16 @@
 {
   "okf_version": "0.2",
   "generator": "signpost/v0.2.0",
-  "resource": "git://github.com/3rg0n/inferd@2c1a482515d2be7f5a17a6298602258f5647962d",
+  "resource": "git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7",
   "date": "2026-10-07",
   "counts": {
-    "nodes": 134,
-    "edges": 466,
+    "nodes": 135,
+    "edges": 473,
     "clusters": 36
   },
   "confidence": {
     "ambiguous": 0,
-    "extracted": 466,
+    "extracted": 473,
     "inferred": 0
   },
   "pages": [
@@ -39,6 +39,7 @@
     "modules/src-ymgvev.md",
     "modules/tests-1285xfa.md",
     "modules/tests-1hsi7ps.md",
+    "modules/tests-1qbzbiv.md",
     "modules/tests-1sec76c.md",
     "modules/v2.md",
     "modules/validate.md",
