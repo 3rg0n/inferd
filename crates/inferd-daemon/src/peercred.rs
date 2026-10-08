@@ -269,5 +269,8 @@ mod tests {
         // pid is the same process — both ends of a self-connect run in
         // this test binary.
         assert_eq!(id.pid, Some(std::process::id()));
+        // uid is the attribute the socket's access model actually rests
+        // on, so pin it too rather than only the pid.
+        assert_eq!(id.uid, Some(nix::unistd::getuid().as_raw()));
     }
 }
