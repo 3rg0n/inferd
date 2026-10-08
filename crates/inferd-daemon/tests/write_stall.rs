@@ -114,16 +114,6 @@ mod uds {
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
 
-    fn socket_path() -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        std::env::temp_dir().join(format!(
-            "inferd-test-wstall-{}-{}.sock",
-            std::process::id(),
-            idx
-        ))
-    }
-
     #[tokio::test]
     async fn non_reading_peer_does_not_wedge_the_admission_gate() {
         let router = Arc::new(Router::new(vec![stalling_mock()]));
@@ -131,8 +121,7 @@ mod uds {
             .await
             .expect("backend ready");
 
-        let path = socket_path();
-        let _ = std::fs::remove_file(&path);
+        let path = common::temp_socket_path("wstall");
         let listener = bind_uds(&path, None).await.expect("bind uds");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let serve = tokio::spawn({

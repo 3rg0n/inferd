@@ -8,11 +8,12 @@
 //! since an embedding is a complete vector.
 
 use crate::client::ClientError;
+use crate::transport::{Transport, default_endpoint};
 use inferd_proto::embed::{EmbedRequest, EmbedResponse};
 #[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 /// Embed-socket client.
@@ -21,7 +22,7 @@ use tokio::sync::Mutex;
 /// Wrap with [`crate::dial_and_wait_ready`] to retry connect during
 /// daemon bring-up — the retry helper is generic over the client type.
 pub struct EmbedClient {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<Mutex<Transport>>,
 }
 
 impl std::fmt::Debug for EmbedClient {
@@ -30,41 +31,25 @@ impl std::fmt::Debug for EmbedClient {
     }
 }
 
-struct Inner {
-    write: Box<dyn AsyncWrite + Send + Unpin>,
-    read: BufReader<Box<dyn AsyncRead + Send + Unpin>>,
-}
-
 impl EmbedClient {
     /// Open a Unix domain socket connection (Unix only). Default embed
     /// path: `${XDG_RUNTIME_DIR}/inferd/infer.embed.sock` on Linux,
     /// `${TMPDIR}/inferd/infer.embed.sock` on macOS.
     #[cfg(unix)]
     pub async fn dial_uds(path: &Path) -> Result<Self, ClientError> {
-        let stream = tokio::net::UnixStream::connect(path).await?;
-        let (read, write) = stream.into_split();
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_uds(path).await?))
     }
 
     /// Open a Windows named pipe connection (Windows only). Default
     /// embed path: `\\.\pipe\inferd-infer-embed`.
     #[cfg(windows)]
     pub async fn dial_pipe(path: &str) -> Result<Self, ClientError> {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        let pipe = ClientOptions::new().open(path)?;
-        let (read, write) = tokio::io::split(pipe);
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_pipe(path).await?))
     }
 
-    fn wrap(
-        read: Box<dyn AsyncRead + Send + Unpin>,
-        write: Box<dyn AsyncWrite + Send + Unpin>,
-    ) -> Self {
+    fn wrap(transport: Transport) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                write,
-                read: BufReader::with_capacity(64 * 1024, read),
-            })),
+            inner: Arc::new(Mutex::new(transport)),
         }
     }
 
@@ -77,7 +62,7 @@ impl EmbedClient {
         read: Box<dyn AsyncRead + Send + Unpin>,
         write: Box<dyn AsyncWrite + Send + Unpin>,
     ) -> Self {
-        Self::wrap(read, write)
+        Self::wrap(Transport::new(read, write))
     }
 
     /// Send an `EmbedRequest` and read back the single terminal
@@ -117,42 +102,7 @@ impl EmbedClient {
 /// 2. `${HOME}/.inferd/run/infer.embed.sock`
 /// 3. `/tmp/inferd/infer.embed.sock`
 pub fn default_embed_addr() -> std::path::PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let mut p = std::path::PathBuf::from(xdg);
-            if !p.as_os_str().is_empty() {
-                p.push("inferd");
-                p.push("infer.embed.sock");
-                return p;
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let mut p = std::path::PathBuf::from(home);
-            if !p.as_os_str().is_empty() {
-                p.push(".inferd");
-                p.push("run");
-                p.push("infer.embed.sock");
-                return p;
-            }
-        }
-        std::path::PathBuf::from("/tmp/inferd/infer.embed.sock")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut p = std::env::temp_dir();
-        p.push("inferd");
-        p.push("infer.embed.sock");
-        p
-    }
-    #[cfg(windows)]
-    {
-        std::path::PathBuf::from(r"\\.\pipe\inferd-infer-embed")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        std::path::PathBuf::from("/tmp/inferd/infer.embed.sock")
-    }
+    default_endpoint("infer.embed.sock", r"\\.\pipe\inferd-infer-embed")
 }
 
 #[cfg(test)]
@@ -174,7 +124,7 @@ mod tests {
     async fn embed_round_trips_a_success_frame() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = EmbedClient::wrap(Box::new(read), Box::new(write));
+        let mut client = EmbedClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);
@@ -217,7 +167,7 @@ mod tests {
     async fn embed_round_trips_an_error_frame() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = EmbedClient::wrap(Box::new(read), Box::new(write));
+        let mut client = EmbedClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);
@@ -250,7 +200,7 @@ mod tests {
     async fn unexpected_eof_yields_clienterror() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = EmbedClient::wrap(Box::new(read), Box::new(write));
+        let mut client = EmbedClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, _tx) = tokio::io::split(server_side);
@@ -272,7 +222,7 @@ mod tests {
     async fn connection_stays_open_for_a_second_request() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = EmbedClient::wrap(Box::new(read), Box::new(write));
+        let mut client = EmbedClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);

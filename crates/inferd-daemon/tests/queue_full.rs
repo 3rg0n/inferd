@@ -63,14 +63,7 @@ async fn boot_admission_capped_daemon() -> (
         .await
         .expect("backend ready");
 
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let socket_path = std::env::temp_dir().join(format!(
-        "inferd-test-qfull-{}-{}.sock",
-        std::process::id(),
-        idx
-    ));
-    let _ = std::fs::remove_file(&socket_path);
+    let socket_path = common::temp_socket_path("qfull");
 
     let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 
@@ -156,6 +149,20 @@ async fn third_concurrent_request_gets_queue_full_when_capacity_is_two() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
+/// Block until at least `taken` admission slots are held, failing the
+/// test if that does not happen within a generous bound.
+#[cfg(unix)]
+async fn wait_until_slots_taken(admission: &Admission, taken: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while admission.capacity() - admission.available_permits() < taken {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{taken} admission slot(s) never taken"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn queue_full_frame_includes_request_id() {
@@ -172,18 +179,12 @@ async fn queue_full_frame_includes_request_id() {
         .await
         .expect("backend ready");
 
-    static COUNTER2: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let idx = COUNTER2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let socket_path = std::env::temp_dir().join(format!(
-        "inferd-test-qfull-id-{}-{}.sock",
-        std::process::id(),
-        idx
-    ));
-    let _ = std::fs::remove_file(&socket_path);
+    let socket_path = common::temp_socket_path("qfull-id");
 
     let listener = bind_uds(&socket_path, None).await.expect("bind uds");
+    let admission = Admission::new(1, 0);
     let ctx = AcceptContext {
-        admission: Some(Admission::new(1, 0)),
+        admission: Some(admission.clone()),
         ..Default::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -194,8 +195,10 @@ async fn queue_full_frame_includes_request_id() {
     // Start the slow first request and let it claim the only slot.
     let path_first = socket_path.clone();
     let first = tokio::spawn(async move { one_request(path_first, "first".into()).await });
-    // Brief delay so `first` is admitted before we send `second`.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // `second` must arrive while `first` holds the slot. Wait for the
+    // gate to report it taken rather than guessing how long admission
+    // takes — a fixed delay passes until a loaded runner is slower.
+    wait_until_slots_taken(&admission, 1).await;
 
     let frames = tokio::time::timeout(
         Duration::from_secs(10),
