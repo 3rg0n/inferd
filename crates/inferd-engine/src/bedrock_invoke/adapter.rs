@@ -81,6 +81,9 @@ pub enum BedrockInvokeError {
     /// reqwest-level transport error.
     #[error("transport: {0}")]
     Transport(#[from] reqwest::Error),
+    /// The HTTPS client could not be built (ADR 0030 TLS setup).
+    #[error("tls setup: {0}")]
+    TlsSetup(#[from] crate::tls::TlsSetupError),
     /// Upstream returned a non-2xx HTTP status before the event-stream
     /// opened.
     #[error("upstream HTTP {status}: {body}")]
@@ -136,7 +139,7 @@ impl BedrockInvoke {
                 "model_id must not be empty".into(),
             ));
         }
-        let client = reqwest::Client::builder().timeout(config.timeout).build()?;
+        let client = crate::tls::https_client(config.timeout)?;
         Ok(Self {
             name: "bedrock-invoke",
             config,
