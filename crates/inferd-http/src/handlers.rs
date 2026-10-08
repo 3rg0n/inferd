@@ -150,7 +150,7 @@ async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatReq
                 .into_response();
             }
             Ok(AudioSupport::NoAudio) => None,
-            Err(resp) => return resp,
+            Err(e) => return e.into_response(),
         }
     } else {
         None
@@ -165,7 +165,7 @@ async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatReq
     // Dial a fresh generation client (retry-and-wait for daemon readiness).
     let mut client = match dial_gen(&state).await {
         Ok(c) => c,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
 
     let stream = match client.generate(v2).await {
@@ -335,7 +335,7 @@ async fn embeddings(State(state): State<AppState>, Json(req): Json<EmbeddingsReq
 
     let mut client = match dial_embed(&state).await {
         Ok(c) => c,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
 
     match client.embed(embed_req).await {
@@ -360,7 +360,7 @@ async fn embeddings(State(state): State<AppState>, Json(req): Json<EmbeddingsReq
 
 // --- daemon dialing (per request) -----------------------------------
 
-async fn dial_gen(state: &AppState) -> Result<ClientV2, Response> {
+async fn dial_gen(state: &AppState) -> Result<ClientV2, HttpError> {
     let addr = state.gen_addr().0.clone();
     let timeout = state.startup_timeout();
     dial_with_wait(timeout, move || {
@@ -368,12 +368,10 @@ async fn dial_gen(state: &AppState) -> Result<ClientV2, Response> {
         async move { dial_gen_once(&addr).await }
     })
     .await
-    .map_err(|e| {
-        HttpError::daemon_unreachable(format!("connect generation socket: {e}")).into_response()
-    })
+    .map_err(|e| HttpError::daemon_unreachable(format!("connect generation socket: {e}")))
 }
 
-async fn dial_embed(state: &AppState) -> Result<EmbedClient, Response> {
+async fn dial_embed(state: &AppState) -> Result<EmbedClient, HttpError> {
     let addr = state.embed_addr().0.clone();
     let timeout = state.startup_timeout();
     dial_with_wait(timeout, move || {
@@ -381,9 +379,7 @@ async fn dial_embed(state: &AppState) -> Result<EmbedClient, Response> {
         async move { dial_embed_once(&addr).await }
     })
     .await
-    .map_err(|e| {
-        HttpError::daemon_unreachable(format!("connect embed socket: {e}")).into_response()
-    })
+    .map_err(|e| HttpError::daemon_unreachable(format!("connect embed socket: {e}")))
 }
 
 /// True if any message carries an `input_audio` content part. Cheap
@@ -439,11 +435,10 @@ impl AudioSupport {
 /// caps are retained per backend, so a bridge connecting long after
 /// `ready` still sees them. That makes the snapshot frame a deterministic
 /// terminator: read until the first non-capabilities frame.
-async fn admin_audio_sample_rate(state: &AppState) -> Result<AudioSupport, Response> {
+async fn admin_audio_sample_rate(state: &AppState) -> Result<AudioSupport, HttpError> {
     let addr = state.admin_addr().0.clone();
     let mut admin = dial_admin_once(&addr).await.map_err(|e| {
         HttpError::daemon_unreachable(format!("connect admin socket for audio rate: {e}"))
-            .into_response()
     })?;
 
     // Bounded read: the connect prefix is caps-then-snapshot, and a
@@ -464,13 +459,12 @@ async fn admin_audio_sample_rate(state: &AppState) -> Result<AudioSupport, Respo
 
     match read {
         Ok(Ok(support)) => Ok(support),
-        Ok(Err(e)) => Err(
-            HttpError::daemon_unreachable(format!("read admin capabilities: {e}")).into_response(),
-        ),
+        Ok(Err(e)) => Err(HttpError::daemon_unreachable(format!(
+            "read admin capabilities: {e}"
+        ))),
         Err(_) => Err(HttpError::daemon_unreachable(
             "timed out reading audio sample rate from the admin socket",
-        )
-        .into_response()),
+        )),
     }
 }
 
