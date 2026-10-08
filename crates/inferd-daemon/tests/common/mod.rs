@@ -22,6 +22,23 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const MAX_VARINT_BYTES: usize = 5;
 
+/// A socket path unique to this test process and call, under the system
+/// temp dir, with any stale file at that path removed.
+///
+/// `tag` names the test file in the path so a leaked socket is
+/// attributable. The counter is shared across every test in the binary,
+/// which is what keeps parallel tests from colliding.
+pub fn temp_socket_path(tag: &str) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "inferd-test-{tag}-{}-{idx}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
 /// LEB128-encode `value` into `out`, returning the byte count written.
 pub fn encode_uvarint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
     let mut i = 0;

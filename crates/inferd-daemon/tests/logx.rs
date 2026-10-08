@@ -66,14 +66,7 @@ async fn boot_daemon(
         .await
         .expect("backend ready");
 
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let socket_path = std::env::temp_dir().join(format!(
-        "inferd-test-logx-{}-{}.sock",
-        std::process::id(),
-        idx
-    ));
-    let _ = std::fs::remove_file(&socket_path);
+    let socket_path = common::temp_socket_path("logx");
 
     let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 

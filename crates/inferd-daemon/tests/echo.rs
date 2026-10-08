@@ -57,15 +57,7 @@ async fn boot_daemon(
     // Unique per test: tests in one binary run in parallel in the same
     // process, so a pid-only name collides (AddrInUse). An atomic counter
     // disambiguates within the process; pid spreads across processes.
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let socket_path = std::env::temp_dir().join(format!(
-        "inferd-test-echo-{}-{}.sock",
-        std::process::id(),
-        idx
-    ));
-    // Clean up any stale socket file.
-    let _ = std::fs::remove_file(&socket_path);
+    let socket_path = common::temp_socket_path("echo");
 
     let listener = bind_uds(&socket_path, None).await.expect("bind uds");
 

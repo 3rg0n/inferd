@@ -17,7 +17,7 @@
 //! the spec is stable and tests cover the canonical examples from
 //! AWS' documentation.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -254,6 +254,24 @@ mod tests {
         assert_eq!(
             signed.x_amz_content_sha256,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn signing_key_derivation_matches_aws_published_example() {
+        // AWS' worked example of the SigV4 signing-key chain ("Examples
+        // of how to derive a signing key for Signature Version 4"). The
+        // other tests here check the signer against itself; this one
+        // checks the HMAC chain against an external reference, so an
+        // `hmac` / `sha2` upgrade that changes output cannot pass.
+        let k_secret = "AWS4wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let k_date = hmac_sha256(k_secret.as_bytes(), b"20120215");
+        let k_region = hmac_sha256(&k_date, b"us-east-1");
+        let k_service = hmac_sha256(&k_region, b"iam");
+        let k_signing = hmac_sha256(&k_service, b"aws4_request");
+        assert_eq!(
+            hex::encode(k_signing),
+            "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d"
         );
     }
 }
