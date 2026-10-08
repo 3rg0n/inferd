@@ -138,7 +138,7 @@ fn current_user_sid_string() -> io::Result<String> {
     // in the cleanup path.
     unsafe {
         let process: HANDLE = GetCurrentProcess();
-        let mut token: HANDLE = 0;
+        let mut token: HANDLE = ptr::null_mut();
         if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
             return Err(io::Error::last_os_error());
         }
