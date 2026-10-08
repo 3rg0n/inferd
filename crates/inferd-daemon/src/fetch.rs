@@ -712,9 +712,24 @@ fn download_with_progress(
     dest: &Path,
     broadcaster: &StatusBroadcaster,
 ) -> Result<u64, FetchError> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
+    // TLS posture per ADR 0030: rustls on the `ring` provider, with the
+    // certificate chain verified by the operating system
+    // (`rustls-platform-verifier`) rather than a bundled root set.
+    let tls = ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::Rustls)
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(30)))
+        // A non-2xx is reported as `HttpStatus` below, not folded into a
+        // transport error.
+        .http_status_as_error(false)
+        // HuggingFace `resolve/` URLs redirect to a CDN. 5 is ureq 2's
+        // default, kept rather than adopting ureq 3's 10.
+        .max_redirects(5)
+        .tls_config(tls)
+        .build()
+        .into();
 
     info!(
         url = %spec.source_url,
@@ -726,12 +741,14 @@ fn download_with_progress(
         .get(&spec.source_url)
         .call()
         .map_err(|e| FetchError::Transport(e.to_string()))?;
-    let status = resp.status();
+    let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(FetchError::HttpStatus(status));
     }
     let total = resp
-        .header("content-length")
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok())
         .or(spec.size_bytes);
     if let Some(t) = total {
@@ -744,7 +761,7 @@ fn download_with_progress(
         info!("model download size unknown (no Content-Length)");
     }
 
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
