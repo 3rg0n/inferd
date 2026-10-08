@@ -2,8 +2,8 @@
 type: Module
 title: clients/go
 description: 14 go files; 86 exported symbols; package inferd.
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/clients/go
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/clients/go
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: commits, value: "25" }
   - { name: exported, value: "86" }

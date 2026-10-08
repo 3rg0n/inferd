@@ -2,9 +2,9 @@
 type: Module
 title: packaging/launchd
 description: "2 shell files; entrypoint #!."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/packaging/launchd
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/packaging/launchd
 tags: [entrypoint]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: commits, value: "14" }
   - { name: entrypoints, value: "#!" }

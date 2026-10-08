@@ -2,8 +2,8 @@
 type: Pipeline
 title: Release Sign + publish release
 description: "CI job Sign + publish release in the Release workflow, 9 steps"
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/.github/workflows/release.yml
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/.github/workflows/release.yml
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: job, value: Sign + publish release }
   - { name: needs, value: "build, sbom" }

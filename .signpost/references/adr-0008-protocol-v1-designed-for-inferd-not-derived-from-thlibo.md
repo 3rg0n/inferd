@@ -2,9 +2,9 @@
 type: Document
 title: "ADR 0008: protocol v1 designed for inferd not derived from thlibo"
 description: "Architecture decision (Accepted), 30 rules read from 0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/docs/adr/0008-protocol-v1-designed-for-inferd-not-derived-from-thlibo.md
 tags: [accepted, adr, constraint]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: number, value: "0008" }
   - { name: rules, value: "30" }

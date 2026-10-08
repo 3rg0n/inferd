@@ -2,8 +2,8 @@
 type: Module
 title: crates/inferd-engine/src/llamacpp
 description: 7 rust files; 52 exported symbols; package crates::inferd-engine::src::llamacpp::accelerator.
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/crates/inferd-engine/src/llamacpp
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/crates/inferd-engine/src/llamacpp
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: commits, value: "33" }
   - { name: exported, value: "52" }

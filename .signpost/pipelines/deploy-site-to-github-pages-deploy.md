@@ -2,9 +2,9 @@
 type: Pipeline
 title: Deploy site to GitHub Pages deploy
 description: "CI job deploy in the Deploy site to GitHub Pages workflow, 4 steps; runs on a pull request or a default-branch push"
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/.github/workflows/pages.yml
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/.github/workflows/pages.yml
 tags: [gate]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: job, value: deploy }
   - { name: permissions, value: "contents:read, id-token:write, pages:write" }

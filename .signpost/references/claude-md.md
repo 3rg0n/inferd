@@ -2,9 +2,9 @@
 type: Document
 title: CLAUDE.md
 description: "Stated constraints, 98 rules read from CLAUDE.md."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/CLAUDE.md
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/CLAUDE.md
 tags: [agent-rules, constraint]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: rules, value: "98" }
   - { name: sections, value: "CLAUDE.md, CLAUDE.md / Architecture, CLAUDE.md / Architecture / Flow at runtime, CLAUDE.md / Commands / Building and running with a backend, CLAUDE.md / Commands / Cutting a version bump, CLAUDE.md / Commands / First clone, CLAUDE.md / Commands / Pre-commit gate, CLAUDE.md / Commands / Test tiers (`docs/test-strategy.md`), CLAUDE.md / Model reference material, CLAUDE.md / Model store, CLAUDE.md / Non-negotiable invariants (from `context.md` §\"Invariants\"), CLAUDE.md / Project status, CLAUDE.md / Repository map, CLAUDE.md / Scope gates (what NOT to build), CLAUDE.md / What inferd is, CLAUDE.md / When writing ADRs, CLAUDE.md / Wire protocol is frozen — one generation surface + embeddings + rerank" }

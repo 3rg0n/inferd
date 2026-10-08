@@ -1,16 +1,16 @@
 {
   "okf_version": "0.2",
   "generator": "signpost/v0.2.0",
-  "resource": "git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07",
-  "date": "2026-10-07",
+  "resource": "git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175",
+  "date": "2026-10-08",
   "counts": {
-    "nodes": 135,
-    "edges": 473,
-    "clusters": 36
+    "nodes": 138,
+    "edges": 475,
+    "clusters": 37
   },
   "confidence": {
     "ambiguous": 0,
-    "extracted": 473,
+    "extracted": 475,
     "inferred": 0
   },
   "pages": [
@@ -92,6 +92,7 @@
     "references/adr-0027-reranking-on-a-fourth-socket.md",
     "references/adr-0028-airgapped-build-profile.md",
     "references/adr-0029-tool-choice-is-enforced-by-grammar-not-advertised.md",
+    "references/adr-0030-outbound-tls-ring-provider-os-verifier.md",
     "references/claude-md.md",
     "references/cmake-ggml.md",
     "references/cmake-llama.md",
@@ -122,6 +123,8 @@
     "references/crates-io-regex.md",
     "references/crates-io-reqwest.md",
     "references/crates-io-rubato.md",
+    "references/crates-io-rustls-platform-verifier.md",
+    "references/crates-io-rustls.md",
     "references/crates-io-serde-json.md",
     "references/crates-io-serde.md",
     "references/crates-io-sha2.md",

@@ -2,8 +2,8 @@
 type: Module
 title: crates/inferd-proto/src/embed
 description: 3 rust files; 9 exported symbols; package crates::inferd-proto::src::embed.
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/crates/inferd-proto/src/embed
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/crates/inferd-proto/src/embed
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: commits, value: "1" }
   - { name: exported, value: "9" }
