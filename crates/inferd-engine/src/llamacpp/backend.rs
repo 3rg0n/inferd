@@ -1445,12 +1445,9 @@ fn build_bitmap(
                     "audio attachment {id:?}: byte length not a multiple of 4"
                 )));
             }
-            let n_samples = bytes.len() / 4;
-            let mut samples = Vec::with_capacity(n_samples);
-            for chunk in bytes.chunks_exact(4) {
-                let arr: [u8; 4] = chunk.try_into().expect("chunks_exact 4 yields 4");
-                samples.push(f32::from_le_bytes(arr));
-            }
+            // The length check above guarantees the remainder is empty.
+            let (words, _) = bytes.as_chunks::<4>();
+            let samples: Vec<f32> = words.iter().map(|w| f32::from_le_bytes(*w)).collect();
             Ok(Bitmap::from_audio_f32(&samples)?)
         }
         Attachment::Video { id, .. } => Err(LlamaCppError::Render(format!(
