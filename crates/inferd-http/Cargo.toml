@@ -39,7 +39,7 @@ axum               = { version = "0.7", features = ["json"] }
 # so the bridge (as the consumer) decodes. png/jpeg only; no default codecs.
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # base64-decode data: URL image payloads. Standard alphabet.
-base64             = "0.22"
+base64             = "0.23"
 # Decode OpenAI `input_audio` (base64 wav/mp3) to f32 PCM — same ADR 0016
 # reasoning as `image` above: the daemon links no audio codec, so the
 # bridge decodes. `wav`/`mp3` are the two formats the OpenAI wire defines;
