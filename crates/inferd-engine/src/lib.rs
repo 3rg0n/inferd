@@ -27,6 +27,8 @@ pub mod mock;
 pub(crate) mod mtmd_ffi;
 #[cfg(feature = "openai")]
 pub mod openai_compat;
+#[cfg(any(feature = "openai", feature = "bedrock"))]
+pub mod tls;
 
 pub use backend::{
     AcceleratorInfo, AcceleratorKind, Backend, BackendCapabilities, EmbedError, EmbedResult,

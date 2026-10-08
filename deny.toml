@@ -28,9 +28,6 @@ version = 2
 # Informational only. `cargo audit` owns vulnerability gating.
 yanked = "warn"
 ignore = [
-    # rustls-pemfile unmaintained — reached only via the cloud adapters'
-    # TLS stack; no known vulnerability.
-    "RUSTSEC-2025-0134",
     # anyhow `Error::downcast_mut()` unsoundness — inferd never calls it.
     "RUSTSEC-2026-0190",
 ]

@@ -74,7 +74,7 @@ sha2                = { workspace = true }
 # transports (proxies, custom DNS) `inferdctl import` the file
 # themselves. Optional so `--no-default-features` drops the whole TLS
 # tree from the linked artifact (ADR 0028).
-ureq                = { version = "2", default-features = false, features = ["tls", "native-certs"], optional = true }
+ureq                = { version = "3", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["fs", "user", "socket"] }

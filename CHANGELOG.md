@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Outbound TLS trust is now the operating system's** ([ADR 0030](docs/adr/0030-outbound-tls-ring-provider-os-verifier.md)).
+  The model fetch (`ureq` 2 → 3) and the `openai-compat` / `bedrock-invoke`
+  adapters (`reqwest` 0.12 → 0.13) both use rustls on `ring` with
+  `rustls-platform-verifier`. For the cloud adapters this replaces the
+  bundled Mozilla root set: system-installed (e.g. corporate) roots are now
+  honoured, and a Linux host with no system root store fails adapter
+  construction with `TlsSetup`. No aws-lc-rs is linked.
+- Rust 1.99 toolchain support (new clippy lints), and dependency updates
+  clearing RUSTSEC-2026-0258 (`h2`), RUSTSEC-2026-0285 (`rustls`),
+  RUSTSEC-2026-0190 (`anyhow`) and RUSTSEC-2025-0134 (`rustls-pemfile`,
+  now gone from the tree).
+
 ## [0.8.0] - 2026-08-12
 
 Minor, not patch: one **behaviour** break, no wire break. A `tool_result`
