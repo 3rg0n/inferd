@@ -80,7 +80,7 @@ ureq                = { version = "2", default-features = false, features = ["tl
 nix = { version = "0.27", features = ["fs", "user", "socket"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
+windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
