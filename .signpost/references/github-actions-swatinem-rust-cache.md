@@ -2,7 +2,7 @@
 type: External Dependency
 title: Swatinem/rust-cache
 description: "github-actions dependency Swatinem/rust-cache (e18b497796c12c097a38f9edb9d0641fb99eee32, v2)"
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
 tags: [direct, external, github-actions]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

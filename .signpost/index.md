@@ -3,7 +3,7 @@ okf_version: "0.2"
 type: Index
 title: Repository map
 description: "Structural map of this repository: 135 concepts, 473 relationships."
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 ---
 # Repository map
@@ -187,7 +187,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [anyhow](./references/crates-io-anyhow.md) — crates.io dependency anyhow (1, workspace)
 - [async-stream](./references/crates-io-async-stream.md) — crates.io dependency async-stream (0.3)
 - [async-trait](./references/crates-io-async-trait.md) — crates.io dependency async-trait (0.1, workspace)
-- [axum](./references/crates-io-axum.md) — crates.io dependency axum (0.7)
+- [axum](./references/crates-io-axum.md) — crates.io dependency axum (0.8)
 - [base64](./references/crates-io-base64.md) — crates.io dependency base64 (0.23)
 - [bindgen](./references/crates-io-bindgen.md) — crates.io dependency bindgen (0.71)
 - [bytes](./references/crates-io-bytes.md) — crates.io dependency bytes (1, workspace)

@@ -1,20 +1,20 @@
 ---
 type: External Dependency
 title: axum
-description: crates.io dependency axum (0.7)
-resource: git://github.com/3rg0n/inferd@359acc8324e8227dab8f418cb1b4a37e0faebeb7
+description: crates.io dependency axum (0.8)
+resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
 tags: [crates.io, direct, external]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:
   - { name: ecosystem, value: crates.io }
   - { name: name, value: axum }
   - { name: scope, value: runtime }
-  - { name: version, value: "0.7" }
+  - { name: version, value: "0.8" }
 ---
 # axum
 
 <!-- signpost:managed:summary -->
-crates.io dependency axum (0.7)
+crates.io dependency axum (0.8)
 <!-- /signpost:managed:summary -->
 
 ## Structure
