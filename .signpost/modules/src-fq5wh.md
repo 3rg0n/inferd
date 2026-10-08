@@ -2,9 +2,9 @@
 type: Module
 title: crates/inferd-http/src
 description: 7 rust files; 33 exported symbols; entrypoint main; package crates::inferd-http::src::audio_decode.
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/crates/inferd-http/src
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/crates/inferd-http/src
 tags: [entrypoint]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: commits, value: "10" }
   - { name: entrypoints, value: main }

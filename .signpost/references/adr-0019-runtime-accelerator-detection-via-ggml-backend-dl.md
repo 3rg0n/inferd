@@ -2,9 +2,9 @@
 type: Document
 title: "ADR 0019: runtime accelerator detection via ggml backend dl"
 description: "Architecture decision (Accepted), 51 rules read from 0019-runtime-accelerator-detection-via-ggml-backend-dl.md."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07/docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175/docs/adr/0019-runtime-accelerator-detection-via-ggml-backend-dl.md
 tags: [accepted, adr, constraint]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: number, value: "0019" }
   - { name: rules, value: "51" }

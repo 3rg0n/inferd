@@ -2,9 +2,9 @@
 okf_version: "0.2"
 type: Index
 title: Repository map
-description: "Structural map of this repository: 135 concepts, 473 relationships."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+description: "Structural map of this repository: 138 concepts, 475 relationships."
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 ---
 # Repository map
 
@@ -19,7 +19,7 @@ Start here. What the shape of this repository says, then a line per page naming 
 
 The places a wrong assumption propagates furthest, so the places to read first.
 
-- [crates/inferd-engine](./modules/inferd-engine.md) — 58 relationships (17 in, 41 out)
+- [crates/inferd-engine](./modules/inferd-engine.md) — 60 relationships (17 in, 43 out)
 - [crates/inferd-daemon/src](./modules/src-12r0iph.md) — 54 relationships (19 in, 35 out)
 - [crates/inferd-engine/src/llamacpp](./modules/llamacpp.md) — 44 relationships (18 in, 26 out)
 - [crates/inferd-daemon](./modules/inferd-daemon.md) — 42 relationships (11 in, 31 out)
@@ -55,7 +55,7 @@ What the shape of this repository says. Each line is a result — where one read
   - and 157 more
 - **Disconnected islands: 1.** Concepts linked to each other and to nothing else — most often documents describing code nothing connects them to.
   - 32 concepts: [CI airgapped](./pipelines/ci-airgapped.md), [CI airgapped artifact links no HTTPS stack](./pipelines/ci-airgapped-artifact-links-no-https-stack.md), [CI cargo audit](./pipelines/ci-cargo-audit.md), [CI cargo deny \(licences + MPL containment\)](./pipelines/ci-cargo-deny-licences-mpl-containment.md), [CI default](./pipelines/ci-default.md), [CI dl-backends](./pipelines/ci-dl-backends.md), [CI go-client](./pipelines/ci-go-client.md), [CI llamacpp](./pipelines/ci-llamacpp.md), and 24 more
-- **Unconnected concepts: 31.** Nothing links to or from these: dead code, an unreferenced document, or a gap in extraction. Which of the three it is needs a human.
+- **Unconnected concepts: 32.** Nothing links to or from these: dead code, an unreferenced document, or a gap in extraction. Which of the three it is needs a human.
   - [ADR 0001: wire protocol inherited from thlibo](./references/adr-0001-wire-protocol-inherited-from-thlibo.md)
   - [ADR 0002: rust not go](./references/adr-0002-rust-not-go.md)
   - [ADR 0003: subprocess llamafile not ffi](./references/adr-0003-subprocess-llamafile-not-ffi.md)
@@ -76,7 +76,7 @@ What the shape of this repository says. Each line is a result — where one read
   - [ADR 0018: cli renamed to inferdctl](./references/adr-0018-cli-renamed-to-inferdctl.md)
   - [ADR 0019: runtime accelerator detection via ggml backend dl](./references/adr-0019-runtime-accelerator-detection-via-ggml-backend-dl.md)
   - [ADR 0020: inferd http bridge is a separate process](./references/adr-0020-inferd-http-bridge-is-a-separate-process.md)
-  - and 11 more
+  - and 12 more
 - **Merge gates: 14 of 18 CI jobs.** These run on a pull request or on a push to the default branch, so they are the automated checks a change meets. Which of them is *required* is configured on the repository and is not in the tree.
   - [CI airgapped](./pipelines/ci-airgapped.md)
   - [CI airgapped artifact links no HTTPS stack](./pipelines/ci-airgapped-artifact-links-no-https-stack.md)
@@ -111,7 +111,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [crates/inferd-proto/src/rerank](./modules/rerank.md) — 3 rust files; 11 exported symbols; package crates::inferd-proto::src::rerank.
 - [crates/inferd-daemon/src](./modules/src-12r0iph.md) — 21 rust files; 154 exported symbols; entrypoint main; package crates::inferd-daemon::src::admin.
 - [crates/inferd-client/src](./modules/src-162lily.md) — 8 rust files; 32 exported symbols; package crates::inferd-client::src::admin.
-- [crates/inferd-engine/src](./modules/src-1b7d94r.md) — 5 rust files; 30 exported symbols; package crates::inferd-engine::src::backend.
+- [crates/inferd-engine/src](./modules/src-1b7d94r.md) — 6 rust files; 32 exported symbols; package crates::inferd-engine::src::backend.
 - [crates/inferd/src](./modules/src-1kxpou4.md) — 1 rust file; entrypoint main; package crates::inferd::src::main.
 - [crates/inferd-openai-wire/src](./modules/src-1qcto7x.md) — 1 rust file; 34 exported symbols; package crates::inferd-openai-wire::src::lib.
 - [crates/inferd-http/src](./modules/src-fq5wh.md) — 7 rust files; 33 exported symbols; entrypoint main; package crates::inferd-http::src::audio_decode.
@@ -176,6 +176,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [ADR 0027: reranking on a fourth socket](./references/adr-0027-reranking-on-a-fourth-socket.md) — Architecture decision (Accepted), 93 rules read from 0027-reranking-on-a-fourth-socket.md.
 - [ADR 0028: airgapped build profile](./references/adr-0028-airgapped-build-profile.md) — Architecture decision (Accepted), 71 rules read from 0028-airgapped-build-profile.md.
 - [ADR 0029: tool choice is enforced by grammar not advertised](./references/adr-0029-tool-choice-is-enforced-by-grammar-not-advertised.md) — Architecture decision (Accepted), 49 rules read from 0029-tool-choice-is-enforced-by-grammar-not-advertised.md.
+- [ADR 0030: outbound tls ring provider os verifier](./references/adr-0030-outbound-tls-ring-provider-os-verifier.md) — Architecture decision (Accepted), 22 rules read from 0030-outbound-tls-ring-provider-os-verifier.md.
 - [CLAUDE.md](./references/claude-md.md) — Stated constraints, 98 rules read from CLAUDE.md.
 - [README.md](./references/readme-md.md) — Architecture decision, 7 rules read from README.md.
 
@@ -208,8 +209,10 @@ What the shape of this repository says. Each line is a result — where one read
 - [libfuzzer-sys](./references/crates-io-libfuzzer-sys.md) — crates.io dependency libfuzzer-sys (0.4)
 - [nix](./references/crates-io-nix.md) — crates.io dependency nix (0.31)
 - [regex](./references/crates-io-regex.md) — crates.io dependency regex (1)
-- [reqwest](./references/crates-io-reqwest.md) — crates.io dependency reqwest (0.12)
+- [reqwest](./references/crates-io-reqwest.md) — crates.io dependency reqwest (0.13)
 - [rubato](./references/crates-io-rubato.md) — crates.io dependency rubato (5)
+- [rustls](./references/crates-io-rustls.md) — crates.io dependency rustls (0.23)
+- [rustls-platform-verifier](./references/crates-io-rustls-platform-verifier.md) — crates.io dependency rustls-platform-verifier (0.7)
 - [serde](./references/crates-io-serde.md) — crates.io dependency serde (1, workspace)
 - [serde_json](./references/crates-io-serde-json.md) — crates.io dependency serde_json (1, workspace)
 - [sha2](./references/crates-io-sha2.md) — crates.io dependency sha2 (0.11, workspace)
@@ -221,7 +224,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [tokio-stream](./references/crates-io-tokio-stream.md) — crates.io dependency tokio-stream (0.1)
 - [tracing](./references/crates-io-tracing.md) — crates.io dependency tracing (0.1, workspace)
 - [tracing-subscriber](./references/crates-io-tracing-subscriber.md) — crates.io dependency tracing-subscriber (0.3, workspace)
-- [ureq](./references/crates-io-ureq.md) — crates.io dependency ureq (2)
+- [ureq](./references/crates-io-ureq.md) — crates.io dependency ureq (3)
 - [url](./references/crates-io-url.md) — crates.io dependency url (2)
 - [windows-sys](./references/crates-io-windows-sys.md) — crates.io dependency windows-sys (0.61)
 - [wiremock](./references/crates-io-wiremock.md) — crates.io dependency wiremock (0.6)

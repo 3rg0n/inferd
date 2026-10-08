@@ -2,9 +2,9 @@
 type: External Dependency
 title: actions/setup-go
 description: github-actions dependency actions/setup-go (v6)
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175
 tags: [direct, external, github-actions]
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 attributes:
   - { name: ecosystem, value: github-actions }
   - { name: name, value: actions/setup-go }

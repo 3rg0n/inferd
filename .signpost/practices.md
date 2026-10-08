@@ -2,8 +2,8 @@
 type: Practices
 title: How work is done here
 description: "What this repository declares about building, testing, gating, and ownership — and what it does not."
-resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
-generated: { by: signpost/v0.2.0, at: "2026-10-07" }
+resource: git://github.com/3rg0n/inferd@5ddd30e1a8710360cbcbe60f204e4d5e175d6175
+generated: { by: signpost/v0.2.0, at: "2026-10-08" }
 ---
 # How work is done here
 
@@ -29,8 +29,8 @@ Each line is something this repository states, or something it does not. A missi
 
 ### How changes are recorded
 
-- Commit subjects follow Conventional Commits: 350 of 354 read, including 88 fix and 80 feature. A message here states what kind of change it is.
-- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 21 commits back.
+- Commit subjects follow Conventional Commits: 353 of 358 read, including 88 fix and 80 feature. A message here states what kind of change it is.
+- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 24 commits back.
 
 ### Dependencies
 
@@ -54,7 +54,7 @@ Each line is something this repository states, or something it does not. A missi
 
 - The repository has a README.
   - Stated in `README.md`.
-- 66 documentation files in the tree, outside the bundle.
+- 67 documentation files in the tree, outside the bundle.
 
 ### Observability
 
@@ -65,8 +65,8 @@ Each line is something this repository states, or something it does not. A missi
 
 - 98 stated rules for agents working in this repository.
   - Stated in `CLAUDE.md`.
-- 30 architecture decision records state why things are the way they are.
-  - Stated in `docs/adr/0001-wire-protocol-inherited-from-thlibo.md`, `docs/adr/0002-rust-not-go.md`, `docs/adr/0003-subprocess-llamafile-not-ffi.md`, `docs/adr/0004-mit-not-apache.md`, `docs/adr/0005-libllama-ffi-not-subprocess.md`, `docs/adr/0006-lean-core-ecosystem-extensions.md`, and 24 other files.
+- 31 architecture decision records state why things are the way they are.
+  - Stated in `docs/adr/0001-wire-protocol-inherited-from-thlibo.md`, `docs/adr/0002-rust-not-go.md`, `docs/adr/0003-subprocess-llamafile-not-ffi.md`, `docs/adr/0004-mit-not-apache.md`, `docs/adr/0005-libllama-ffi-not-subprocess.md`, `docs/adr/0006-lean-core-ecosystem-extensions.md`, and 25 other files.
 <!-- /signpost:managed:practices -->
 
 ## Notes
