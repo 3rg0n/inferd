@@ -62,6 +62,9 @@ pub enum OpenAiCompatError {
     /// reqwest-level transport error (DNS, TLS, connection refused, …).
     #[error("transport: {0}")]
     Transport(#[from] reqwest::Error),
+    /// The HTTPS client could not be built (ADR 0030 TLS setup).
+    #[error("tls setup: {0}")]
+    TlsSetup(#[from] crate::tls::TlsSetupError),
     /// Upstream returned a non-2xx HTTP status before the SSE stream
     /// opened.
     #[error("upstream HTTP {status}: {body}")]
@@ -109,7 +112,7 @@ impl OpenAiCompat {
     /// Construct a new adapter. Builds the `reqwest::Client` with
     /// rustls + the configured timeout.
     pub fn new(config: OpenAiCompatConfig) -> Result<Self, OpenAiCompatError> {
-        let client = reqwest::Client::builder().timeout(config.timeout).build()?;
+        let client = crate::tls::https_client(config.timeout)?;
         Ok(Self {
             name: "openai-compat",
             config,
