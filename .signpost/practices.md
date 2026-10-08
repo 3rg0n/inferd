@@ -2,7 +2,7 @@
 type: Practices
 title: How work is done here
 description: "What this repository declares about building, testing, gating, and ownership — and what it does not."
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 ---
 # How work is done here
@@ -29,8 +29,8 @@ Each line is something this repository states, or something it does not. A missi
 
 ### How changes are recorded
 
-- Commit subjects follow Conventional Commits: 346 of 349 read, including 88 fix and 80 feature. A message here states what kind of change it is.
-- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 11 commits back.
+- Commit subjects follow Conventional Commits: 350 of 354 read, including 88 fix and 80 feature. A message here states what kind of change it is.
+- 54 tags reachable from this commit, the most recent `clients/go/v0.8.0` on 2026-08-12, 21 commits back.
 
 ### Dependencies
 

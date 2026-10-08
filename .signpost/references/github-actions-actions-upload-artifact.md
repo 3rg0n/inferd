@@ -2,7 +2,7 @@
 type: External Dependency
 title: actions/upload-artifact
 description: github-actions dependency actions/upload-artifact (043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
 tags: [direct, external, github-actions]
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 attributes:

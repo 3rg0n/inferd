@@ -3,7 +3,7 @@ okf_version: "0.2"
 type: Index
 title: Repository map
 description: "Structural map of this repository: 135 concepts, 473 relationships."
-resource: git://github.com/3rg0n/inferd@5324ed9b7adf36de21d22a1bce59482738837d94
+resource: git://github.com/3rg0n/inferd@ac3e2963262f5966c036d82e20d35726221e9d07
 generated: { by: signpost/v0.2.0, at: "2026-10-07" }
 ---
 # Repository map
@@ -189,7 +189,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [async-trait](./references/crates-io-async-trait.md) — crates.io dependency async-trait (0.1, workspace)
 - [axum](./references/crates-io-axum.md) — crates.io dependency axum (0.8)
 - [base64](./references/crates-io-base64.md) — crates.io dependency base64 (0.23)
-- [bindgen](./references/crates-io-bindgen.md) — crates.io dependency bindgen (0.71)
+- [bindgen](./references/crates-io-bindgen.md) — crates.io dependency bindgen (0.73)
 - [bytes](./references/crates-io-bytes.md) — crates.io dependency bytes (1, workspace)
 - [chrono](./references/crates-io-chrono.md) — crates.io dependency chrono (0.4)
 - [clap](./references/crates-io-clap.md) — crates.io dependency clap (4, workspace)
@@ -206,10 +206,10 @@ What the shape of this repository says. Each line is a result — where one read
 - [inferd-openai-wire](./references/crates-io-inferd-openai-wire.md) — crates.io dependency inferd-openai-wire (=0.8.0)
 - [inferd-proto](./references/crates-io-inferd-proto.md) — crates.io dependency inferd-proto (=0.8.0)
 - [libfuzzer-sys](./references/crates-io-libfuzzer-sys.md) — crates.io dependency libfuzzer-sys (0.4)
-- [nix](./references/crates-io-nix.md) — crates.io dependency nix (0.27)
+- [nix](./references/crates-io-nix.md) — crates.io dependency nix (0.31)
 - [regex](./references/crates-io-regex.md) — crates.io dependency regex (1)
 - [reqwest](./references/crates-io-reqwest.md) — crates.io dependency reqwest (0.12)
-- [rubato](./references/crates-io-rubato.md) — crates.io dependency rubato (4)
+- [rubato](./references/crates-io-rubato.md) — crates.io dependency rubato (5)
 - [serde](./references/crates-io-serde.md) — crates.io dependency serde (1, workspace)
 - [serde_json](./references/crates-io-serde-json.md) — crates.io dependency serde_json (1, workspace)
 - [sha2](./references/crates-io-sha2.md) — crates.io dependency sha2 (0.11, workspace)
@@ -223,7 +223,7 @@ What the shape of this repository says. Each line is a result — where one read
 - [tracing-subscriber](./references/crates-io-tracing-subscriber.md) — crates.io dependency tracing-subscriber (0.3, workspace)
 - [ureq](./references/crates-io-ureq.md) — crates.io dependency ureq (2)
 - [url](./references/crates-io-url.md) — crates.io dependency url (2)
-- [windows-sys](./references/crates-io-windows-sys.md) — crates.io dependency windows-sys (0.52)
+- [windows-sys](./references/crates-io-windows-sys.md) — crates.io dependency windows-sys (0.61)
 - [wiremock](./references/crates-io-wiremock.md) — crates.io dependency wiremock (0.6)
 - [actions/checkout](./references/github-actions-actions-checkout.md) — github-actions dependency actions/checkout (3d3c42e5aac5ba805825da76410c181273ba90b1, de0fac2e4500dabe0009e67214ff5f5447ce83dd, v4, v6)
 - [actions/configure-pages](./references/github-actions-actions-configure-pages.md) — github-actions dependency actions/configure-pages (v5)
