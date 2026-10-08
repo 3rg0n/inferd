@@ -94,7 +94,7 @@ url                 = { version = "2", optional = true }
 # Only invoked when the `llamacpp` feature is enabled; the build.rs
 # checks env::var("CARGO_FEATURE_LLAMACPP") and short-circuits otherwise.
 cmake   = "0.1"
-bindgen = "0.71"
+bindgen = "0.73"
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
