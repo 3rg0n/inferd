@@ -178,13 +178,13 @@ pub mod windows {
         // via CloseHandle in the cleanup path.
         unsafe {
             let process: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            if process == 0 {
+            if process.is_null() {
                 // Caller process may already be gone; treat as
                 // best-effort and return None rather than failing the
                 // whole accept.
                 return Ok(None);
             }
-            let mut token: HANDLE = 0;
+            let mut token: HANDLE = std::ptr::null_mut();
             let ok = OpenProcessToken(process, TOKEN_QUERY, &mut token);
             if ok == 0 {
                 CloseHandle(process);
@@ -269,5 +269,32 @@ mod tests {
         // pid is the same process — both ends of a self-connect run in
         // this test binary.
         assert_eq!(id.pid, Some(std::process::id()));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_peer_identity_self() {
+        // The SID lookup degrades to `None` on any Win32 failure rather
+        // than failing the accept, so a broken handle check would pass
+        // silently everywhere else. Pin that a self-connect resolves both
+        // the pid and a well-formed SID.
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let path = format!(
+            r"\\.\pipe\inferd-peercred-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let server = crate::endpoint::bind_named_pipe(&path, true).unwrap();
+        let _client = ClientOptions::new().open(&path).unwrap();
+        server.connect().await.unwrap();
+
+        let id = windows::from_stream(&server).unwrap();
+        assert_eq!(id.transport, "pipe");
+        assert_eq!(id.pid, Some(std::process::id()));
+        let sid = id.sid.expect("SID resolved for our own process");
+        assert!(sid.starts_with("S-1-"), "malformed SID: {sid}");
     }
 }
