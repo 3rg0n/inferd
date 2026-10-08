@@ -161,6 +161,7 @@ mod admin;
 mod client;
 mod embed_client;
 mod rerank_client;
+mod transport;
 mod v2_client;
 mod wait;
 

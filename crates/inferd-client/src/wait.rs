@@ -112,42 +112,7 @@ pub fn is_transient_dial_error(err: &ClientError) -> bool {
 /// 2. `$HOME/.inferd/run/admin.sock`
 /// 3. `/tmp/inferd/admin.sock`
 pub fn default_admin_addr() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let mut p = PathBuf::from(xdg);
-            if !p.as_os_str().is_empty() {
-                p.push("inferd");
-                p.push("admin.sock");
-                return p;
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let mut p = PathBuf::from(home);
-            if !p.as_os_str().is_empty() {
-                p.push(".inferd");
-                p.push("run");
-                p.push("admin.sock");
-                return p;
-            }
-        }
-        PathBuf::from("/tmp/inferd/admin.sock")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut p = std::env::temp_dir();
-        p.push("inferd");
-        p.push("admin.sock");
-        p
-    }
-    #[cfg(windows)]
-    {
-        PathBuf::from(r"\\.\pipe\inferd-admin")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        PathBuf::from("/tmp/inferd/admin.sock")
-    }
+    crate::transport::default_endpoint("admin.sock", r"\\.\pipe\inferd-admin")
 }
 
 #[cfg(test)]

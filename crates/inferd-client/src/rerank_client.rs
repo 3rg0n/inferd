@@ -9,11 +9,12 @@
 //! a partial ordering isn't useful.
 
 use crate::client::ClientError;
+use crate::transport::{Transport, default_endpoint};
 use inferd_proto::rerank::{RerankRequest, RerankResponse};
 #[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 /// Rerank-socket client.
@@ -22,7 +23,7 @@ use tokio::sync::Mutex;
 /// [`crate::dial_and_wait_ready`] to retry connect during daemon
 /// bring-up — the retry helper is generic over the client type.
 pub struct RerankClient {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<Mutex<Transport>>,
 }
 
 impl std::fmt::Debug for RerankClient {
@@ -31,41 +32,25 @@ impl std::fmt::Debug for RerankClient {
     }
 }
 
-struct Inner {
-    write: Box<dyn AsyncWrite + Send + Unpin>,
-    read: BufReader<Box<dyn AsyncRead + Send + Unpin>>,
-}
-
 impl RerankClient {
     /// Open a Unix domain socket connection (Unix only). Default rerank
     /// path: `${XDG_RUNTIME_DIR}/inferd/infer.rerank.sock` on Linux,
     /// `${TMPDIR}/inferd/infer.rerank.sock` on macOS.
     #[cfg(unix)]
     pub async fn dial_uds(path: &Path) -> Result<Self, ClientError> {
-        let stream = tokio::net::UnixStream::connect(path).await?;
-        let (read, write) = stream.into_split();
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_uds(path).await?))
     }
 
     /// Open a Windows named pipe connection (Windows only). Default
     /// rerank path: `\\.\pipe\inferd-infer-rerank`.
     #[cfg(windows)]
     pub async fn dial_pipe(path: &str) -> Result<Self, ClientError> {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        let pipe = ClientOptions::new().open(path)?;
-        let (read, write) = tokio::io::split(pipe);
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_pipe(path).await?))
     }
 
-    fn wrap(
-        read: Box<dyn AsyncRead + Send + Unpin>,
-        write: Box<dyn AsyncWrite + Send + Unpin>,
-    ) -> Self {
+    fn wrap(transport: Transport) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                write,
-                read: BufReader::with_capacity(64 * 1024, read),
-            })),
+            inner: Arc::new(Mutex::new(transport)),
         }
     }
 
@@ -78,7 +63,7 @@ impl RerankClient {
         read: Box<dyn AsyncRead + Send + Unpin>,
         write: Box<dyn AsyncWrite + Send + Unpin>,
     ) -> Self {
-        Self::wrap(read, write)
+        Self::wrap(Transport::new(read, write))
     }
 
     /// Send a `RerankRequest` and read back the single terminal
@@ -123,42 +108,7 @@ impl RerankClient {
 /// 2. `${HOME}/.inferd/run/infer.rerank.sock`
 /// 3. `/tmp/inferd/infer.rerank.sock`
 pub fn default_rerank_addr() -> std::path::PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let mut p = std::path::PathBuf::from(xdg);
-            if !p.as_os_str().is_empty() {
-                p.push("inferd");
-                p.push("infer.rerank.sock");
-                return p;
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let mut p = std::path::PathBuf::from(home);
-            if !p.as_os_str().is_empty() {
-                p.push(".inferd");
-                p.push("run");
-                p.push("infer.rerank.sock");
-                return p;
-            }
-        }
-        std::path::PathBuf::from("/tmp/inferd/infer.rerank.sock")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut p = std::env::temp_dir();
-        p.push("inferd");
-        p.push("infer.rerank.sock");
-        p
-    }
-    #[cfg(windows)]
-    {
-        std::path::PathBuf::from(r"\\.\pipe\inferd-infer-rerank")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        std::path::PathBuf::from("/tmp/inferd/infer.rerank.sock")
-    }
+    default_endpoint("infer.rerank.sock", r"\\.\pipe\inferd-infer-rerank")
 }
 
 #[cfg(test)]
@@ -183,7 +133,7 @@ mod tests {
     async fn rerank_round_trips_a_success_frame() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = RerankClient::wrap(Box::new(read), Box::new(write));
+        let mut client = RerankClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);
@@ -229,7 +179,7 @@ mod tests {
     async fn negative_scores_survive_the_client() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = RerankClient::wrap(Box::new(read), Box::new(write));
+        let mut client = RerankClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);
@@ -272,7 +222,7 @@ mod tests {
     async fn rerank_round_trips_an_error_frame() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = RerankClient::wrap(Box::new(read), Box::new(write));
+        let mut client = RerankClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);
@@ -305,7 +255,7 @@ mod tests {
     async fn unexpected_eof_yields_clienterror() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = RerankClient::wrap(Box::new(read), Box::new(write));
+        let mut client = RerankClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, _tx) = tokio::io::split(server_side);
@@ -327,7 +277,7 @@ mod tests {
     async fn connection_stays_open_for_a_second_request() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = RerankClient::wrap(Box::new(read), Box::new(write));
+        let mut client = RerankClient::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (rx, mut tx) = tokio::io::split(server_side);

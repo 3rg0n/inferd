@@ -10,13 +10,14 @@
 //! terminal `done` / `error` ends the stream.
 
 use crate::client::ClientError;
+use crate::transport::{Transport, default_endpoint};
 use inferd_proto::v2::{BlobDescriptor, RequestV2, ResponseV2, WIRE_VERSION};
 use inferd_proto::{FrameType, MAX_FRAME_BYTES};
 #[cfg(unix)]
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
 
@@ -29,7 +30,7 @@ pub type FrameStreamV2 = Pin<Box<dyn Stream<Item = Result<ResponseV2, ClientErro
 /// Wrap with [`crate::dial_and_wait_ready`] to retry connect during
 /// daemon bring-up — the retry helper is generic over the client type.
 pub struct ClientV2 {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<Mutex<Transport>>,
 }
 
 impl std::fmt::Debug for ClientV2 {
@@ -38,41 +39,25 @@ impl std::fmt::Debug for ClientV2 {
     }
 }
 
-struct Inner {
-    write: Box<dyn AsyncWrite + Send + Unpin>,
-    read: BufReader<Box<dyn AsyncRead + Send + Unpin>>,
-}
-
 impl ClientV2 {
     /// Open a Unix domain socket connection (Unix only). Default
     /// generation path: `${XDG_RUNTIME_DIR}/inferd/inferd.sock` on
     /// Linux, `${TMPDIR}/inferd/inferd.sock` on macOS.
     #[cfg(unix)]
     pub async fn dial_uds(path: &Path) -> Result<Self, ClientError> {
-        let stream = tokio::net::UnixStream::connect(path).await?;
-        let (read, write) = stream.into_split();
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_uds(path).await?))
     }
 
     /// Open a Windows named pipe connection (Windows only). Default
     /// generation path: `\\.\pipe\inferd`.
     #[cfg(windows)]
     pub async fn dial_pipe(path: &str) -> Result<Self, ClientError> {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        let pipe = ClientOptions::new().open(path)?;
-        let (read, write) = tokio::io::split(pipe);
-        Ok(Self::wrap(Box::new(read), Box::new(write)))
+        Ok(Self::wrap(Transport::dial_pipe(path).await?))
     }
 
-    fn wrap(
-        read: Box<dyn AsyncRead + Send + Unpin>,
-        write: Box<dyn AsyncWrite + Send + Unpin>,
-    ) -> Self {
+    fn wrap(transport: Transport) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                write,
-                read: BufReader::with_capacity(64 * 1024, read),
-            })),
+            inner: Arc::new(Mutex::new(transport)),
         }
     }
 
@@ -85,7 +70,7 @@ impl ClientV2 {
         read: Box<dyn AsyncRead + Send + Unpin>,
         write: Box<dyn AsyncWrite + Send + Unpin>,
     ) -> Self {
-        Self::wrap(read, write)
+        Self::wrap(Transport::new(read, write))
     }
 
     /// Send a `RequestV2` and return a stream of `ResponseV2` frames.
@@ -285,42 +270,7 @@ async fn read_exact_async<R: AsyncRead + Unpin>(
 /// 2. `${HOME}/.inferd/run/inferd.sock`
 /// 3. `/tmp/inferd/inferd.sock`
 pub fn default_v2_addr() -> std::path::PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let mut p = std::path::PathBuf::from(xdg);
-            if !p.as_os_str().is_empty() {
-                p.push("inferd");
-                p.push("inferd.sock");
-                return p;
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let mut p = std::path::PathBuf::from(home);
-            if !p.as_os_str().is_empty() {
-                p.push(".inferd");
-                p.push("run");
-                p.push("inferd.sock");
-                return p;
-            }
-        }
-        std::path::PathBuf::from("/tmp/inferd/inferd.sock")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut p = std::env::temp_dir();
-        p.push("inferd");
-        p.push("inferd.sock");
-        p
-    }
-    #[cfg(windows)]
-    {
-        std::path::PathBuf::from(r"\\.\pipe\inferd")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        std::path::PathBuf::from("/tmp/inferd/inferd.sock")
-    }
+    default_endpoint("inferd.sock", r"\\.\pipe\inferd")
 }
 
 #[cfg(test)]
@@ -377,7 +327,7 @@ mod tests {
     async fn generate_streams_frame_then_done() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = ClientV2::wrap(Box::new(read), Box::new(write));
+        let mut client = ClientV2::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (mut rx, mut tx) = tokio::io::split(server_side);
@@ -441,7 +391,7 @@ mod tests {
     async fn unexpected_eof_yields_clienterror() {
         let (server_side, client_side) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(client_side);
-        let mut client = ClientV2::wrap(Box::new(read), Box::new(write));
+        let mut client = ClientV2::wrap(Transport::new(Box::new(read), Box::new(write)));
 
         let server = tokio::spawn(async move {
             let (mut rx, _tx) = tokio::io::split(server_side);

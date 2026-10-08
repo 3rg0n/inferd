@@ -21,6 +21,9 @@
 //!      `EmbedResponse::Error` frame, then loop for the next request.
 
 use crate::endpoint::Connection;
+use crate::lifecycle::{
+    CONNECTION_READ_BUFFER_BYTES, proto_error_code, read_ndjson_request, write_bounded,
+};
 use crate::peercred::PeerIdentity;
 use crate::queue::SubmitError;
 use crate::router::{Router, RouterError};
@@ -30,9 +33,9 @@ use inferd_proto::embed::{EmbedErrorCode, EmbedRequest, EmbedResponse};
 use inferd_proto::write_frame;
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWrite, BufReader};
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 /// Per-accept context for embed connections. Reuses v1's
 /// `AcceptContext` shape — same TCP API key, same admission gate.
@@ -58,21 +61,21 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
     );
 
     let (read_half, write_half) = tokio::io::split(&mut conn);
-    let mut reader = BufReader::with_capacity(64 * 1024, read_half);
+    let mut reader = BufReader::with_capacity(CONNECTION_READ_BUFFER_BYTES, read_half);
     let writer = Arc::new(Mutex::new(write_half));
     // THREAT_MODEL F-17: bounded so a peer that stops reading can't hold
     // the shared admission permit indefinitely.
     let write_timeout = ctx.write_timeout;
 
     loop {
-        let request: EmbedRequest = match read_request_embed(&mut reader).await {
+        let request: EmbedRequest = match read_ndjson_request(&mut reader).await {
             Ok(Some(r)) => r,
             Ok(None) => return Ok(()),
             Err(ProtoError::Io(e)) => return Err(e),
             Err(e) => {
                 let resp = EmbedResponse::Error {
                     id: String::new(),
-                    code: error_code_for(&e),
+                    code: proto_error_code(&e),
                     message: e.to_string(),
                 };
                 write_response_embed(&writer, &resp, write_timeout).await?;
@@ -197,56 +200,8 @@ pub async fn handle_embed_connection<C: Connection + 'static>(
     }
 }
 
-fn error_code_for(e: &ProtoError) -> EmbedErrorCode {
-    match e {
-        ProtoError::FrameTooLarge => EmbedErrorCode::FrameTooLarge,
-        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) | ProtoError::MalformedFrame(_) => {
-            EmbedErrorCode::InvalidRequest
-        }
-        ProtoError::Io(_) => EmbedErrorCode::Internal,
-    }
-}
-
-async fn read_request_embed<R>(reader: &mut R) -> Result<Option<EmbedRequest>, ProtoError>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-    let mut line = Vec::with_capacity(512);
-    let limit = inferd_proto::MAX_FRAME_BYTES;
-    loop {
-        let buf = reader.fill_buf().await?;
-        if buf.is_empty() {
-            if line.is_empty() {
-                return Ok(None);
-            }
-            return inferd_proto::read_frame::<&[u8], EmbedRequest>(&mut &line[..]);
-        }
-        if let Some(idx) = buf.iter().position(|&b| b == b'\n') {
-            if line.len() + idx > limit {
-                return Err(ProtoError::FrameTooLarge);
-            }
-            line.extend_from_slice(&buf[..=idx]);
-            reader.consume(idx + 1);
-            return inferd_proto::read_frame::<&[u8], EmbedRequest>(&mut &line[..]);
-        }
-        if line.len() + buf.len() > limit {
-            return Err(ProtoError::FrameTooLarge);
-        }
-        line.extend_from_slice(buf);
-        let n = buf.len();
-        reader.consume(n);
-    }
-}
-
-/// Write one NDJSON response frame, bounded by `timeout`
-/// (THREAT_MODEL F-17).
-///
-/// Same rationale as `lifecycle_v2::write_response_v2`: the embed
-/// response is written while the request holds its admission permit, and
-/// embed shares that gate with generation — so an unbounded write here
-/// wedges generation slots too. The bound covers the lock acquisition as
-/// well, since a peer stalled inside `write_all` holds the writer mutex.
+/// Write one NDJSON embed response frame, bounded by the per-write
+/// timeout (THREAT_MODEL F-17; see [`write_bounded`]).
 async fn write_response_embed<W: AsyncWrite + Unpin>(
     writer: &Mutex<W>,
     resp: &EmbedResponse,
@@ -255,21 +210,7 @@ async fn write_response_embed<W: AsyncWrite + Unpin>(
     let mut buf = Vec::with_capacity(512);
     write_frame(&mut buf, resp)
         .map_err(|e| io::Error::other(format!("serialise embed response: {e}")))?;
-    let write = async {
-        let mut guard = writer.lock().await;
-        guard.write_all(&buf).await?;
-        guard.flush().await?;
-        Ok(())
-    };
-    match timeout {
-        None => write.await,
-        Some(d) => tokio::time::timeout(d, write).await.unwrap_or_else(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("peer did not accept a response frame within {d:?}"),
-            ))
-        }),
-    }
+    write_bounded(writer, &buf, timeout).await
 }
 
 /// Serve an embed Unix domain socket listener.
@@ -278,37 +219,17 @@ pub async fn serve_uds_embed(
     listener: tokio::net::UnixListener,
     router: Arc<Router>,
     ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
-    info!("embed uds listener accepting");
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("embed uds shutdown signalled");
-                return Ok(());
-            }
-            accept = listener.accept() => {
-                let (stream, _) = accept?;
-                let peer = crate::peercred::unix::from_stream(&stream)
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "embed SO_PEERCRED failed; recording empty unix identity");
-                        crate::peercred::PeerIdentity {
-                            uid: None, gid: None, pid: None,
-                            sid: None,
-                            transport: "unix",
-                        }
-                    });
-                let r = Arc::clone(&router);
-                let ctx = ctx.clone();
-                debug!(?peer, "embed uds accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_embed_connection(stream, r, peer, ctx).await {
-                        warn!(error = ?e, "embed connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
+    crate::lifecycle::serve_uds(
+        "embed",
+        listener,
+        router,
+        ctx,
+        shutdown,
+        handle_embed_connection,
+    )
+    .await
 }
 
 /// Serve an embed Windows named pipe listener.
@@ -318,41 +239,16 @@ pub async fn serve_named_pipe_embed(
     first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
     router: Arc<Router>,
     ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
-    use crate::endpoint::bind_named_pipe;
-
-    info!(path = %path, "embed named pipe listener accepting");
-    let mut server = first_instance;
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("embed named pipe shutdown signalled");
-                return Ok(());
-            }
-            connect_result = server.connect() => {
-                connect_result?;
-                let connected = server;
-                server = bind_named_pipe(path, false)?;
-
-                let peer = crate::peercred::windows::from_stream(&connected)
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "embed GetNamedPipeClientProcessId failed; empty pipe identity");
-                        crate::peercred::PeerIdentity {
-                            uid: None, gid: None, pid: None,
-                            sid: None,
-                            transport: "pipe",
-                        }
-                    });
-                let r = Arc::clone(&router);
-                let ctx = ctx.clone();
-                debug!(?peer, "embed named pipe accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_embed_connection(connected, r, peer, ctx).await {
-                        warn!(error = ?e, "embed connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
+    crate::lifecycle::serve_named_pipe(
+        "embed",
+        path,
+        first_instance,
+        router,
+        ctx,
+        shutdown,
+        handle_embed_connection,
+    )
+    .await
 }

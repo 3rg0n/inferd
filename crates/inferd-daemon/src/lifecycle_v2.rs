@@ -22,6 +22,7 @@
 //!      / `Done` (written as length-prefixed JSON frames).
 
 use crate::endpoint::Connection;
+use crate::lifecycle::{CONNECTION_READ_BUFFER_BYTES, proto_error_code, write_bounded};
 use crate::peercred::PeerIdentity;
 use crate::queue::SubmitError;
 use crate::router::{Router, RouterError};
@@ -34,10 +35,10 @@ use inferd_proto::v2::{
 use inferd_proto::{FrameType, MAX_FRAME_BYTES, decode_json_payload, write_lp_json};
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Per-accept policy for v2 connections — the same type the embed
 /// surface uses, because both share one admission gate: one slot is one
@@ -64,7 +65,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
     );
 
     let (read_half, write_half) = tokio::io::split(&mut conn);
-    let mut reader = BufReader::with_capacity(64 * 1024, read_half);
+    let mut reader = BufReader::with_capacity(CONNECTION_READ_BUFFER_BYTES, read_half);
     let writer = Arc::new(Mutex::new(write_half));
     // THREAT_MODEL F-17: every response write is bounded, because writes
     // downstream of the admission gate happen while the permit is held.
@@ -82,7 +83,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
                 // byte stream is no longer trustworthy.
                 let resp = ResponseV2::Error {
                     id: String::new(),
-                    code: error_code_for(&e),
+                    code: proto_error_code(&e),
                     message: e.to_string(),
                 };
                 write_response_v2(&writer, &resp, write_timeout).await?;
@@ -115,7 +116,7 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
         if let Err(e) = read_attachment_blobs(&mut reader, &mut request.attachments).await {
             let resp = ResponseV2::Error {
                 id: request.id.clone(),
-                code: error_code_for(&e),
+                code: proto_error_code(&e),
                 message: e.to_string(),
             };
             write_response_v2(&writer, &resp, write_timeout).await?;
@@ -320,16 +321,6 @@ pub async fn handle_v2_connection<C: Connection + 'static>(
             };
             write_response_v2(&writer, &frame, write_timeout).await?;
         }
-    }
-}
-
-fn error_code_for(e: &ProtoError) -> ErrorCodeV2 {
-    match e {
-        ProtoError::FrameTooLarge => ErrorCodeV2::FrameTooLarge,
-        ProtoError::Decode(_) | ProtoError::InvalidRequest(_) | ProtoError::MalformedFrame(_) => {
-            ErrorCodeV2::InvalidRequest
-        }
-        ProtoError::Io(_) => ErrorCodeV2::Internal,
     }
 }
 
@@ -553,21 +544,7 @@ async fn write_response_v2<W: AsyncWrite + Unpin>(
     let mut buf = Vec::with_capacity(512);
     write_lp_json(&mut buf, resp)
         .map_err(|e| io::Error::other(format!("serialise v2 response: {e}")))?;
-    let write = async {
-        let mut guard = writer.lock().await;
-        guard.write_all(&buf).await?;
-        guard.flush().await?;
-        Ok(())
-    };
-    match timeout {
-        None => write.await,
-        Some(d) => tokio::time::timeout(d, write).await.unwrap_or_else(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("peer did not accept a response frame within {d:?}"),
-            ))
-        }),
-    }
+    write_bounded(writer, &buf, timeout).await
 }
 
 /// Serve a v2 Unix domain socket listener.
@@ -576,37 +553,9 @@ pub async fn serve_uds_v2(
     listener: tokio::net::UnixListener,
     router: Arc<Router>,
     ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
-    info!("v2 uds listener accepting");
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("v2 uds shutdown signalled");
-                return Ok(());
-            }
-            accept = listener.accept() => {
-                let (stream, _) = accept?;
-                let r = Arc::clone(&router);
-                let peer = crate::peercred::unix::from_stream(&stream)
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "v2 SO_PEERCRED failed; recording empty unix identity");
-                        crate::peercred::PeerIdentity {
-                            uid: None, gid: None, pid: None,
-                            sid: None,
-                            transport: "unix",
-                        }
-                    });
-                let ctx = ctx.clone();
-                debug!(?peer, "v2 uds accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(stream, r, peer, ctx).await {
-                        warn!(error = ?e, "v2 connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
+    crate::lifecycle::serve_uds("v2", listener, router, ctx, shutdown, handle_v2_connection).await
 }
 
 /// Serve a v2 Windows named pipe listener.
@@ -616,43 +565,18 @@ pub async fn serve_named_pipe_v2(
     first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
     router: Arc<Router>,
     ctx: AcceptContext,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> io::Result<()> {
-    use crate::endpoint::bind_named_pipe;
-
-    info!(path = %path, "v2 named pipe listener accepting");
-    let mut server = first_instance;
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                info!("v2 named pipe shutdown signalled");
-                return Ok(());
-            }
-            connect_result = server.connect() => {
-                connect_result?;
-                let connected = server;
-                server = bind_named_pipe(path, false)?;
-
-                let peer = crate::peercred::windows::from_stream(&connected)
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "v2 GetNamedPipeClientProcessId failed; empty pipe identity");
-                        crate::peercred::PeerIdentity {
-                            uid: None, gid: None, pid: None,
-                            sid: None,
-                            transport: "pipe",
-                        }
-                    });
-                let r = Arc::clone(&router);
-                let ctx = ctx.clone();
-                debug!(?peer, "v2 named pipe accept");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_v2_connection(connected, r, peer, ctx).await {
-                        warn!(error = ?e, "v2 connection terminated with error");
-                    }
-                });
-            }
-        }
-    }
+    crate::lifecycle::serve_named_pipe(
+        "v2",
+        path,
+        first_instance,
+        router,
+        ctx,
+        shutdown,
+        handle_v2_connection,
+    )
+    .await
 }
 
 #[cfg(test)]
