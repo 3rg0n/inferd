@@ -388,6 +388,42 @@ fn resolve_gpu_layers_with(n_gpu_layers: i32, model_layers: impl FnOnce() -> (i3
     }
 }
 
+/// CPU threads for the generation context's decode and batch (prompt)
+/// passes.
+///
+/// `llama_context_default_params()` leaves both at
+/// `GGML_DEFAULT_N_THREADS` (4) whatever the host, so without this a
+/// 12-core CPU-only host runs prompt evaluation on a third of its cores.
+/// Operator override: `INFERD_N_THREADS`, a positive integer, for hosts
+/// where some cores are much slower than the rest and drag the batch
+/// pass (low-power E-cores). Same shape as `INFERD_FORCE_BACKEND`: an
+/// unparsable value warns and falls back to the default rather than
+/// failing the load.
+fn generation_threads() -> i32 {
+    let available = std::thread::available_parallelism().map_or(4, |n| n.get());
+    generation_threads_with(std::env::var("INFERD_N_THREADS").ok().as_deref(), available)
+}
+
+/// The decision behind [`generation_threads`], with the env value and
+/// the host's parallelism supplied by the caller so it is testable.
+fn generation_threads_with(raw: Option<&str>, available: usize) -> i32 {
+    let default = i32::try_from(available.max(1)).unwrap_or(i32::MAX);
+    let Some(v) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+        return default;
+    };
+    match v.parse::<i32>() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            tracing::warn!(
+                value = %v,
+                default,
+                "INFERD_N_THREADS is not a positive integer; using the default"
+            );
+            default
+        }
+    }
+}
+
 /// Build the `AcceleratorInfo` that the adapter caches and exposes
 /// through `capabilities()`.
 ///
@@ -584,9 +620,13 @@ impl LlamaCpp {
 
         // SAFETY: FFI. `model.as_ptr()` is non-null and valid for the
         // lifetime of `model`. `ctx_params` is POD initialised by libllama.
+        let n_threads = generation_threads();
+        tracing::info!(n_threads, "generation context threads");
         let ctx_ptr = unsafe {
             let mut params = ffi::llama_context_default_params();
             params.n_ctx = config.n_ctx;
+            params.n_threads = n_threads;
+            params.n_threads_batch = n_threads;
             ffi::llama_init_from_model(model.as_ptr(), params)
         };
 
@@ -1592,11 +1632,20 @@ fn build_gbnf_sampler(
 }
 
 /// Sample one token under a grammar constraint, following llama.cpp's
-/// `common_sampler_sample` grammar-first path: build the candidate array
-/// from the last logits, apply the grammar sampler (masks
-/// non-conforming tokens to -inf), then apply the chain
-/// (top_k/top_p/temp/dist) which selects from the survivors. Returns the
-/// selected token id.
+/// `common_sampler_sample` with `grammar_first = false`: let the chain
+/// (top_k/top_p/temp/dist) pick from the unconstrained logits, then ask
+/// the grammar about that one token. Only when the grammar rejects it is
+/// the full candidate array masked (non-conforming tokens to -inf) and
+/// the chain re-applied to the survivors. Returns the selected token id.
+///
+/// Masking first on every token is correct but costs a grammar walk over
+/// the whole vocabulary (262k for Gemma 4) per generated token. Under an
+/// eager grammar, such as `tool_choice: none`'s exclusion automaton, that
+/// made a CPU-only host generate at about 2 s per token, so a forced
+/// final answer of a few hundred tokens ran for many minutes. The chain's
+/// pick almost always conforms, so the full pass is the rare fallback.
+/// The result is the same set of possible outputs: a token is emitted only
+/// if the grammar accepts it.
 ///
 /// SAFETY: `ctx` must have just decoded at least one token (logits for
 /// index -1 valid); `chain` and `grmr` must be live samplers built for
@@ -1613,35 +1662,84 @@ unsafe fn sample_with_grammar(
 ) -> ffi::llama_token {
     // Logits for the most recent token (-1).
     let logits = unsafe { ffi::llama_get_logits_ith(ctx, -1) };
-    cur.clear();
-    cur.extend((0..n_vocab).map(|i| ffi::llama_token_data {
-        id: i as ffi::llama_token,
-        // SAFETY: logits points to at least n_vocab floats.
-        logit: unsafe { *logits.add(i) },
-        p: 0.0,
-    }));
+    let fill = |cur: &mut Vec<ffi::llama_token_data>| {
+        cur.clear();
+        cur.extend((0..n_vocab).map(|i| ffi::llama_token_data {
+            id: i as ffi::llama_token,
+            // SAFETY: logits points to at least n_vocab floats.
+            logit: unsafe { *logits.add(i) },
+            p: 0.0,
+        }));
+    };
 
+    // Fast path: the chain picks from the raw logits, then the grammar
+    // judges that single token.
+    fill(cur);
+    // SAFETY: FFI; `cur` outlives the array view and is not resized while
+    // the samplers hold the pointer.
+    let picked = unsafe { apply_and_select(chain, cur) };
+    let mut single = [ffi::llama_token_data {
+        id: picked,
+        logit: 1.0,
+        p: 0.0,
+    }];
+    let mut single_p = ffi::llama_token_data_array {
+        data: single.as_mut_ptr(),
+        size: 1,
+        selected: -1,
+        sorted: false,
+    };
+    // SAFETY: FFI; applying (not accepting) leaves the grammar's state as
+    // it was, so a rejected probe has no side effects.
+    unsafe { ffi::llama_sampler_apply(grmr, &mut single_p) };
+    if single[0].logit.is_finite() {
+        return picked;
+    }
+
+    // Slow path: the pick broke the grammar. Mask the whole vocabulary,
+    // then let the chain select from what survives.
+    fill(cur);
     let mut cur_p = ffi::llama_token_data_array {
         data: cur.as_mut_ptr(),
         size: cur.len(),
         selected: -1,
         sorted: false,
     };
+    // SAFETY: FFI; as above.
+    unsafe { ffi::llama_sampler_apply(grmr, &mut cur_p) };
+    // SAFETY: as above.
+    unsafe { apply_and_select(chain, cur) }
+}
 
-    // Grammar first: mask non-conforming tokens. Then the chain selects.
-    unsafe {
-        ffi::llama_sampler_apply(grmr, &mut cur_p);
-        ffi::llama_sampler_apply(chain, &mut cur_p);
-    }
+/// Apply `chain` to `cur` and return the token it selected.
+///
+/// SAFETY: `chain` must be a live sampler for the vocab `cur` was filled
+/// from.
+unsafe fn apply_and_select(
+    chain: *mut ffi::llama_sampler,
+    cur: &mut [ffi::llama_token_data],
+) -> ffi::llama_token {
+    let mut cur_p = ffi::llama_token_data_array {
+        data: cur.as_mut_ptr(),
+        size: cur.len(),
+        selected: -1,
+        sorted: false,
+    };
+    // SAFETY: FFI; the caller guarantees `chain` matches `cur`'s vocab.
+    unsafe { ffi::llama_sampler_apply(chain, &mut cur_p) };
 
     // The chain's dist sampler set `selected`; fall back to argmax-safe 0.
     let sel = cur_p.selected;
-    if sel < 0 || (sel as usize) >= cur.len() {
+    if sel < 0 || (sel as usize) >= cur_p.size {
         // Defensive: no selection (shouldn't happen with a dist sampler) —
         // return the first candidate id rather than indexing OOB.
         return cur.first().map(|d| d.id).unwrap_or(0);
     }
-    cur[sel as usize].id
+    // The chain may have reordered and truncated the array in place;
+    // `selected` indexes the array as it is now.
+    // SAFETY: `sel < cur_p.size <= cur.len()` and `cur_p.data` is `cur`'s
+    // buffer.
+    unsafe { (*cur_p.data.add(sel as usize)).id }
 }
 
 /// v2 generation: tokenise the rendered prompt + bitmaps via mtmd,
@@ -2316,6 +2414,31 @@ mod tests {
         // the original bug.
         assert_eq!(resolve_gpu_layers_with(99, || LAYERS_42), MAX_42);
         assert_eq!(resolve_gpu_layers_with(i32::MAX, || LAYERS_42), MAX_42);
+    }
+
+    #[test]
+    fn generation_threads_default_to_host_parallelism_not_libllama_4() {
+        // The bug: libllama's default is 4 whatever the host.
+        assert_eq!(generation_threads_with(None, 14), 14);
+        assert_eq!(generation_threads_with(Some(""), 14), 14);
+        assert_eq!(generation_threads_with(Some("  "), 2), 2);
+        // `available_parallelism` can't report 0, but never ask for 0 threads.
+        assert_eq!(generation_threads_with(None, 0), 1);
+    }
+
+    #[test]
+    fn generation_threads_override_is_honoured() {
+        assert_eq!(generation_threads_with(Some("10"), 14), 10);
+        assert_eq!(generation_threads_with(Some(" 6 "), 14), 6);
+        // Above the host count is the operator's call, not ours.
+        assert_eq!(generation_threads_with(Some("32"), 14), 32);
+    }
+
+    #[test]
+    fn generation_threads_bad_override_falls_back_to_default() {
+        for bad in ["0", "-3", "ten", "4.5", "99999999999"] {
+            assert_eq!(generation_threads_with(Some(bad), 12), 12, "{bad:?}");
+        }
     }
 
     #[test]

@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RUSTSEC-2026-0190 (`anyhow`) and RUSTSEC-2025-0134 (`rustls-pemfile`,
   now gone from the tree).
 
+### Fixed
+
+- **The llamacpp generation context now uses all CPU cores** instead of
+  libllama's default of 4 (#76). `INFERD_N_THREADS` overrides it (a bad
+  value warns and keeps the default); on a hybrid CPU whose low-power
+  cores slow the batch pass, fewer threads can be faster.
+- **Grammar-constrained sampling no longer masks the whole vocabulary on
+  every token** (#77). The chain samples first and the grammar checks
+  that one token, falling back to the full mask only when it is rejected,
+  as upstream `common_sampler` does. On a CPU-only host this took a
+  `tool_choice: "none"` request from ~2 s per token to normal speed, and
+  `auto` tool-call bodies speed up the same way.
+
 ## [0.8.0] - 2026-08-12
 
 Minor, not patch: one **behaviour** break, no wire break. A `tool_result`
